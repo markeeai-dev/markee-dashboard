@@ -325,7 +325,7 @@ function TrendingSkills({ skills }: { skills: SkillCard[] }) {
   );
 }
 
-function UserDashboard({ profile }: { profile: UserProfile }) {
+function UserDashboard({ profile, refreshKey = 0 }: { profile: UserProfile; refreshKey?: number }) {
   const [activeView, setActiveView] = useState<'library' | 'workspace'>('library');
   const [library, setLibrary] = useState<PaginatedSkills>({ items: [], total: 0, hasMore: false, nextPage: 0 });
   const [workspaceSkills, setWorkspaceSkills] = useState<SkillCard[]>([]);
@@ -367,7 +367,7 @@ function UserDashboard({ profile }: { profile: UserProfile }) {
 
   useEffect(() => {
     loadInitialData();
-  }, [profile.email]);
+  }, [profile.email, refreshKey]);
 
   const displayedSkills = activeView === 'library' ? library.items : workspaceSkills;
 
@@ -590,7 +590,13 @@ function AdminOverview({
   );
 }
 
-function AdminDashboard({ profile }: { profile: UserProfile }) {
+function AdminDashboard({
+  profile,
+  onSkillModerated,
+}: {
+  profile: UserProfile;
+  onSkillModerated?: () => void;
+}) {
   const [pendingSkills, setPendingSkills] = useState<SkillCard[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<number | null>(null);
   const [period, setPeriod] = useState<AnalyticsPeriod>('30d');
@@ -634,6 +640,12 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
         await approveSkill(selectedSkill.id);
       } else {
         await rejectSkill(selectedSkill.id);
+      }
+
+      if (status === 'approved') {
+        const overview = await fetchAdminOverviewMetrics(period);
+        setMetrics(overview);
+        onSkillModerated?.();
       }
 
       setPendingSkills((skills) => skills.filter((skill) => skill.id !== selectedSkill.id));
@@ -742,6 +754,7 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
 export default function RoleDashboard() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
 
   async function loadProfile() {
     setLoading(true);
@@ -799,8 +812,11 @@ export default function RoleDashboard() {
 
       {profile.role === 'admin' ? (
         <>
-          <UserDashboard profile={profile} />
-          <AdminDashboard profile={profile} />
+          <UserDashboard profile={profile} refreshKey={libraryRefreshKey} />
+          <AdminDashboard
+            profile={profile}
+            onSkillModerated={() => setLibraryRefreshKey((key) => key + 1)}
+          />
         </>
       ) : (
         <UserDashboard profile={profile} />
