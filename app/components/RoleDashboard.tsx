@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -33,6 +33,7 @@ import {
   type SkillCard,
   type UserProfile,
 } from '@/lib/dashboard-supabase';
+import UserGuideModal from './UserGuideModal';
 
 const PAGE_SIZE = 9;
 const TOOL_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#a855f7', '#06b6d4', '#f43f5e'];
@@ -815,6 +816,7 @@ export default function RoleDashboard() {
   const [loading, setLoading] = useState(true);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
   const [adminTab, setAdminTab] = useState<'overview' | 'library'>('overview');
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   async function loadProfile() {
     setLoading(true);
@@ -861,14 +863,25 @@ export default function RoleDashboard() {
             {profile.displayName} · {roleLabel(profile.role)}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => signOut().then(() => setProfile(null))}
-          className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-        >
-          Đăng xuất
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsGuideOpen(true)}
+            className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-2 border border-indigo-500/30 hover:border-indigo-500/50"
+          >
+            <BookOpen className="w-4 h-4" />
+            <span>Hướng dẫn cài đặt</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => signOut().then(() => setProfile(null))}
+            className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+          >
+            Đăng xuất
+          </button>
+        </div>
       </header>
+
+      <UserGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
 
       {profile.role === 'admin' ? (
         <div>

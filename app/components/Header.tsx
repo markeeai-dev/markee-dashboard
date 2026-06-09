@@ -1,11 +1,16 @@
 'use client';
 
+import { useState } from 'react';
+import { BookOpen } from 'lucide-react';
+import UserGuideModal from './UserGuideModal';
+
 interface HeaderProps {
   onPeriodChange: (period: string) => void;
   activePeriod: string;
 }
 
 export default function Header({ onPeriodChange, activePeriod }: HeaderProps) {
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
   const periods = ['7d', '30d', '90d'];
   const periodLabels = { '7d': '7 ngày', '30d': '30 ngày', '90d': '3 tháng' };
 
@@ -22,6 +27,14 @@ export default function Header({ onPeriodChange, activePeriod }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-4">
+        <button
+          onClick={() => setIsGuideOpen(true)}
+          className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-2 border border-indigo-500/30 hover:border-indigo-500/50"
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>Hướng dẫn cài đặt</span>
+        </button>
+
         <div className="flex gap-1">
           {periods.map((period) => (
             <button
@@ -45,6 +58,8 @@ export default function Header({ onPeriodChange, activePeriod }: HeaderProps) {
           Live
         </div>
       </div>
+
+      <UserGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
     </header>
   );
 }
