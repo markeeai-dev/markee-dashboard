@@ -1,8 +1,8 @@
-import type { User } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
 
-export type UserRole = 'admin' | 'user';
-export type SkillStatus = 'pending' | 'approved' | 'rejected';
+export type UserRole = "admin" | "user";
+export type SkillStatus = "pending" | "approved" | "rejected";
 
 export interface AppUser {
   id: number;
@@ -47,7 +47,7 @@ export interface PaginatedSkills {
   nextPage: number;
 }
 
-export type AnalyticsPeriod = '7d' | '30d' | 'all';
+export type AnalyticsPeriod = "7d" | "30d" | "all";
 
 export interface DailyTokenPoint {
   date: string;
@@ -77,17 +77,12 @@ export interface AdminOverviewMetrics {
 const DEFAULT_PAGE_SIZE = 12;
 
 function getEmailName(email: string) {
-  return email.split('@')[0] || email;
+  return email.split("@")[0] || email;
 }
 
 function getGoogleName(user: User) {
   const metadata = user.user_metadata || {};
-  return (
-    metadata.full_name ||
-    metadata.name ||
-    metadata.preferred_username ||
-    (user.email ? getEmailName(user.email) : 'User')
-  );
+  return metadata.full_name || metadata.name || metadata.preferred_username || (user.email ? getEmailName(user.email) : "User");
 }
 
 function normalizeSkill(row: SkillLibraryRow, authorMap: Map<string, string>, likedSkillIds = new Set<number>()): SkillCard {
@@ -109,19 +104,15 @@ async function getLikedSkillIds(userEmail: string | undefined, skillIds: number[
 
   if (!userEmail || skillIds.length === 0) return likedSkillIds;
 
-  const { data, error } = await supabase
-    .from('user_likes')
-    .select('skill_id')
-    .eq('user_email', userEmail)
-    .in('skill_id', skillIds);
+  const { data, error } = await supabase.from("user_likes").select("skill_id").eq("user_email", userEmail).in("skill_id", skillIds);
 
   if (error) {
-    console.error('Error fetching liked skills:', error);
+    console.error("Error fetching liked skills:", error);
     return likedSkillIds;
   }
 
   data?.forEach((row) => {
-    if (typeof row.skill_id === 'number') likedSkillIds.add(row.skill_id);
+    if (typeof row.skill_id === "number") likedSkillIds.add(row.skill_id);
   });
 
   return likedSkillIds;
@@ -133,13 +124,10 @@ async function getAuthorNameMap(authorEmails: string[]) {
 
   if (emails.length === 0) return authorMap;
 
-  const { data, error } = await supabase
-    .from('users')
-    .select('email, full_name')
-    .in('email', emails);
+  const { data, error } = await supabase.from("users").select("email, full_name").in("email", emails);
 
   if (error) {
-    console.error('Error fetching skill authors:', error);
+    console.error("Error fetching skill authors:", error);
     return authorMap;
   }
 
@@ -153,10 +141,10 @@ async function getAuthorNameMap(authorEmails: string[]) {
 }
 
 export async function signInWithGoogle() {
-  const redirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+  const redirectTo = typeof window !== "undefined" ? window.location.origin : undefined;
 
   return supabase.auth.signInWithOAuth({
-    provider: 'google',
+    provider: "google",
     options: {
       redirectTo,
     },
@@ -174,18 +162,18 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   } = await supabase.auth.getUser();
 
   if (authError || !user || !user.email) {
-    if (authError) console.error('Error fetching auth user:', authError);
+    if (authError) {
+      if (authError.name !== "AuthSessionMissingError" && !authError.message.includes("Auth session missing")) {
+        console.error("Error fetching auth user:", authError);
+      }
+    }
     return null;
   }
 
-  const { data: dbUser, error: profileError } = await supabase
-    .from('users')
-    .select('id, email, full_name, team, avatar_color, role')
-    .eq('email', user.email)
-    .maybeSingle();
+  const { data: dbUser, error: profileError } = await supabase.from("users").select("id, email, full_name, team, avatar_color, role").eq("email", user.email).maybeSingle();
 
   if (profileError) {
-    console.error('Error fetching app user profile:', profileError);
+    console.error("Error fetching app user profile:", profileError);
   }
 
   const fullName = dbUser?.full_name || getGoogleName(user);
@@ -194,27 +182,16 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
     authUser: user,
     email: user.email,
     displayName: fullName,
-    role: dbUser?.role === 'admin' ? 'admin' : 'user',
+    role: dbUser?.role === "admin" ? "admin" : "user",
     dbUser: dbUser || null,
   };
 }
 
-export async function fetchApprovedSkills(
-  page = 0,
-  pageSize = DEFAULT_PAGE_SIZE,
-  userEmail?: string,
-  searchTerm = ''
-): Promise<PaginatedSkills> {
+export async function fetchApprovedSkills(page = 0, pageSize = DEFAULT_PAGE_SIZE, userEmail?: string, searchTerm = ""): Promise<PaginatedSkills> {
   const from = page * pageSize;
   const to = from + pageSize - 1;
 
-  let query = supabase
-    .from('skill_library')
-    .select(
-      'id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count',
-      { count: 'exact' }
-    )
-    .eq('status', 'approved');
+  let query = supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count", { count: "exact" }).eq("status", "approved");
 
   const normalizedSearch = searchTerm.trim();
 
@@ -222,16 +199,19 @@ export async function fetchApprovedSkills(
     query = query.or(`title.ilike.%${normalizedSearch}%,category.ilike.%${normalizedSearch}%,author_id.ilike.%${normalizedSearch}%`);
   }
 
-  const { data, error, count } = await query.order('created_at', { ascending: false }).range(from, to);
+  const { data, error, count } = await query.order("created_at", { ascending: false }).range(from, to);
 
   if (error) {
-    console.error('Error fetching approved skills:', error);
+    console.error("Error fetching approved skills:", error);
     return { items: [], total: 0, hasMore: false, nextPage: page };
   }
 
   const rows = (data || []) as SkillLibraryRow[];
   const authorMap = await getAuthorNameMap(rows.map((skill) => skill.author_id));
-  const likedSkillIds = await getLikedSkillIds(userEmail, rows.map((skill) => skill.id));
+  const likedSkillIds = await getLikedSkillIds(
+    userEmail,
+    rows.map((skill) => skill.id),
+  );
   const total = count || 0;
 
   return {
@@ -243,21 +223,19 @@ export async function fetchApprovedSkills(
 }
 
 export async function fetchTrendingSkills(limit = 5, userEmail?: string): Promise<SkillCard[]> {
-  const { data, error } = await supabase
-    .from('skill_library')
-    .select('id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count')
-    .eq('status', 'approved')
-    .order('likes_count', { ascending: false, nullsFirst: false })
-    .limit(100);
+  const { data, error } = await supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count").eq("status", "approved").order("likes_count", { ascending: false, nullsFirst: false }).limit(100);
 
   if (error) {
-    console.error('Error fetching trending skills:', error);
+    console.error("Error fetching trending skills:", error);
     return [];
   }
 
   const rows = (data || []) as SkillLibraryRow[];
   const authorMap = await getAuthorNameMap(rows.map((skill) => skill.author_id));
-  const likedSkillIds = await getLikedSkillIds(userEmail, rows.map((skill) => skill.id));
+  const likedSkillIds = await getLikedSkillIds(
+    userEmail,
+    rows.map((skill) => skill.id),
+  );
 
   return rows
     .map((row) => normalizeSkill(row, authorMap, likedSkillIds))
@@ -266,69 +244,63 @@ export async function fetchTrendingSkills(limit = 5, userEmail?: string): Promis
 }
 
 export async function fetchMyWorkspaceSkills(email: string): Promise<SkillCard[]> {
-  const { data, error } = await supabase
-    .from('skill_library')
-    .select('id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count')
-    .eq('author_id', email)
-    .order('created_at', { ascending: false });
+  const { data, error } = await supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count").eq("author_id", email).order("created_at", { ascending: false });
 
   if (error) {
-    console.error('Error fetching workspace skills:', error);
+    console.error("Error fetching workspace skills:", error);
     return [];
   }
 
   const rows = (data || []) as SkillLibraryRow[];
   const authorMap = await getAuthorNameMap(rows.map((skill) => skill.author_id));
-  const likedSkillIds = await getLikedSkillIds(email, rows.map((skill) => skill.id));
+  const likedSkillIds = await getLikedSkillIds(
+    email,
+    rows.map((skill) => skill.id),
+  );
   return rows.map((row) => normalizeSkill(row, authorMap, likedSkillIds));
 }
 
 export async function toggleSkillVote(skillId: number, userEmail: string) {
-  const { data: existingLike, error: existingError } = await supabase
-    .from('user_likes')
-    .select('id')
-    .eq('user_email', userEmail)
-    .eq('skill_id', skillId)
-    .maybeSingle();
+  const { data: existingLike, error: existingError } = await supabase.from("user_likes").select("id").eq("user_email", userEmail).eq("skill_id", skillId).maybeSingle();
 
   if (existingError) throw existingError;
 
   if (existingLike) {
-    const { error: deleteError } = await supabase.from('user_likes').delete().eq('id', existingLike.id);
+    const { error: deleteError } = await supabase.from("user_likes").delete().eq("id", existingLike.id);
     if (deleteError) throw deleteError;
 
-    const { error: decrementError } = await supabase.rpc('decrement_like', { skill_id_param: skillId });
+    const { error: decrementError } = await supabase.rpc("decrement_like", { skill_id_param: skillId });
     if (decrementError) throw decrementError;
 
     return { id: skillId, liked: false };
   }
 
-  const { error: insertError } = await supabase.from('user_likes').insert({
+  const { error: insertError } = await supabase.from("user_likes").insert({
     user_email: userEmail,
     skill_id: skillId,
   });
 
   if (insertError) throw insertError;
 
-  const { error: incrementError } = await supabase.rpc('increment_like', { skill_id: skillId });
+  const { error: incrementError } = await supabase.rpc("increment_like", { skill_id: skillId });
   if (incrementError) throw incrementError;
 
   return { id: skillId, liked: true };
 }
 
 export async function recordSkillDownload(skillId: number) {
-  const { error } = await supabase.rpc('increment_download', { skill_id: skillId });
+  const { error } = await supabase.rpc("increment_download", { skill_id: skillId });
   if (error) throw error;
   return { id: skillId };
 }
 
 export async function downloadSkillMarkdown(skill: SkillCard) {
-  const blob = new Blob([skill.markdown_content || ''], {
-    type: 'text/markdown;charset=utf-8',
+  const blob = new Blob([skill.markdown_content || ""], {
+    type: "text/markdown;charset=utf-8",
   });
   const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  const safeTitle = skill.title.replace(/[\\/:*?"<>|]/g, '-').trim() || `skill-${skill.id}`;
+  const link = document.createElement("a");
+  const safeTitle = skill.title.replace(/[\\/:*?"<>|]/g, "-").trim() || `skill-${skill.id}`;
 
   link.href = url;
   link.download = `${safeTitle}.md`;
@@ -341,14 +313,10 @@ export async function downloadSkillMarkdown(skill: SkillCard) {
 }
 
 export async function fetchPendingSkills(): Promise<SkillCard[]> {
-  const { data, error } = await supabase
-    .from('skill_library')
-    .select('id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: true });
+  const { data, error } = await supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count").eq("status", "pending").order("created_at", { ascending: true });
 
   if (error) {
-    console.error('Error fetching pending skills:', error);
+    console.error("Error fetching pending skills:", error);
     return [];
   }
 
@@ -357,31 +325,26 @@ export async function fetchPendingSkills(): Promise<SkillCard[]> {
   return rows.map((row) => normalizeSkill(row, authorMap));
 }
 
-export async function updateSkillStatus(skillId: number, status: Extract<SkillStatus, 'approved' | 'rejected'>) {
-  const { data, error } = await supabase
-    .from('skill_library')
-    .update({ status })
-    .eq('id', skillId)
-    .select('id, status')
-    .single();
+export async function updateSkillStatus(skillId: number, status: Extract<SkillStatus, "approved" | "rejected">) {
+  const { data, error } = await supabase.from("skill_library").update({ status }).eq("id", skillId).select("id, status").single();
 
   if (error) throw error;
   return data;
 }
 
 export async function approveSkill(skillId: number) {
-  return updateSkillStatus(skillId, 'approved');
+  return updateSkillStatus(skillId, "approved");
 }
 
 export async function rejectSkill(skillId: number) {
-  return updateSkillStatus(skillId, 'rejected');
+  return updateSkillStatus(skillId, "rejected");
 }
 
 export async function fetchTeamTokenKpi() {
-  const { data, error } = await supabase.from('ai_sessions').select('tokens_used');
+  const { data, error } = await supabase.from("ai_sessions").select("tokens_used");
 
   if (error) {
-    console.error('Error fetching team token KPI:', error);
+    console.error("Error fetching team token KPI:", error);
     return { totalTokens: 0, costUsd: 0 };
   }
 
@@ -394,47 +357,38 @@ export async function fetchTeamTokenKpi() {
 }
 
 function getPeriodStart(period: AnalyticsPeriod) {
-  if (period === 'all') return null;
+  if (period === "all") return null;
 
   const date = new Date();
-  date.setDate(date.getDate() - (period === '7d' ? 6 : 29));
+  date.setDate(date.getDate() - (period === "7d" ? 6 : 29));
   date.setHours(0, 0, 0, 0);
   return date.toISOString();
 }
 
 function formatChartDate(value: string) {
-  return new Intl.DateTimeFormat('vi-VN', {
-    day: '2-digit',
-    month: '2-digit',
+  return new Intl.DateTimeFormat("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
   }).format(new Date(value));
 }
 
 export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promise<AdminOverviewMetrics> {
   const periodStart = getPeriodStart(period);
 
-  let sessionQuery = supabase
-    .from('ai_sessions')
-    .select('created_at, ai_tool, tokens_used, author_id')
-    .order('created_at', { ascending: true });
+  let sessionQuery = supabase.from("ai_sessions").select("created_at, ai_tool, tokens_used, author_id").order("created_at", { ascending: true });
 
   if (periodStart) {
-    sessionQuery = sessionQuery.gte('created_at', periodStart);
+    sessionQuery = sessionQuery.gte("created_at", periodStart);
   }
 
-  const [sessionResult, contributorResult] = await Promise.all([
-    sessionQuery,
-    supabase
-      .from('skill_library')
-      .select('author_id')
-      .eq('status', 'approved'),
-  ]);
+  const [sessionResult, contributorResult] = await Promise.all([sessionQuery, supabase.from("skill_library").select("author_id").eq("status", "approved")]);
 
   if (sessionResult.error) {
-    console.error('Error fetching admin sessions:', sessionResult.error);
+    console.error("Error fetching admin sessions:", sessionResult.error);
   }
 
   if (contributorResult.error) {
-    console.error('Error fetching contributors:', contributorResult.error);
+    console.error("Error fetching contributors:", contributorResult.error);
   }
 
   const sessions = sessionResult.data || [];
@@ -446,14 +400,14 @@ export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promis
   sessions.forEach((session) => {
     const tokens = session.tokens_used || 0;
     const dayKey = new Date(session.created_at).toISOString().slice(0, 10);
-    const tool = session.ai_tool || 'Khác';
+    const tool = session.ai_tool || "Khác";
 
     dailyMap.set(dayKey, (dailyMap.get(dayKey) || 0) + tokens);
     toolMap.set(tool, (toolMap.get(tool) || 0) + tokens);
   });
 
   approvedSkills.forEach((skill) => {
-    const email = skill.author_id || 'unknown';
+    const email = skill.author_id || "unknown";
     contributorMap.set(email, (contributorMap.get(email) || 0) + 1);
   });
 
