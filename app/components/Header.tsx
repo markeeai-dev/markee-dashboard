@@ -17,9 +17,7 @@ export default function Header({ onPeriodChange, activePeriod }: HeaderProps) {
   return (
     <header className="bg-linear-to-r from-slate-900 via-slate-800 to-slate-900 px-6 py-4 flex items-center justify-between border-b border-slate-700">
       <div className="flex items-center gap-3">
-        <div className="w-9 h-9 bg-linear-to-br from-indigo-500 to-purple-500 rounded-lg flex items-center justify-center text-white font-bold text-lg">
-          M
-        </div>
+        <img src="https://markeeai.com/logo.svg" alt="Markee Logo" className="w-9 h-9 shrink-0" />
         <div>
           <h1 className="text-base font-bold text-white">Markee AI Ops Center</h1>
           <p className="text-xs text-slate-400 mt-px">CEO Dashboard — Quản trị AI toàn team</p>

@@ -13,8 +13,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Markee AI Ops Center — CEO Dashboard",
+  title: "Markee AI Ops Center - CEO Dashboard",
   description: "Quản trị chi phí, token và năng suất AI toàn team",
+  icons: {
+    icon: "https://markeeai.com/logo.svg",
+  },
 };
 
 export default function RootLayout({
