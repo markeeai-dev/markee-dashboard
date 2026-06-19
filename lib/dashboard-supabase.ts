@@ -372,6 +372,14 @@ function formatChartDate(value: string) {
   }).format(new Date(value));
 }
 
+function formatToolName(name: string): string {
+  const lower = name.toLowerCase().trim();
+  if (lower === 'chatgpt') return 'ChatGPT';
+  if (lower === 'claude') return 'Claude';
+  if (lower === 'gemini') return 'Gemini';
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
 export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promise<AdminOverviewMetrics> {
   const periodStart = getPeriodStart(period);
 
@@ -400,7 +408,8 @@ export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promis
   sessions.forEach((session) => {
     const tokens = session.tokens_used || 0;
     const dayKey = new Date(session.created_at).toISOString().slice(0, 10);
-    const tool = session.ai_tool || "Khác";
+    const toolRaw = session.ai_tool || "Khác";
+    const tool = toolRaw.toLowerCase().trim();
 
     dailyMap.set(dayKey, (dailyMap.get(dayKey) || 0) + tokens);
     toolMap.set(tool, (toolMap.get(tool) || 0) + tokens);
@@ -424,7 +433,7 @@ export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promis
       tokens,
     })),
     toolUsage: Array.from(toolMap.entries())
-      .map(([name, value]) => ({ name, value }))
+      .map(([name, value]) => ({ name: formatToolName(name), value }))
       .sort((a, b) => b.value - a.value),
     contributors: Array.from(contributorMap.entries())
       .map(([email, count]) => ({
@@ -435,4 +444,276 @@ export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promis
       .sort((a, b) => b.count - a.count)
       .slice(0, 5),
   };
+}
+
+export interface Project {
+  id: number;
+  created_at: string;
+  created_by: string;
+  name: string;
+  logCount?: number;
+  authorName?: string;
+  members?: { email: string; name: string; avatarColor: string }[];
+}
+
+export interface AISession {
+  id: number;
+  created_at: string;
+  ai_tool: string | null;
+  task_type: string | null;
+  prompt_content: string | null;
+  tokens_used: number | null;
+  author_id: string;
+  authorName?: string;
+  avatarColor?: string;
+  project_id: number | null;
+  tier: string | null;
+}
+
+export async function fetchAllUsers(): Promise<AppUser[]> {
+  const { data, error } = await supabase.from("users").select("*").order("email", { ascending: true });
+  if (error) {
+    console.error("Error fetching all users:", error);
+    return [];
+  }
+  return data || [];
+}
+
+export async function updateUserRole(userId: number, role: UserRole) {
+  const { error } = await supabase.from("users").update({ role }).eq("id", userId);
+  if (error) throw error;
+}
+
+export async function fetchProjects(): Promise<Project[]> {
+  const { data: projectsData, error: projectsError } = await supabase.from("projects").select("*").order("created_at", { ascending: false });
+  if (projectsError) {
+    console.error("Error fetching projects:", projectsError);
+    return [];
+  }
+  
+  const { data: sessions, error: sessionsError } = await supabase.from("ai_sessions").select("project_id, author_id");
+  
+  const projectCounts = new Map<number, number>();
+  const projectMemberEmails = new Map<number, Set<string>>();
+  const allMemberEmails = new Set<string>();
+  
+  if (!sessionsError && sessions) {
+    sessions.forEach(s => {
+      if (s.project_id) {
+        projectCounts.set(s.project_id, (projectCounts.get(s.project_id) || 0) + 1);
+        
+        if (s.author_id) {
+          if (!projectMemberEmails.has(s.project_id)) {
+            projectMemberEmails.set(s.project_id, new Set());
+          }
+          projectMemberEmails.get(s.project_id)!.add(s.author_id);
+          allMemberEmails.add(s.author_id);
+        }
+      }
+    });
+  }
+  
+  projectsData.forEach(p => {
+    if (p.created_by) {
+      allMemberEmails.add(p.created_by);
+    }
+  });
+  
+  const emailsArray = Array.from(allMemberEmails);
+  const userMap = new Map<string, { name: string; avatarColor: string }>();
+  if (emailsArray.length > 0) {
+    const { data: userData } = await supabase
+      .from("users")
+      .select("email, full_name, avatar_color")
+      .in("email", emailsArray);
+      
+    userData?.forEach(u => {
+      if (u.email) {
+        userMap.set(u.email, {
+          name: u.full_name || getEmailName(u.email),
+          avatarColor: u.avatar_color || "#E3000F"
+        });
+      }
+    });
+  }
+  
+  return projectsData.map(p => {
+    const emailsSet = projectMemberEmails.get(p.id) || new Set<string>();
+    const membersList = Array.from(emailsSet).map(email => {
+      const u = userMap.get(email);
+      return {
+        email,
+        name: u?.name || getEmailName(email),
+        avatarColor: u?.avatarColor || "#E3000F"
+      };
+    });
+    
+    return {
+      ...p,
+      logCount: projectCounts.get(p.id) || 0,
+      authorName: userMap.get(p.created_by)?.name || getEmailName(p.created_by),
+      members: membersList
+    };
+  });
+}
+
+export async function fetchProjectSessions(
+  projectId: number,
+  page = 0,
+  pageSize = 20
+): Promise<{ items: AISession[]; total: number; hasMore: boolean }> {
+  const from = page * pageSize;
+  const to = from + pageSize - 1;
+
+  const { data, error, count } = await supabase
+    .from("ai_sessions")
+    .select("*", { count: "exact" })
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (error) {
+    console.error("Error fetching project sessions:", error);
+    return { items: [], total: 0, hasMore: false };
+  }
+
+  const rows = (data || []) as AISession[];
+  const authorEmails = rows.map((s) => s.author_id);
+  
+  const { data: userData } = await supabase
+    .from("users")
+    .select("email, full_name, avatar_color")
+    .in("email", authorEmails);
+    
+  const userMap = new Map<string, { name: string; avatarColor: string }>();
+  userData?.forEach((u) => {
+    if (u.email) {
+      userMap.set(u.email, {
+        name: u.full_name || getEmailName(u.email),
+        avatarColor: u.avatar_color || "#E3000F"
+      });
+    }
+  });
+
+  const items = rows.map((row) => {
+    const u = userMap.get(row.author_id);
+    return {
+      ...row,
+      authorName: u?.name || getEmailName(row.author_id),
+      avatarColor: u?.avatarColor || "#E3000F"
+    };
+  });
+
+  const total = count || 0;
+
+  return {
+    items,
+    total,
+    hasMore: to + 1 < total
+  };
+}
+
+export async function fetchProjectMembers(projectId: number): Promise<{ email: string; name: string; avatarColor: string }[]> {
+  const { data, error } = await supabase
+    .from("ai_sessions")
+    .select("author_id")
+    .eq("project_id", projectId);
+    
+  if (error || !data) return [];
+  
+  const emails = Array.from(new Set(data.map(d => d.author_id).filter(Boolean)));
+  if (emails.length === 0) return [];
+  
+  const { data: userData } = await supabase
+    .from("users")
+    .select("email, full_name, avatar_color")
+    .in("email", emails);
+    
+  const userMap = new Map<string, { name: string; avatarColor: string }>();
+  userData?.forEach(u => {
+    if (u.email) {
+      userMap.set(u.email, {
+        name: u.full_name || getEmailName(u.email),
+        avatarColor: u.avatar_color || "#E3000F"
+      });
+    }
+  });
+  
+  return emails.map(email => {
+    const u = userMap.get(email);
+    return {
+      email,
+      name: u?.name || getEmailName(email),
+      avatarColor: u?.avatarColor || "#E3000F"
+    };
+  });
+}
+
+export async function fetchProjectSessionsForUser(
+  projectId: number,
+  authorId: string,
+  page = 0,
+  pageSize = 20
+): Promise<{ items: AISession[]; total: number; hasMore: boolean }> {
+  const from = page * pageSize;
+  const to = from + pageSize - 1;
+
+  const { data, error, count } = await supabase
+    .from("ai_sessions")
+    .select("*", { count: "exact" })
+    .eq("project_id", projectId)
+    .eq("author_id", authorId)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (error) {
+    console.error("Error fetching project sessions for user:", error);
+    return { items: [], total: 0, hasMore: false };
+  }
+
+  const rows = (data || []) as AISession[];
+  const authorEmails = rows.map((s) => s.author_id);
+  
+  const { data: userData } = await supabase
+    .from("users")
+    .select("email, full_name, avatar_color")
+    .in("email", authorEmails);
+    
+  const userMap = new Map<string, { name: string; avatarColor: string }>();
+  userData?.forEach((u) => {
+    if (u.email) {
+      userMap.set(u.email, {
+        name: u.full_name || getEmailName(u.email),
+        avatarColor: u.avatar_color || "#E3000F"
+      });
+    }
+  });
+
+  const items = rows.map((row) => {
+    const u = userMap.get(row.author_id);
+    return {
+      ...row,
+      authorName: u?.name || getEmailName(row.author_id),
+      avatarColor: u?.avatarColor || "#E3000F"
+    };
+  });
+
+  const total = count || 0;
+
+  return {
+    items,
+    total,
+    hasMore: to + 1 < total
+  };
+}
+
+export async function createNewProject(name: string, userEmail: string): Promise<Project> {
+  const { data, error } = await supabase
+    .from("projects")
+    .insert({ name, created_by: userEmail })
+    .select("*")
+    .single();
+
+  if (error) throw error;
+  return data as Project;
 }

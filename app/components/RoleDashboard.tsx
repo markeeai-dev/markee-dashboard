@@ -32,6 +32,17 @@ import {
   type PaginatedSkills,
   type SkillCard,
   type UserProfile,
+  type AppUser,
+  type Project,
+  type AISession,
+  type UserRole,
+  fetchAllUsers,
+  updateUserRole,
+  fetchProjects,
+  fetchProjectSessions,
+  fetchProjectMembers,
+  fetchProjectSessionsForUser,
+  createNewProject,
 } from '@/lib/dashboard-supabase';
 import UserGuideModal from './UserGuideModal';
 
@@ -859,14 +870,18 @@ export default function RoleDashboard() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
-  const [adminTab, setAdminTab] = useState<'overview' | 'library'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'library' | 'projects' | 'users'>('overview');
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   async function loadProfile() {
     setLoading(true);
 
     try {
-      setProfile(await getCurrentUserProfile());
+      const p = await getCurrentUserProfile();
+      setProfile(p);
+      if (p && p.role === 'user') {
+        setActiveTab('library');
+      }
     } finally {
       setLoading(false);
     }
@@ -900,21 +915,100 @@ export default function RoleDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-markee-bg text-markee-text">
-      <header className="flex items-center justify-between border-b border-markee-border bg-white px-5 py-4 shadow-xs">
-        <div className="flex items-center gap-3">
+    <div className="flex min-h-screen bg-markee-bg text-markee-text font-sans">
+      {/* Sidebar (Cột trái) */}
+      <aside className="w-64 bg-white border-r border-markee-border flex flex-col shrink-0">
+        {/* Logo */}
+        <div className="p-5 border-b border-markee-border flex items-center gap-3">
           <img src="https://markeeai.com/logo.svg" alt="Markee Logo" className="w-8 h-8 shrink-0" />
           <div>
             <div className="text-sm font-bold bg-linear-to-r from-slate-900 via-red-600 to-rose-600 bg-clip-text text-transparent">Markee AI Ops</div>
-            <div className="text-xs text-markee-muted">
-              {profile.displayName} · {roleLabel(profile.role)}
-            </div>
+            <div className="text-[10px] text-markee-muted uppercase tracking-wider font-semibold">Center Console</div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+
+        {/* User Info */}
+        <div className="p-4 border-b border-markee-border bg-markee-bg/20 flex items-center gap-3">
+          <div 
+            className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0 shadow-inner"
+            style={{ backgroundColor: profile.dbUser?.avatar_color || '#E3000F' }}
+          >
+            {profile.displayName.charAt(0).toUpperCase()}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold text-markee-text truncate">{profile.displayName}</div>
+            <div className="text-xs text-markee-muted truncate capitalize">{roleLabel(profile.role)}</div>
+          </div>
+        </div>
+
+        {/* Menu Items */}
+        <nav className="p-4 flex-1 space-y-1">
+          {profile.role === 'admin' && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('overview')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
+                activeTab === 'overview'
+                  ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                  : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+              }`}
+            >
+              <span>📊</span>
+              <span>Tổng quan</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('library')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
+              activeTab === 'library'
+                ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+            }`}
+          >
+            <span>📚</span>
+            <span>Thư viện kỹ năng</span>
+          </button>
+
+          {profile.role === 'admin' && (
+            <>
+              <button
+                type="button"
+                onClick={() => setActiveTab('projects')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
+                  activeTab === 'projects'
+                    ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                    : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+                }`}
+              >
+                <span>📁</span>
+                <span>Quản lý Dự án</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('users')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
+                  activeTab === 'users'
+                    ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                    : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+                }`}
+              >
+                <span>👥</span>
+                <span>Quản lý User</span>
+              </button>
+            </>
+          )}
+        </nav>
+      </aside>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="h-16 bg-white border-b border-markee-border px-6 flex items-center justify-end gap-3 shrink-0">
           <button
             onClick={() => setIsGuideOpen(true)}
-            className="text-markee-primary border border-markee-primary hover:bg-markee-primary/10 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-2"
+            className="text-markee-primary border border-markee-primary hover:bg-markee-primary/10 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer"
           >
             <BookOpen className="w-4 h-4" />
             <span>Hướng dẫn cài đặt</span>
@@ -922,54 +1016,737 @@ export default function RoleDashboard() {
           <button
             type="button"
             onClick={() => signOut().then(() => setProfile(null))}
-            className="rounded-lg border border-markee-border bg-white px-3 py-2 text-xs font-semibold text-markee-text hover:bg-markee-bg transition-colors"
+            className="rounded-lg border border-markee-border bg-white px-3.5 py-1.5 text-xs font-semibold text-markee-text hover:bg-markee-bg transition-colors shadow-xs cursor-pointer"
           >
             Đăng xuất
           </button>
-        </div>
-      </header>
+        </header>
 
-      <UserGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
-
-      {profile.role === 'admin' ? (
-        <div>
-          <nav className="mx-auto flex max-w-7xl gap-2 px-5 pt-5">
-            <button
-              type="button"
-              onClick={() => setAdminTab('overview')}
-              className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition-all ${
-                adminTab === 'overview'
-                  ? 'bg-markee-primary text-white shadow-md shadow-red-100'
-                  : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
-              }`}
-            >
-              Tổng quan & Duyệt bài
-            </button>
-            <button
-              type="button"
-              onClick={() => setAdminTab('library')}
-              className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition-all ${
-                adminTab === 'library'
-                  ? 'bg-markee-primary text-white shadow-md shadow-red-100'
-                  : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
-              }`}
-            >
-              Thư viện kỹ năng
-            </button>
-          </nav>
-
-          {adminTab === 'overview' ? (
+        {/* Scrollable Content Container */}
+        <div className="flex-1 overflow-y-auto">
+          {activeTab === 'overview' && profile.role === 'admin' && (
             <AdminDashboard
               profile={profile}
               onSkillModerated={() => setLibraryRefreshKey((key) => key + 1)}
             />
-          ) : (
+          )}
+
+          {activeTab === 'library' && (
             <UserDashboard profile={profile} refreshKey={libraryRefreshKey} />
           )}
+
+          {activeTab === 'projects' && profile.role === 'admin' && (
+            <ProjectManagement profile={profile} />
+          )}
+
+          {activeTab === 'users' && profile.role === 'admin' && (
+            <UserManagement />
+          )}
         </div>
-      ) : (
-        <UserDashboard profile={profile} />
-      )}
+      </div>
+
+      <UserGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
     </div>
+  );
+}
+
+function UserOverviewOnly({ profile }: { profile: UserProfile }) {
+  const [period, setPeriod] = useState<AnalyticsPeriod>('7d');
+  const [metrics, setMetrics] = useState<AdminOverviewMetrics>({
+    totalTokens: 0,
+    costUsd: 0,
+    totalSessions: 0,
+    dailyTokens: [],
+    toolUsage: [],
+    contributors: [],
+  });
+  const [loading, setLoading] = useState(true);
+
+  async function loadOverviewData() {
+    setLoading(true);
+    try {
+      const overview = await fetchAdminOverviewMetrics(period);
+      setMetrics(overview);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadOverviewData();
+  }, [period]);
+
+  return (
+    <main className="mx-auto max-w-7xl space-y-5 p-5">
+      <section className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-bold text-markee-text">Tổng quan hoạt động</h1>
+          <p className="text-xs text-markee-muted">Xin chào {profile.displayName}. Theo dõi hoạt động AI của đội ngũ.</p>
+        </div>
+      </section>
+
+      {loading ? (
+        <div className="text-center py-10 text-sm text-markee-sub">Đang tải dữ liệu...</div>
+      ) : (
+        <AdminOverview metrics={metrics} period={period} onPeriodChange={setPeriod} />
+      )}
+    </main>
+  );
+}
+
+function UserManagement() {
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'loading' } | null>(null);
+
+  async function loadUsers() {
+    setLoading(true);
+    try {
+      const data = await fetchAllUsers();
+      setUsers(data);
+    } catch (err) {
+      console.error(err);
+      showToast('Không thể tải danh sách người dùng', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function showToast(message: string, type: 'success' | 'error' | 'loading', duration = 3000) {
+    setToast({ message, type });
+    if (type !== 'loading') {
+      setTimeout(() => {
+        setToast(current => current?.message === message ? null : current);
+      }, duration);
+    }
+  }
+
+  async function handleRoleChange(userId: number, newRole: UserRole) {
+    showToast('Đang lưu thay đổi...', 'loading');
+    try {
+      await updateUserRole(userId, newRole);
+      setUsers(prevUsers => prevUsers.map(u => u.id === userId ? { ...u, role: newRole } : u));
+      showToast('Đã cập nhật quyền thành công!', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Lỗi khi cập nhật quyền người dùng', 'error');
+    }
+  }
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  return (
+    <main className="mx-auto max-w-7xl space-y-5 p-5 relative">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${
+          toast.type === 'loading'
+            ? 'bg-amber-50 border-amber-200 text-amber-800'
+            : toast.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border-red-200 text-red-800'
+        }`}>
+          {toast.type === 'loading' && <span className="animate-spin mr-1">⏳</span>}
+          {toast.type === 'success' && <span className="mr-1">✓</span>}
+          {toast.type === 'error' && <span className="mr-1">⚠️</span>}
+          {toast.message}
+        </div>
+      )}
+
+      <section>
+        <h1 className="text-lg font-bold text-markee-text">Quản lý người dùng</h1>
+        <p className="text-xs text-markee-muted">Phân quyền vai trò và quản trị danh sách người dùng hệ thống.</p>
+      </section>
+
+      {loading ? (
+        <div className="text-center py-10 text-sm text-markee-sub">Đang tải danh sách người dùng...</div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-markee-border bg-white shadow-xs">
+          <table className="w-full border-collapse text-left text-sm text-markee-text">
+            <thead className="bg-markee-bg text-xs font-semibold uppercase tracking-wider text-markee-muted border-b border-markee-border">
+              <tr>
+                <th className="px-6 py-4">Tên người dùng</th>
+                <th className="px-6 py-4">Email</th>
+                <th className="px-6 py-4">Phòng ban (Team)</th>
+                <th className="px-6 py-4">Vai trò (Role)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-markee-border">
+              {users.map((user) => (
+                <tr key={user.id} className="hover:bg-markee-bg/20 transition-colors">
+                  <td className="px-6 py-4 font-semibold text-markee-text">{user.full_name || 'Chưa cập nhật'}</td>
+                  <td className="px-6 py-4 text-markee-muted">{user.email}</td>
+                  <td className="px-6 py-4 text-markee-muted">{user.team || '—'}</td>
+                  <td className="px-6 py-4">
+                    <select
+                      value={user.role || 'user'}
+                      onChange={(e) => handleRoleChange(user.id, e.target.value as UserRole)}
+                      className="rounded-lg border border-markee-border bg-white px-3 py-1.5 text-xs font-medium text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer"
+                    >
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="text-center py-8 text-markee-sub">Không tìm thấy người dùng nào.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function PromptText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const shouldTruncate = text.length > 180 || text.split('\n').length > 3;
+  
+  if (!shouldTruncate) {
+    return <p className="whitespace-pre-wrap leading-relaxed">{text}</p>;
+  }
+  
+  const displayText = expanded
+    ? text
+    : text.slice(0, 180) + '...';
+    
+  return (
+    <div>
+      <p className="whitespace-pre-wrap leading-relaxed">{displayText}</p>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="mt-2 text-xs font-bold text-markee-primary hover:text-markee-hover cursor-pointer"
+      >
+        {expanded ? 'Thu gọn ↑' : 'Xem thêm ↓'}
+      </button>
+    </div>
+  );
+}
+
+const softBgClasses = [
+  'bg-red-50 text-red-600 border-red-100',
+  'bg-amber-50 text-amber-600 border-amber-100',
+  'bg-emerald-50 text-emerald-600 border-emerald-100',
+  'bg-sky-50 text-sky-600 border-sky-100',
+  'bg-purple-50 text-purple-600 border-purple-100',
+  'bg-pink-50 text-pink-600 border-pink-100',
+];
+
+const getInitials = (name: string) => {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+};
+
+function ProjectManagement({ profile }: { profile: UserProfile }) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+
+  // Modal logs and members states
+  const [members, setMembers] = useState<{ email: string; name: string; avatarColor: string }[]>([]);
+  const [activeMemberEmail, setActiveMemberEmail] = useState<string | null>(null);
+  const [membersLoading, setMembersLoading] = useState(false);
+
+  const [logs, setLogs] = useState<AISession[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+
+  // Create project states
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [projectName, setProjectName] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'loading' } | null>(null);
+
+  // AI Tool filter state
+  const [selectedTool, setSelectedTool] = useState<string>('Tất cả');
+
+  const selectedMember = useMemo(
+    () => members.find(m => m.email === activeMemberEmail) || null,
+    [members, activeMemberEmail]
+  );
+
+  const filteredLogs = useMemo(() => {
+    if (selectedTool === 'Tất cả') return logs;
+    return logs.filter(log => {
+      const toolLower = (log.ai_tool || '').toLowerCase();
+      if (selectedTool === 'ChatGPT') return toolLower.includes('gpt') || toolLower.includes('chatgpt');
+      if (selectedTool === 'Gemini') return toolLower.includes('gemini') || toolLower.includes('google');
+      if (selectedTool === 'Claude') return toolLower.includes('claude') || toolLower.includes('anthropic');
+      return false;
+    });
+  }, [logs, selectedTool]);
+
+  function showToast(message: string, type: 'success' | 'error' | 'loading', duration = 3000) {
+    setToast({ message, type });
+    if (type !== 'loading') {
+      setTimeout(() => {
+        setToast(current => current?.message === message ? null : current);
+      }, duration);
+    }
+  }
+
+  async function handleCreateProject() {
+    const trimmedName = projectName.trim();
+    if (!trimmedName) return;
+    setIsCreating(true);
+    try {
+      const newProject = await createNewProject(trimmedName, profile.email);
+      const projectWithAuthor: Project = {
+        ...newProject,
+        logCount: 0,
+        authorName: profile.displayName || profile.email.split('@')[0],
+        members: []
+      };
+      setProjects(prev => [projectWithAuthor, ...prev]);
+      showToast('Tạo dự án mới thành công!', 'success');
+      setIsCreateModalOpen(false);
+      setProjectName('');
+    } catch (err) {
+      console.error(err);
+      showToast('Lỗi khi tạo dự án mới', 'error');
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  async function loadProjects() {
+    setLoading(true);
+    try {
+      const data = await fetchProjects();
+      setProjects(data);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadUserLogs(projId: number, userEmail: string, isInitial = false) {
+    setLogsLoading(true);
+    const nextPage = isInitial ? 0 : page + 1;
+    try {
+      const result = await fetchProjectSessionsForUser(projId, userEmail, nextPage, 20);
+      if (isInitial) {
+        setLogs(result.items);
+      } else {
+        setLogs(prev => [...prev, ...result.items]);
+      }
+      setPage(nextPage);
+      setHasMore(result.hasMore);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLogsLoading(false);
+    }
+  }
+
+  async function handleOpenProject(project: Project) {
+    setSelectedProject(project);
+    setMembers([]);
+    setActiveMemberEmail(null);
+    setLogs([]);
+    setPage(0);
+    setHasMore(false);
+    setSelectedTool('Tất cả');
+    setMembersLoading(true);
+
+    try {
+      const activeMembers = await fetchProjectMembers(project.id);
+      setMembers(activeMembers);
+      if (activeMembers.length > 0) {
+        const firstEmail = activeMembers[0].email;
+        setActiveMemberEmail(firstEmail);
+        loadUserLogs(project.id, firstEmail, true);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setMembersLoading(false);
+    }
+  }
+
+  function handleSelectMember(email: string) {
+    setActiveMemberEmail(email);
+    setLogs([]);
+    setPage(0);
+    setSelectedTool('Tất cả');
+    setHasMore(false);
+    if (selectedProject) {
+      loadUserLogs(selectedProject.id, email, true);
+    }
+  }
+
+  function handleLoadMore() {
+    if (selectedProject && activeMemberEmail) {
+      loadUserLogs(selectedProject.id, activeMemberEmail, false);
+    }
+  }
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  return (
+    <main className="mx-auto max-w-7xl space-y-5 p-5 relative">
+      {/* Toast Notification */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-[100] flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${
+          toast.type === 'loading'
+            ? 'bg-amber-50 border-amber-200 text-amber-800'
+            : toast.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border-red-200 text-red-800'
+        }`}>
+          {toast.type === 'loading' && <span className="animate-spin mr-1">⏳</span>}
+          {toast.type === 'success' && <span className="mr-1">✓</span>}
+          {toast.type === 'error' && <span className="mr-1">⚠️</span>}
+          {toast.message}
+        </div>
+      )}
+
+      <section className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-bold text-markee-text">Quản lý Dự án</h1>
+          <p className="text-xs text-markee-muted">Quản trị các dự án hoạt động AI của toàn bộ hệ thống.</p>
+        </div>
+        <button
+          onClick={() => setIsCreateModalOpen(true)}
+          className="flex items-center gap-1.5 px-4 py-2 bg-markee-primary hover:bg-markee-hover text-white text-xs font-semibold rounded-lg shadow-xs transition-colors cursor-pointer"
+        >
+          <span>➕</span>
+          <span>Tạo dự án</span>
+        </button>
+      </section>
+
+      {loading ? (
+        <div className="text-center py-10 text-sm text-markee-sub">Đang tải danh sách dự án...</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          {projects.map((project) => {
+            const updateDate = new Date(project.created_at).toLocaleDateString('vi-VN', {
+              day: 'numeric',
+              month: 'numeric',
+            });
+
+            return (
+              <div
+                key={project.id}
+                onClick={() => handleOpenProject(project)}
+                className="group cursor-pointer rounded-xl border-t-4 border-t-markee-primary border-x border-b border-gray-200 bg-white p-5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md flex flex-col justify-between min-h-[190px]"
+              >
+                <div className="space-y-4">
+                  {/* Header */}
+                  <div>
+                    <h3 className="text-lg font-bold text-markee-text truncate group-hover:text-markee-primary transition-colors">
+                      {project.name}
+                    </h3>
+                    <p className="text-xs text-markee-muted truncate mt-1">
+                      Dự án theo dõi hoạt động AI. Tạo bởi {project.authorName}
+                    </p>
+                  </div>
+
+                  {/* Stats */}
+                  <div className="grid grid-cols-3 gap-2 border-y border-gray-100 py-3">
+                    <div>
+                      <div className="font-bold text-markee-text text-sm md:text-base">
+                        {project.logCount || 0}
+                      </div>
+                      <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
+                        LOGS
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-bold text-markee-text text-sm md:text-base">
+                        {project.members?.length || 0}
+                      </div>
+                      <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
+                        MEMBERS
+                      </div>
+                    </div>
+                    <div>
+                      <div className="font-bold text-markee-text text-sm md:text-base">
+                        {updateDate}
+                      </div>
+                      <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
+                        UPDATE
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer Stacked Avatars */}
+                <div className="flex items-center justify-between mt-4">
+                  <div className="flex -space-x-2 overflow-hidden">
+                    {project.members && project.members.slice(0, 4).map((m, idx) => (
+                      <div
+                        key={m.email}
+                        title={m.name}
+                        className={`inline-flex items-center justify-center w-7 h-7 rounded-full border text-[10px] font-bold shadow-2xs shrink-0 select-none ${
+                          softBgClasses[idx % softBgClasses.length]
+                        }`}
+                      >
+                        {getInitials(m.name)}
+                      </div>
+                    ))}
+                    {project.members && project.members.length > 4 && (
+                      <div className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-200 bg-gray-50 text-gray-500 text-[10px] font-bold shadow-2xs shrink-0 select-none">
+                        +{project.members.length - 4}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-markee-muted group-hover:text-markee-primary transition-colors font-medium">
+                    Xem chi tiết →
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+          {projects.length === 0 && (
+            <div className="col-span-3 text-center py-10 text-sm text-markee-sub">Chưa có dự án nào được tạo.</div>
+          )}
+        </div>
+      )}
+
+      {/* Activity Log Timeline Modal */}
+      {selectedProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-5xl w-full h-[80vh] max-h-[85vh] overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="border-b border-markee-border px-6 py-4 flex items-center justify-between bg-markee-bg/10 shrink-0">
+              <div>
+                <h2 className="text-lg font-bold text-markee-text">Lịch sử làm việc: {selectedProject.name}</h2>
+                <p className="text-xs text-markee-muted mt-0.5">Timeline ghi nhận các phiên làm việc của dự án được lọc theo thành viên.</p>
+              </div>
+              <button
+                onClick={() => setSelectedProject(null)}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body - Flex Split (Sidebar + Timeline) */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Left sidebar: Members */}
+              <aside className="w-64 border-r border-markee-border bg-markee-bg/10 flex flex-col overflow-y-auto p-4 shrink-0">
+                <h3 className="text-[11px] font-bold text-markee-muted uppercase tracking-wider mb-3">Thành viên hoạt động</h3>
+                
+                {membersLoading ? (
+                  <div className="text-xs text-markee-sub py-4">Đang tải thành viên...</div>
+                ) : (
+                  <div className="space-y-1">
+                    {members.map((member) => (
+                      <button
+                        key={member.email}
+                        onClick={() => handleSelectMember(member.email)}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-xs font-semibold text-left transition-all cursor-pointer ${
+                          activeMemberEmail === member.email
+                            ? 'bg-markee-primary text-white shadow-xs'
+                            : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+                        }`}
+                      >
+                        <div
+                          className="w-6 h-6 rounded-full flex items-center justify-center text-white font-bold text-[10px] shrink-0"
+                          style={{
+                            backgroundColor:
+                              activeMemberEmail === member.email
+                                ? 'rgba(255, 255, 255, 0.2)'
+                                : member.avatarColor || '#E3000F',
+                          }}
+                        >
+                          {member.name.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="truncate">{member.name}</span>
+                      </button>
+                    ))}
+                    {members.length === 0 && (
+                      <div className="text-xs text-markee-sub py-4">Dự án chưa có hoạt động nào.</div>
+                    )}
+                  </div>
+                )}
+              </aside>
+
+              {/* Right content: Timeline */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* AI Tool Filter Pills */}
+                {!membersLoading && members.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 pb-4 border-b border-gray-100">
+                    <span className="text-xs font-semibold text-markee-muted mr-1">Lọc công cụ:</span>
+                    {['Tất cả', 'ChatGPT', 'Gemini', 'Claude'].map((tool) => {
+                      const isActive = selectedTool === tool;
+                      return (
+                        <button
+                          key={tool}
+                          onClick={() => setSelectedTool(tool)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            isActive
+                              ? 'bg-markee-primary text-white shadow-xs'
+                              : 'bg-gray-100 text-markee-muted hover:bg-gray-200 hover:text-markee-text'
+                          }`}
+                        >
+                          {tool}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {membersLoading || (logsLoading && logs.length === 0) ? (
+                  <div className="text-center py-10 text-sm text-markee-sub">Đang tải nhật ký hoạt động...</div>
+                ) : filteredLogs.length === 0 ? (
+                  <div className="text-center py-10 text-sm text-markee-sub">
+                    {logs.length === 0 ? 'Không có log hoạt động nào.' : `Không có log hoạt động nào sử dụng ${selectedTool}.`}
+                  </div>
+                ) : (
+                  <div className="relative border-l-2 border-markee-border pl-6 ml-3 space-y-8">
+                    {filteredLogs.map((log) => {
+                      const dateStr = new Date(log.created_at).toLocaleString('vi-VN', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        day: '2-digit',
+                        month: '2-digit',
+                      });
+
+                      // AI Tool Badge color mapping
+                      let toolBadgeClass = "bg-gray-100 text-gray-700 border border-gray-200";
+                      const toolLower = (log.ai_tool || '').toLowerCase();
+                      if (toolLower.includes('gpt') || toolLower.includes('chatgpt')) {
+                        toolBadgeClass = "bg-emerald-50 text-emerald-700 border border-emerald-200";
+                      } else if (toolLower.includes('claude') || toolLower.includes('anthropic')) {
+                        toolBadgeClass = "bg-orange-50 text-orange-700 border border-orange-200";
+                      } else if (toolLower.includes('gemini') || toolLower.includes('google')) {
+                        toolBadgeClass = "bg-sky-50 text-sky-700 border border-sky-200";
+                      }
+
+                      // Tier Badge color mapping
+                      const tierLower = (log.tier || '').toLowerCase();
+                      const isPro = tierLower.includes('pro') || tierLower.includes('plus') || tierLower.includes('premium');
+                      const tierBadgeClass = isPro
+                        ? "bg-purple-100 text-purple-700 font-semibold px-2 py-0.5 rounded text-xs"
+                        : "bg-gray-200 text-gray-700 px-2 py-0.5 rounded text-xs";
+
+                      return (
+                        <div key={log.id} className="relative">
+                          {/* Timeline Bullet Node */}
+                          <div
+                            className="absolute -left-[31px] top-1 w-4 h-4 rounded-full border-2 border-white shadow-xs"
+                            style={{ backgroundColor: selectedMember?.avatarColor || '#E3000F' }}
+                          />
+                          
+                          {/* Log Item Header */}
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
+                            <span className="font-bold text-markee-text">{dateStr}</span>
+                            <span className="text-markee-muted">— đã sử dụng</span>
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase ${toolBadgeClass}`}>
+                              {log.ai_tool || 'AI Tool'}
+                            </span>
+                            <span className={tierBadgeClass}>
+                              {log.tier || 'Free'}
+                            </span>
+                          </div>
+
+                          {/* Prompt content block */}
+                          {log.prompt_content && (
+                            <div className="mt-2.5">
+                              <blockquote className="px-4 py-3 bg-markee-bg border-l-4 border-markee-primary/30 text-markee-text text-sm rounded-r-lg">
+                                <div className="flex items-center gap-1.5 text-xs text-markee-muted mb-1.5 font-semibold">
+                                  <span>🪙</span>
+                                  <span>{log.tokens_used || 0} tokens</span>
+                                </div>
+                                <PromptText text={log.prompt_content} />
+                              </blockquote>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Load More Button */}
+                {hasMore && (
+                  <div className="text-center pt-4">
+                    <button
+                      onClick={handleLoadMore}
+                      disabled={logsLoading}
+                      className="px-5 py-2 border border-markee-border rounded-xl bg-white text-markee-text hover:bg-markee-bg font-semibold text-xs transition-all cursor-pointer shadow-xs disabled:opacity-60"
+                    >
+                      {logsLoading ? 'Đang tải...' : 'Tải thêm hoạt động'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end bg-markee-bg/10 shrink-0">
+              <button
+                onClick={() => setSelectedProject(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-text hover:bg-markee-bg rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Project Modal */}
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-markee-text">Tạo dự án mới</h2>
+              <p className="text-xs text-markee-muted mt-1">Vui lòng nhập tên cho dự án mới của bạn.</p>
+            </div>
+            <div>
+              <label htmlFor="projectNameInput" className="block text-xs font-semibold text-markee-text mb-1.5">
+                Tên dự án
+              </label>
+              <input
+                id="projectNameInput"
+                type="text"
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="Nhập tên dự án..."
+                className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleCreateProject();
+                  }
+                }}
+              />
+            </div>
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                onClick={() => {
+                  setIsCreateModalOpen(false);
+                  setProjectName('');
+                }}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={handleCreateProject}
+                disabled={isCreating || !projectName.trim()}
+                className="px-4 py-2 bg-markee-primary hover:bg-markee-hover disabled:bg-markee-primary/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                {isCreating ? 'Đang tạo...' : 'Tạo mới'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
   );
 }
