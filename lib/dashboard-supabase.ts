@@ -602,6 +602,8 @@ export interface AISession {
   avatarColor?: string;
   project_id: number | null;
   tier: string | null;
+  title?: string;
+  team_track?: string | null;
 }
 
 export async function fetchAllUsers(): Promise<AppUser[]> {
@@ -898,10 +900,19 @@ export async function updateAILicense(
 ): Promise<AILicense> {
   // If the expiration date is set to a future date, set status to Active
   const status = new Date(updates.expiration_date) >= new Date() ? "Active" : updates.status || "Active";
+  
+  const allowedKeys = ["ai_tool", "plan_name", "monthly_cost", "expiration_date", "status"];
+  const filteredUpdates = Object.keys(updates)
+    .filter(key => allowedKeys.includes(key))
+    .reduce((obj, key) => {
+      obj[key] = (updates as any)[key];
+      return obj;
+    }, {} as any);
+
   const { data, error } = await supabase
     .from("ai_licenses")
     .update({
-      ...updates,
+      ...filteredUpdates,
       status,
     })
     .eq("id", id)
@@ -916,6 +927,12 @@ export async function cancelAILicense(id: number): Promise<AILicense> {
   if (error) throw error;
   return data;
 }
+
+export async function deleteAILicense(id: number): Promise<void> {
+  const { error } = await supabase.from("ai_licenses").delete().eq("id", id);
+  if (error) throw error;
+}
+
 
 export async function fetchUserAILicenses(email: string): Promise<AILicense[]> {
   const { data, error } = await supabase.from("ai_licenses").select("*").eq("email", email).order("created_at", { ascending: false });
@@ -1027,6 +1044,8 @@ export async function fetchProjectWIPsForUser(projectId: number, authorId: strin
     author_id: row.author_id,
     project_id: row.project_id,
     tier: "WIP",
+    title: row.title,
+    team_track: row.team_track,
   }));
 
   const total = count || 0;
@@ -1058,6 +1077,8 @@ export async function fetchProjectWIPs(projectId: number, page = 0, pageSize = 2
     author_id: row.author_id,
     project_id: row.project_id,
     tier: "WIP",
+    title: row.title,
+    team_track: row.team_track,
   }));
 
   const total = count || 0;
@@ -1067,3 +1088,32 @@ export async function fetchProjectWIPs(projectId: number, page = 0, pageSize = 2
     hasMore: to + 1 < total,
   };
 }
+
+export async function fetchMyWIPs(email: string): Promise<AISession[]> {
+  const { data, error } = await supabase
+    .from("skill_library")
+    .select("*")
+    .eq("author_id", email)
+    .eq("skill_type", "wip")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("Error fetching my WIPs:", error);
+    return [];
+  }
+
+  return (data || []).map((row) => ({
+    id: row.id,
+    created_at: row.created_at,
+    ai_tool: row.category || "WIP Draft",
+    task_type: "WIP",
+    prompt_content: row.markdown_content,
+    tokens_used: row.session_tokens || 0,
+    author_id: row.author_id,
+    project_id: row.project_id,
+    tier: "WIP",
+    title: row.title,
+    team_track: row.team_track,
+  }));
+}
+

@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, User } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, User, Edit, Trash2, ArrowLeftRight, Settings } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -63,9 +63,11 @@ import {
   fetchCurationStats,
   cancelAILicense,
   updateAILicense,
+  deleteAILicense,
   fetchProjectWIPMembers,
   fetchProjectWIPsForUser,
   fetchProjectWIPs,
+  fetchMyWIPs,
 } from '@/lib/dashboard-supabase';
 import { supabase } from '@/lib/supabase';
 import UserGuideModal from './UserGuideModal';
@@ -434,7 +436,120 @@ function UserDashboard({
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const isLibraryOnly = mode === 'library-only';
 
-  const [workspaceTab, setWorkspaceTab] = useState<'approved' | 'pending'>('approved');
+  const [workspaceTab, setWorkspaceTab] = useState<'approved' | 'pending' | 'wip'>('approved');
+  const [wips, setWips] = useState<AISession[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [wipPage, setWipPage] = useState(0);
+
+  const [activeEditWip, setActiveEditWip] = useState<AISession | null>(null);
+  const [editWipTitle, setEditWipTitle] = useState('');
+  const [editWipContent, setEditWipContent] = useState('');
+  const [editWipTrack, setEditWipTrack] = useState('');
+  const [isEditingWip, setIsEditingWip] = useState(false);
+
+  const [activeMoveWip, setActiveMoveWip] = useState<AISession | null>(null);
+  const [moveWipProjectId, setMoveWipProjectId] = useState<number | ''>('');
+  const [isMovingWip, setIsMovingWip] = useState(false);
+
+  const [activeDeleteWip, setActiveDeleteWip] = useState<AISession | null>(null);
+  const [isDeletingWip, setIsDeletingWip] = useState(false);
+
+  const [deletingWipIds, setDeletingWipIds] = useState<number[]>([]);
+  const [wipToast, setWipToast] = useState<{ message: string; type: 'success' | 'error' | 'loading' } | null>(null);
+
+  function showWipToast(message: string, type: 'success' | 'error' | 'loading', duration = 3000) {
+    setWipToast({ message, type });
+    if (type !== 'loading') {
+      setTimeout(() => {
+        setWipToast(current => current?.message === message ? null : current);
+      }, duration);
+    }
+  }
+
+  async function handleDeleteWip() {
+    if (!activeDeleteWip) return;
+    setIsDeletingWip(true);
+    try {
+      const { error } = await supabase.from('skill_library').delete().eq('id', activeDeleteWip.id);
+      if (error) throw error;
+
+      showWipToast('Xóa phiên AI thành công!', 'success');
+      
+      const targetId = activeDeleteWip.id;
+      setDeletingWipIds(prev => [...prev, targetId]);
+      setActiveDeleteWip(null);
+
+      setTimeout(() => {
+        setWips(prev => prev.filter(w => w.id !== targetId));
+        setDeletingWipIds(prev => prev.filter(id => id !== targetId));
+      }, 500);
+    } catch (err) {
+      console.error('Error deleting WIP:', err);
+      showWipToast('Lỗi khi xóa phiên AI', 'error');
+    } finally {
+      setIsDeletingWip(false);
+    }
+  }
+
+  async function handleMoveWip() {
+    if (!activeMoveWip || !moveWipProjectId) return;
+    setIsMovingWip(true);
+    try {
+      const { error } = await supabase.from('skill_library').update({ project_id: moveWipProjectId }).eq('id', activeMoveWip.id);
+      if (error) throw error;
+
+      showWipToast('Chuyển dự án thành công!', 'success');
+      
+      const targetId = activeMoveWip.id;
+      setDeletingWipIds(prev => [...prev, targetId]);
+      setActiveMoveWip(null);
+      setMoveWipProjectId('');
+
+      setTimeout(() => {
+        setWips(prev => prev.filter(w => w.id !== targetId));
+        setDeletingWipIds(prev => prev.filter(id => id !== targetId));
+      }, 500);
+    } catch (err) {
+      console.error('Error moving WIP:', err);
+      showWipToast('Lỗi khi chuyển dự án', 'error');
+    } finally {
+      setIsMovingWip(false);
+    }
+  }
+
+  async function handleEditWip() {
+    if (!activeEditWip) return;
+    setIsEditingWip(true);
+    try {
+      const { error } = await supabase
+        .from('skill_library')
+        .update({ 
+          title: editWipTitle, 
+          markdown_content: editWipContent, 
+          team_track: editWipTrack 
+        })
+        .eq('id', activeEditWip.id);
+      
+      if (error) throw error;
+
+      showWipToast('Cập nhật phiên AI thành công!', 'success');
+
+      setWips(prev => prev.map(w => w.id === activeEditWip.id ? {
+        ...w,
+        title: editWipTitle,
+        prompt_content: editWipContent,
+        team_track: editWipTrack,
+      } : w));
+
+      setActiveEditWip(null);
+    } catch (err) {
+      console.error('Error editing WIP:', err);
+      showWipToast('Lỗi khi sửa phiên AI', 'error');
+    } finally {
+      setIsEditingWip(false);
+    }
+  }
+
 
   const [selectedTrack, setSelectedTrack] = useState('Tất cả');
   const [selectedType, setSelectedType] = useState('Tất cả');
@@ -481,16 +596,20 @@ function UserDashboard({
         return;
       }
 
-      const [skills, trending, workspace, libCounts] = await Promise.all([
+      const [skills, trending, workspace, userWips, allProjects, libCounts] = await Promise.all([
         fetchApprovedSkills(page, PAGE_SIZE, profile.email, debouncedSearchTerm, dbTrack, selectedType),
         fetchTrendingSkills(5, profile.email),
         fetchMyWorkspaceSkills(profile.email),
+        fetchMyWIPs(profile.email),
+        fetchProjects(),
         countsPromise,
       ]);
 
       setLibrary(skills);
       setTrendingSkills(trending);
       setWorkspaceSkills(workspace);
+      setWips(userWips);
+      setProjects(allProjects);
       setCounts(libCounts);
     } finally {
       setLoading(false);
@@ -510,9 +629,21 @@ function UserDashboard({
     return () => window.clearTimeout(timer);
   }, [searchTerm]);
 
+  useEffect(() => {
+    setWipPage(0);
+  }, [workspaceTab]);
+
   const displayedSkills = !isLibraryOnly && activeView === 'workspace'
-    ? (workspaceTab === 'approved' ? approvedWorkspaceSkills : pendingWorkspaceSkills)
+    ? (workspaceTab === 'approved' 
+        ? approvedWorkspaceSkills.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) 
+        : pendingWorkspaceSkills.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE))
     : library.items;
+
+  const WIP_PAGE_SIZE = 8;
+  const displayedWips = useMemo(() => {
+    const start = wipPage * WIP_PAGE_SIZE;
+    return wips.slice(start, start + WIP_PAGE_SIZE);
+  }, [wips, wipPage]);
 
   return (
     <main className="mx-auto max-w-7xl p-5">
@@ -603,7 +734,10 @@ function UserDashboard({
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setActiveView('library')}
+                  onClick={() => {
+                    setActiveView('library');
+                    setPage(0);
+                  }}
                   className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all cursor-pointer ${
                     activeView === 'library' ? 'bg-markee-primary text-white' : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
                   }`}
@@ -612,7 +746,10 @@ function UserDashboard({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActiveView('workspace')}
+                  onClick={() => {
+                    setActiveView('workspace');
+                    setPage(0);
+                  }}
                   className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all cursor-pointer ${
                     activeView === 'workspace' ? 'bg-markee-primary text-white' : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
                   }`}
@@ -651,7 +788,10 @@ function UserDashboard({
               <div className="flex gap-2 border-b border-markee-border pb-3">
                 <button
                   type="button"
-                  onClick={() => setWorkspaceTab('approved')}
+                  onClick={() => {
+                    setWorkspaceTab('approved');
+                    setPage(0);
+                  }}
                   className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${
                     workspaceTab === 'approved'
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
@@ -662,7 +802,10 @@ function UserDashboard({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setWorkspaceTab('pending')}
+                  onClick={() => {
+                    setWorkspaceTab('pending');
+                    setPage(0);
+                  }}
                   className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${
                     workspaceTab === 'pending'
                       ? 'bg-amber-500/10 text-amber-700 border border-amber-500/30'
@@ -671,6 +814,20 @@ function UserDashboard({
                 >
                   Kỹ năng đang chờ duyệt ({pendingWorkspaceSkills.length})
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkspaceTab('wip');
+                    setWipPage(0);
+                  }}
+                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${
+                    workspaceTab === 'wip'
+                      ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                      : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
+                  }`}
+                >
+                  Tóm tắt phiên AI ({wips.length})
+                </button>
               </div>
             )}
             
@@ -678,27 +835,143 @@ function UserDashboard({
               <div className="rounded-lg border border-markee-border bg-white p-8 text-center text-sm text-markee-muted">Đang tải dữ liệu...</div>
             ) : (
               <>
-                <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
-                  {displayedSkills.map((skill) => (
-                    <SkillCardItem
-                      key={skill.id}
-                      skill={skill}
-                      userEmail={profile.email}
-                      showStatus={!isLibraryOnly && activeView === 'workspace'}
-                      allowVoting={isLibraryOnly || activeView === 'library'}
-                      onPreview={() => setPreviewSkill(skill)}
-                    />
-                  ))}
-                </div>
+                {!isLibraryOnly && activeView === 'workspace' && workspaceTab === 'wip' ? (
+                  <>
+                    <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
+                      {displayedWips.map((wip) => {
+                        const isDeleting = deletingWipIds.includes(wip.id);
+                        const project = projects.find(p => p.id === wip.project_id);
+                        return (
+                          <div 
+                            key={wip.id} 
+                            className={`bg-white border border-markee-border rounded-xl p-5 shadow-xs relative flex flex-col justify-between transition-all duration-500 ease-out hover:shadow-md ${
+                              isDeleting 
+                                ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden' 
+                                : ''
+                            }`}
+                          >
+                            <div>
+                              <div className="flex items-start justify-between">
+                                <div className="space-y-1">
+                                  <div className="text-xs text-markee-muted flex items-center gap-1.5 flex-wrap">
+                                    <span>📅</span>
+                                    <span>{new Date(wip.created_at).toLocaleDateString('vi-VN')}</span>
+                                    {wip.team_track && (
+                                      <span className="px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[10px] font-bold border border-purple-100">
+                                        {wip.team_track}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <h4 className="text-sm font-bold text-markee-text leading-snug mt-1">
+                                    {wip.title || 'Không có tiêu đề'}
+                                  </h4>
+                                </div>
 
-                {displayedSkills.length === 0 && (
-                  <div className="rounded-lg border border-markee-border bg-white p-8 text-center text-sm text-markee-muted">
-                    Chưa có skill để hiển thị.
-                  </div>
+                                <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                  <button
+                                    type="button"
+                                    title="Sửa"
+                                    onClick={() => {
+                                      setActiveEditWip(wip);
+                                      setEditWipTitle(wip.title || '');
+                                      setEditWipContent(wip.prompt_content || '');
+                                      setEditWipTrack(wip.team_track || '');
+                                    }}
+                                    className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white"
+                                  >
+                                    <Edit className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Chuyển Dự án"
+                                    onClick={() => {
+                                      setActiveMoveWip(wip);
+                                      setMoveWipProjectId('');
+                                    }}
+                                    className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white"
+                                  >
+                                    <ArrowLeftRight className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Xóa"
+                                    onClick={() => {
+                                      setActiveDeleteWip(wip);
+                                    }}
+                                    className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-red-600 cursor-pointer bg-white"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="mt-3.5 p-3 rounded-lg bg-markee-bg text-markee-text text-xs font-mono line-clamp-4 overflow-hidden text-ellipsis whitespace-pre-wrap leading-relaxed border border-markee-border/60">
+                                {wip.prompt_content ? wip.prompt_content : 'Không có nội dung'}
+                              </div>
+                            </div>
+
+                            <div className="border-t border-markee-border/60 mt-4 pt-3 flex items-center justify-between text-[11px] text-markee-muted">
+                              <div className="flex items-center gap-1.5">
+                                <span>📁 Dự án:</span>
+                                <span className="font-semibold text-markee-text truncate max-w-[150px]">{project?.name || 'Khác / Chưa phân loại'}</span>
+                              </div>
+                              <div>
+                                🪙 <span className="font-semibold">{wip.tokens_used || 0}</span> tokens
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {wips.length > WIP_PAGE_SIZE && (
+                      <div className="mt-6 flex justify-center">
+                        <PaginationControls
+                          page={wipPage}
+                          total={wips.length}
+                          pageSize={WIP_PAGE_SIZE}
+                          onPageChange={setWipPage}
+                        />
+                      </div>
+                    )}
+
+                    {wips.length === 0 && (
+                      <div className="rounded-lg border border-markee-border bg-white p-8 text-center text-sm text-markee-muted">
+                        Chưa có phiên AI nào được ghi nhận.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="grid gap-6 grid-cols-1 xl:grid-cols-2">
+                      {displayedSkills.map((skill) => (
+                        <SkillCardItem
+                          key={skill.id}
+                          skill={skill}
+                          userEmail={profile.email}
+                          showStatus={!isLibraryOnly && activeView === 'workspace'}
+                          allowVoting={isLibraryOnly || activeView === 'library'}
+                          onPreview={() => setPreviewSkill(skill)}
+                        />
+                      ))}
+                    </div>
+
+                    {displayedSkills.length === 0 && (
+                      <div className="rounded-lg border border-markee-border bg-white p-8 text-center text-sm text-markee-muted">
+                        Chưa có skill để hiển thị.
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {(isLibraryOnly || activeView === 'library') && library.total > PAGE_SIZE && (
                   <PaginationControls page={page} total={library.total} pageSize={PAGE_SIZE} onPageChange={setPage} />
+                )}
+                {!isLibraryOnly && activeView === 'workspace' && workspaceTab === 'approved' && approvedWorkspaceSkills.length > PAGE_SIZE && (
+                  <PaginationControls page={page} total={approvedWorkspaceSkills.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+                )}
+                {!isLibraryOnly && activeView === 'workspace' && workspaceTab === 'pending' && pendingWorkspaceSkills.length > PAGE_SIZE && (
+                  <PaginationControls page={page} total={pendingWorkspaceSkills.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
                 )}
               </>
             )}
@@ -896,6 +1169,231 @@ function UserDashboard({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Edit WIP Modal */}
+      {activeEditWip && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
+              <h3 className="text-base font-bold text-markee-text">Sửa tóm tắt phiên AI</h3>
+              <button
+                type="button"
+                onClick={() => setActiveEditWip(null)}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              <div>
+                <label htmlFor="userEditWipTitleInput" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Tiêu đề phiên AI
+                </label>
+                <input
+                  id="userEditWipTitleInput"
+                  type="text"
+                  value={editWipTitle}
+                  onChange={(e) => setEditWipTitle(e.target.value)}
+                  placeholder="Nhập tiêu đề..."
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="userEditWipTrackSelect" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Phòng ban (Track)
+                </label>
+                <select
+                  id="userEditWipTrackSelect"
+                  value={editWipTrack}
+                  onChange={(e) => setEditWipTrack(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                >
+                  <option value="">Khác (Chưa phân loại)</option>
+                  <option value="Track 1: SI Delivery">Track 1: SI Delivery</option>
+                  <option value="Track 2: Marketing">Track 2: Marketing</option>
+                  <option value="Track 3: Dev + DevOps">Track 3: Dev + DevOps</option>
+                  <option value="Track 4: AI Team">Track 4: AI Team</option>
+                  <option value="Track 5: Sales">Track 5: Sales</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="userEditWipContentInput" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Nội dung Markdown
+                </label>
+                <textarea
+                  id="userEditWipContentInput"
+                  rows={10}
+                  value={editWipContent}
+                  onChange={(e) => setEditWipContent(e.target.value)}
+                  placeholder="Nhập nội dung markdown của phiên AI..."
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => setActiveEditWip(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleEditWip}
+                disabled={isEditingWip || !editWipTitle.trim() || !editWipContent.trim()}
+                className="px-4 py-2 bg-markee-primary hover:bg-markee-hover disabled:bg-markee-primary/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+              >
+                {isEditingWip ? 'Đang lưu...' : 'Lưu thay đổi'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move WIP Modal */}
+      {activeMoveWip && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
+              <h3 className="text-base font-bold text-markee-text">Chuyển Dự án</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveMoveWip(null);
+                  setMoveWipProjectId('');
+                }}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-markee-muted leading-relaxed">
+                Bạn đang chuyển phiên AI <span className="font-bold text-markee-text">"{activeMoveWip.title || 'Không có tiêu đề'}"</span> sang một dự án khác.
+              </p>
+              
+              <div>
+                <label htmlFor="userMoveWipProjectSelect" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Chọn Dự án đích
+                </label>
+                <select
+                  id="userMoveWipProjectSelect"
+                  value={moveWipProjectId}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setMoveWipProjectId(val === '' ? '' : Number(val));
+                  }}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                >
+                  <option value="">-- Chọn Dự án --</option>
+                  {projects
+                    .filter((p) => p.id !== activeMoveWip.project_id)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveMoveWip(null);
+                  setMoveWipProjectId('');
+                }}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleMoveWip}
+                disabled={isMovingWip || !moveWipProjectId}
+                className="px-4 py-2 bg-markee-primary hover:bg-markee-hover disabled:bg-markee-primary/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+              >
+                {isMovingWip ? 'Đang chuyển...' : 'Xác nhận Chuyển'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete WIP Modal */}
+      {activeDeleteWip && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-sm w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
+              <h3 className="text-base font-bold text-red-600">Xác nhận Xóa</h3>
+              <button
+                type="button"
+                onClick={() => setActiveDeleteWip(null)}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6">
+              <p className="text-xs text-markee-muted leading-relaxed">
+                Bạn có chắc chắn muốn xóa phiên AI <span className="font-bold text-markee-text">"{activeDeleteWip.title || 'Không có tiêu đề'}"</span>? 
+                Hành động này không thể hoàn tác.
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => setActiveDeleteWip(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteWip}
+                disabled={isDeletingWip}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-600/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+              >
+                {isDeletingWip ? 'Đang xóa...' : 'Xác nhận Xóa'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Alert */}
+      {wipToast && (
+        <div className={`fixed bottom-5 right-5 z-60 px-4.5 py-3 rounded-xl shadow-xl flex items-center gap-2 border text-xs font-semibold animate-in slide-in-from-bottom-5 duration-300 ${
+          wipToast.type === 'success' 
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+            : wipToast.type === 'error'
+            ? 'bg-red-50 border-red-200 text-red-800'
+            : 'bg-blue-50 border-blue-200 text-blue-800'
+        }`}>
+          {wipToast.type === 'success' && <span>✅</span>}
+          {wipToast.type === 'error' && <span>❌</span>}
+          {wipToast.type === 'loading' && <span className="animate-spin">⏳</span>}
+          <span>{wipToast.message}</span>
         </div>
       )}
     </main>
@@ -1619,9 +2117,12 @@ function UserManagement() {
 
     showToast('Đang cập nhật bản quyền...', 'loading');
     try {
+      const isPersonal = selectedLicense.plan_name.includes('(Cá nhân)');
+      const finalPlanName = isPersonal ? `${editPlan} (Cá nhân)` : editPlan;
+
       const updatedLic = await updateAILicense(selectedLicense.id, {
         ai_tool: editTool,
-        plan_name: editPlan,
+        plan_name: finalPlanName,
         monthly_cost: Number(editCost) || 0,
         expiration_date: editExpiry,
       });
@@ -2244,6 +2745,16 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
   // Refresh trigger state to force reload
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // States for edit/delete personal license
+  const [activeMenuLicenseId, setActiveMenuLicenseId] = useState<number | null>(null);
+  const [isEditLicenseModalOpen, setIsEditLicenseModalOpen] = useState(false);
+  const [editingLicense, setEditingLicense] = useState<AILicense | null>(null);
+  const [editLicenseTool, setEditLicenseTool] = useState('');
+  const [editLicensePlan, setEditLicensePlan] = useState('');
+  const [editLicenseExpiry, setEditLicenseExpiry] = useState('');
+  const [editLicenseCost, setEditLicenseCost] = useState('0');
+  const [deletingLicense, setDeletingLicense] = useState<AILicense | null>(null);
+
   function showToast(message: string, type: 'success' | 'error', duration = 3000) {
     setToast({ message, type });
     setTimeout(() => {
@@ -2386,6 +2897,30 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
     }
   };
 
+  const handleEditLicense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingLicense || !editLicenseExpiry) {
+      showToast('Vui lòng điền đầy đủ thông tin', 'error');
+      return;
+    }
+
+    try {
+      await updateAILicense(editingLicense.id, {
+        ai_tool: editLicenseTool,
+        plan_name: `${editLicensePlan} (Cá nhân)`,
+        monthly_cost: Number(editLicenseCost) || 0,
+        expiration_date: editLicenseExpiry,
+      });
+      showToast('Đại diện tài khoản cá nhân đã được cập nhật thành công!', 'success');
+      setIsEditLicenseModalOpen(false);
+      setEditingLicense(null);
+      setRefreshKey(prev => prev + 1);
+    } catch (err) {
+      console.error(err);
+      showToast('Lỗi khi cập nhật tài khoản cá nhân', 'error');
+    }
+  };
+
   return (
     <main className="mx-auto max-w-7xl space-y-5 p-5 relative">
       {/* Toast Notification */}
@@ -2452,7 +2987,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
             return (
               <div
                 key={lic.id}
-                className={`bg-white rounded-xl border p-5 shadow-xs transition-all flex flex-col justify-between min-h-62.5 ${borderClass}`}
+                className={`bg-white rounded-xl border p-5 shadow-xs transition-all flex flex-col justify-between min-h-62.5 relative ${borderClass}`}
                 style={{ opacity: isCanceled ? 0.5 : 1 }}
               >
                 <div>
@@ -2472,6 +3007,53 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                         <span className="px-1.5 py-0.5 rounded-sm text-[8px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
                           Công ty
                         </span>
+                      )}
+
+                      {isPersonal && usageNum === 0 && (
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuLicenseId(activeMenuLicenseId === lic.id ? null : lic.id);
+                            }}
+                            className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white shrink-0 ml-1"
+                          >
+                            <Settings className="h-3.5 w-3.5" />
+                          </button>
+
+                          {activeMenuLicenseId === lic.id && (
+                            <div className="absolute right-0 mt-1 w-24 bg-white border border-markee-border rounded-lg shadow-lg z-20 py-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingLicense(lic);
+                                  setEditLicenseTool(lic.ai_tool);
+                                  setEditLicensePlan(displayPlanName);
+                                  setEditLicenseExpiry(lic.expiration_date.split('T')[0]);
+                                  setEditLicenseCost(String(lic.monthly_cost));
+                                  setIsEditLicenseModalOpen(true);
+                                  setActiveMenuLicenseId(null);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 font-medium cursor-pointer"
+                              >
+                                Sửa
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeletingLicense(lic);
+                                  setActiveMenuLicenseId(null);
+                                }}
+                                className="w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 font-medium cursor-pointer"
+                              >
+                                Xóa
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2708,6 +3290,132 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
               </button>
             </div>
           </form>
+        </div>
+      )}
+      {/* Edit Personal License Modal */}
+      {isEditLicenseModalOpen && editingLicense && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <form onSubmit={handleEditLicense} className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-markee-text">Chỉnh sửa tài khoản cá nhân</h2>
+              <p className="text-xs text-markee-muted mt-1">
+                Cập nhật thông tin tài khoản cá nhân của bạn.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Công cụ AI</label>
+                  <select
+                    value={editLicenseTool}
+                    onChange={(e) => setEditLicenseTool(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary outline-none cursor-pointer"
+                  >
+                    <option value="ChatGPT">ChatGPT</option>
+                    <option value="Claude">Claude</option>
+                    <option value="Gemini">Gemini</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Loại gói</label>
+                  <select
+                    value={editLicensePlan}
+                    onChange={(e) => setEditLicensePlan(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary outline-none cursor-pointer"
+                  >
+                    <option value="Free">Free</option>
+                    <option value="Plus">Plus</option>
+                    <option value="Pro">Pro</option>
+                    <option value="Ultra">Ultra</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí (VNĐ/tháng)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={editLicenseCost}
+                    onChange={(e) => setEditLicenseCost(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Ngày hết hạn</label>
+                  <input
+                    type="date"
+                    required
+                    value={editLicenseExpiry}
+                    onChange={(e) => setEditLicenseExpiry(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditLicenseModalOpen(false);
+                  setEditingLicense(null);
+                }}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-markee-primary hover:bg-markee-hover text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Cập nhật
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingLicense && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+            <div>
+              <h2 className="text-sm font-bold text-markee-text">Xác nhận xóa tài khoản</h2>
+              <p className="text-xs text-markee-muted mt-1.5">
+                Bạn có chắc chắn muốn xóa tài khoản cá nhân <span className="font-semibold text-markee-text">{deletingLicense.ai_tool}</span> không? Hành động này không thể hoàn tác.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingLicense(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await deleteAILicense(deletingLicense.id);
+                    showToast('Đã xóa tài khoản thành công!', 'success');
+                    setDeletingLicense(null);
+                    setRefreshKey(prev => prev + 1);
+                  } catch (err) {
+                    console.error(err);
+                    showToast('Lỗi khi xóa tài khoản', 'error');
+                  }
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Xác nhận xóa
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </main>
@@ -3089,6 +3797,23 @@ function getRelativeTime(dateString: string): string {
 
 function ProjectManagement({ profile }: { profile: UserProfile }) {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [projectPage, setProjectPage] = useState(0);
+
+  const PROJECT_PAGE_SIZE = 8;
+  const filteredProjects = useMemo(() => {
+    return projects.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()));
+  }, [projects, projectSearch]);
+
+  const displayedProjects = useMemo(() => {
+    const start = projectPage * PROJECT_PAGE_SIZE;
+    return filteredProjects.slice(start, start + PROJECT_PAGE_SIZE);
+  }, [filteredProjects, projectPage]);
+
+  useEffect(() => {
+    setProjectPage(0);
+  }, [projectSearch]);
+
   const [loading, setLoading] = useState(true);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectTab, setProjectTab] = useState<'timeline' | 'knowledge_hub'>('timeline');
@@ -3119,6 +3844,131 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     totalTokens: number;
     model: string;
   } | null>(null);
+
+  // WIP Edit, Move, Delete states
+  const [activeEditWIP, setActiveEditWIP] = useState<AISession | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editTrack, setEditTrack] = useState('');
+  const [isEditingWIP, setIsEditingWIP] = useState(false);
+
+  const [activeMoveWIP, setActiveMoveWIP] = useState<AISession | null>(null);
+  const [newProjectId, setNewProjectId] = useState<number | ''>('');
+  const [isMovingWIP, setIsMovingWIP] = useState(false);
+
+  const [activeDeleteWIP, setActiveDeleteWIP] = useState<AISession | null>(null);
+  const [isDeletingWIP, setIsDeletingWIP] = useState(false);
+
+  const [deletingIds, setDeletingIds] = useState<number[]>([]);
+
+  async function handleDeleteWIP() {
+    if (!activeDeleteWIP) return;
+    setIsDeletingWIP(true);
+    try {
+      const { error } = await supabase.from('skill_library').delete().eq('id', activeDeleteWIP.id);
+      if (error) throw error;
+
+      showToast('Xóa bản nháp thành công!', 'success');
+      
+      const targetId = activeDeleteWIP.id;
+      setDeletingIds(prev => [...prev, targetId]);
+      setActiveDeleteWIP(null);
+
+      setTimeout(() => {
+        setLogs(prev => prev.filter(l => l.id !== targetId));
+        setDeletingIds(prev => prev.filter(id => id !== targetId));
+        if (selectedProject) {
+          setSelectedProject(prev => prev ? {
+            ...prev,
+            logCount: Math.max(0, (prev.logCount || 1) - 1)
+          } : null);
+          setProjects(prev => prev.map(p => p.id === selectedProject.id ? {
+            ...p,
+            logCount: Math.max(0, (p.logCount || 1) - 1)
+          } : p));
+        }
+      }, 500);
+    } catch (err) {
+      console.error('Error deleting WIP:', err);
+      showToast('Lỗi khi xóa bản nháp', 'error');
+    } finally {
+      setIsDeletingWIP(false);
+    }
+  }
+
+  async function handleMoveWIP() {
+    if (!activeMoveWIP || !newProjectId) return;
+    setIsMovingWIP(true);
+    try {
+      const { error } = await supabase.from('skill_library').update({ project_id: newProjectId }).eq('id', activeMoveWIP.id);
+      if (error) throw error;
+
+      showToast('Chuyển dự án thành công!', 'success');
+      
+      const targetId = activeMoveWIP.id;
+      setDeletingIds(prev => [...prev, targetId]);
+      setActiveMoveWIP(null);
+      setNewProjectId('');
+
+      setTimeout(() => {
+        setLogs(prev => prev.filter(l => l.id !== targetId));
+        setDeletingIds(prev => prev.filter(id => id !== targetId));
+        if (selectedProject) {
+          setSelectedProject(prev => prev ? {
+            ...prev,
+            logCount: Math.max(0, (prev.logCount || 1) - 1)
+          } : null);
+          setProjects(prev => prev.map(p => {
+            if (p.id === selectedProject.id) {
+              return { ...p, logCount: Math.max(0, (p.logCount || 1) - 1) };
+            }
+            if (p.id === newProjectId) {
+              return { ...p, logCount: (p.logCount || 0) + 1 };
+            }
+            return p;
+          }));
+        }
+      }, 500);
+    } catch (err) {
+      console.error('Error moving WIP:', err);
+      showToast('Lỗi khi chuyển dự án', 'error');
+    } finally {
+      setIsMovingWIP(false);
+    }
+  }
+
+  async function handleEditWIP() {
+    if (!activeEditWIP) return;
+    setIsEditingWIP(true);
+    try {
+      const { error } = await supabase
+        .from('skill_library')
+        .update({ 
+          title: editTitle, 
+          markdown_content: editContent, 
+          team_track: editTrack 
+        })
+        .eq('id', activeEditWIP.id);
+      
+      if (error) throw error;
+
+      showToast('Cập nhật bản nháp thành công!', 'success');
+
+      setLogs(prev => prev.map(l => l.id === activeEditWIP.id ? {
+        ...l,
+        title: editTitle,
+        prompt_content: editContent,
+        team_track: editTrack,
+      } : l));
+
+      setActiveEditWIP(null);
+    } catch (err) {
+      console.error('Error editing WIP:', err);
+      showToast('Lỗi khi sửa bản nháp', 'error');
+    } finally {
+      setIsEditingWIP(false);
+    }
+  }
 
   function showToast(message: string, type: 'success' | 'error' | 'loading', duration = 3000) {
     setToast({ message, type });
@@ -3340,88 +4190,117 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
         </button>
       </section>
 
+
+      {/* Search Bar */}
+      <div className="relative w-full max-w-md">
+        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-markee-sub" />
+        <input
+          type="text"
+          value={projectSearch}
+          onChange={(e) => setProjectSearch(e.target.value)}
+          placeholder="Tìm kiếm dự án theo tên..."
+          className="w-full rounded-xl border border-markee-border bg-white py-2.5 pl-10 pr-4 text-xs text-markee-text outline-none transition-colors placeholder:text-markee-sub focus:border-markee-primary"
+        />
+      </div>
+
       {loading ? (
         <div className="text-center py-10 text-sm text-markee-sub">Đang tải danh sách dự án...</div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {projects.map((project) => {
-            const updateDate = getRelativeTime(project.lastWipCreatedAt || project.created_at);
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {displayedProjects.map((project) => {
+              const updateDate = getRelativeTime(project.lastWipCreatedAt || project.created_at);
 
-            return (
-              <div
-                key={project.id}
-                onClick={() => handleOpenProject(project)}
-                className="group cursor-pointer rounded-xl border-t-4 border-t-markee-primary border-x border-b border-gray-200 bg-white p-5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md flex flex-col justify-between min-h-47.5"
-              >
-                <div className="space-y-4">
-                  {/* Header */}
-                  <div>
-                    <h3 className="text-lg font-bold text-markee-text truncate group-hover:text-markee-primary transition-colors">
-                      {project.name}
-                    </h3>
-                    <p className="text-xs text-markee-muted truncate mt-1">
-                      Dự án theo dõi hoạt động AI. Tạo bởi {project.authorName}
-                    </p>
+              return (
+                <div
+                  key={project.id}
+                  onClick={() => handleOpenProject(project)}
+                  className="group cursor-pointer rounded-xl border-t-4 border-t-markee-primary border-x border-b border-gray-200 bg-white p-5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md flex flex-col justify-between min-h-47.5"
+                >
+                  <div className="space-y-4">
+                    {/* Header */}
+                    <div>
+                      <h3 className="text-lg font-bold text-markee-text truncate group-hover:text-markee-primary transition-colors">
+                        {project.name}
+                      </h3>
+                      <p className="text-xs text-markee-muted truncate mt-1">
+                        Dự án theo dõi hoạt động AI. Tạo bởi {project.authorName}
+                      </p>
+                    </div>
+
+                    {/* Stats */}
+                    <div className="grid grid-cols-3 gap-2 border-y border-gray-100 py-3">
+                      <div>
+                        <div className="font-bold text-markee-text text-sm md:text-base">
+                          {project.logCount || 0}
+                        </div>
+                        <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
+                          Bản nháp
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-bold text-markee-text text-sm md:text-base">
+                          {project.members?.length || 0}
+                        </div>
+                        <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
+                          Thành viên
+                        </div>
+                      </div>
+                      <div>
+                        <div className="font-bold text-markee-text text-sm md:text-base">
+                          {updateDate}
+                        </div>
+                        <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
+                          Cập nhật
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Stats */}
-                  <div className="grid grid-cols-3 gap-2 border-y border-gray-100 py-3">
-                    <div>
-                      <div className="font-bold text-markee-text text-sm md:text-base">
-                        {project.logCount || 0}
-                      </div>
-                      <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
-                        Bản nháp
-                      </div>
+                  {/* Footer Stacked Avatars */}
+                  <div className="flex items-center justify-between mt-4">
+                    <div className="flex -space-x-2 overflow-hidden">
+                      {project.members && project.members.slice(0, 4).map((m, idx) => (
+                        <div
+                          key={m.email}
+                          title={m.name}
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded-full border text-[10px] font-bold shadow-2xs shrink-0 select-none ${
+                            softBgClasses[idx % softBgClasses.length]
+                          }`}
+                        >
+                          {getInitials(m.name)}
+                        </div>
+                      ))}
+                      {project.members && project.members.length > 4 && (
+                        <div className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-200 bg-gray-50 text-gray-500 text-[10px] font-bold shadow-2xs shrink-0 select-none">
+                          +{project.members.length - 4}
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <div className="font-bold text-markee-text text-sm md:text-base">
-                        {project.members?.length || 0}
-                      </div>
-                      <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
-                        Thành viên
-                      </div>
-                    </div>
-                    <div>
-                      <div className="font-bold text-markee-text text-sm md:text-base">
-                        {updateDate}
-                      </div>
-                      <div className="text-[9px] font-bold text-markee-muted uppercase tracking-wider">
-                        Cập nhật
-                      </div>
-                    </div>
+                    <span className="text-[10px] text-markee-muted group-hover:text-markee-primary transition-colors font-medium">
+                      Xem chi tiết →
+                    </span>
                   </div>
                 </div>
+              );
+            })}
+          </div>
 
-                {/* Footer Stacked Avatars */}
-                <div className="flex items-center justify-between mt-4">
-                  <div className="flex -space-x-2 overflow-hidden">
-                    {project.members && project.members.slice(0, 4).map((m, idx) => (
-                      <div
-                        key={m.email}
-                        title={m.name}
-                        className={`inline-flex items-center justify-center w-7 h-7 rounded-full border text-[10px] font-bold shadow-2xs shrink-0 select-none ${
-                          softBgClasses[idx % softBgClasses.length]
-                        }`}
-                      >
-                        {getInitials(m.name)}
-                      </div>
-                    ))}
-                    {project.members && project.members.length > 4 && (
-                      <div className="inline-flex items-center justify-center w-7 h-7 rounded-full border border-gray-200 bg-gray-50 text-gray-500 text-[10px] font-bold shadow-2xs shrink-0 select-none">
-                        +{project.members.length - 4}
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-markee-muted group-hover:text-markee-primary transition-colors font-medium">
-                    Xem chi tiết →
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-          {projects.length === 0 && (
-            <div className="col-span-3 text-center py-10 text-sm text-markee-sub">Chưa có dự án nào được tạo.</div>
+          {filteredProjects.length === 0 && (
+            <div className="text-center py-10 text-sm text-markee-sub bg-white border border-markee-border rounded-xl p-8">
+              {projects.length === 0 ? "Chưa có dự án nào được tạo." : "Không tìm thấy dự án phù hợp với từ khóa."}
+            </div>
+          )}
+
+          {filteredProjects.length > PROJECT_PAGE_SIZE && (
+            <div className="flex justify-center pt-2">
+              <PaginationControls
+                page={projectPage}
+                total={filteredProjects.length}
+                pageSize={PROJECT_PAGE_SIZE}
+                onPageChange={setProjectPage}
+              />
+            </div>
           )}
         </div>
       )}
@@ -3576,6 +4455,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                           <div className="space-y-1.5 overflow-y-auto flex-1 pr-1">
                             {members.map((m) => {
                               const isActive = activeMemberEmail === m.email;
+                              const isCurrentUser = m.email === profile.email;
                               return (
                                 <button
                                   key={m.email}
@@ -3594,7 +4474,14 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                     {getInitials(m.name)}
                                   </div>
                                   <div className="min-w-0">
-                                    <div className="text-xs font-semibold truncate leading-tight">{m.name}</div>
+                                    <div className="text-xs font-semibold truncate leading-tight flex items-center">
+                                      <span>{m.name}</span>
+                                      {isCurrentUser && (
+                                        <span className="text-[9px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded-full ml-1.5 font-normal shrink-0">
+                                          Bạn
+                                        </span>
+                                      )}
+                                    </div>
                                     <div className="text-[10px] text-markee-muted truncate mt-0.5">@{m.email.split('@')[0]}</div>
                                   </div>
                                 </button>
@@ -3642,8 +4529,18 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                 ? "bg-purple-100 text-purple-700 font-semibold px-2 py-0.5 rounded text-xs"
                                 : "bg-gray-200 text-gray-700 px-2 py-0.5 rounded text-xs";
 
+                              const isOwnWIP = profile.email === log.author_id;
+                              const isDeleting = deletingIds.includes(log.id);
+
                               return (
-                                <div key={log.id} className="relative">
+                                <div 
+                                  key={log.id} 
+                                  className={`relative transition-all duration-500 ease-out ${
+                                    isDeleting 
+                                      ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden pl-0' 
+                                      : ''
+                                  }`}
+                                >
                                   {/* Timeline Bullet Node */}
                                   <div
                                     className="absolute -left-7.75 top-1 w-4 h-4 rounded-full border-2 border-white shadow-xs bg-markee-primary"
@@ -3666,11 +4563,68 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                   {/* Prompt content block */}
                                   {log.prompt_content && (
                                     <div className="mt-2.5">
-                                      <blockquote className="px-4 py-3 bg-markee-bg border-l-4 border-markee-primary/30 text-markee-text text-sm rounded-r-lg">
-                                        <div className="flex items-center gap-1.5 text-xs text-markee-muted mb-1.5 font-semibold">
-                                          <span>🪙</span>
-                                          <span>{log.tokens_used || 0} tokens</span>
+                                      <blockquote className="px-4 py-3 text-markee-text text-sm rounded-r-lg border border-markee-border border-l-4 border-l-markee-primary relative group/quote transition-all duration-300 bg-white">
+                                        <div className="flex items-center justify-between text-xs text-markee-muted mb-1.5 font-semibold">
+                                          <div className="flex items-center gap-1.5 flex-wrap">
+                                            <span>🪙</span>
+                                            <span>{log.tokens_used || 0} tokens</span>
+                                            {isOwnWIP && (
+                                              <span className="ml-1 px-1.5 py-0.5 rounded bg-markee-primary/10 text-markee-primary text-[9px] font-bold border border-markee-primary/20">
+                                                Của bạn
+                                              </span>
+                                            )}
+                                            {log.team_track && (
+                                              <span className="ml-1 px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 text-[9px] font-bold border border-purple-100">
+                                                {log.team_track}
+                                              </span>
+                                            )}
+                                          </div>
+                                          
+                                          {isOwnWIP && (
+                                            <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+                                              <button
+                                                type="button"
+                                                title="Sửa"
+                                                onClick={() => {
+                                                  setActiveEditWIP(log);
+                                                  setEditTitle(log.title || '');
+                                                  setEditContent(log.prompt_content || '');
+                                                  setEditTrack(log.team_track || '');
+                                                }}
+                                                className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white"
+                                              >
+                                                <Edit className="h-3 w-3" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                title="Chuyển Dự án"
+                                                onClick={() => {
+                                                  setActiveMoveWIP(log);
+                                                  setNewProjectId('');
+                                                }}
+                                                className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white"
+                                              >
+                                                <ArrowLeftRight className="h-3 w-3" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                title="Xóa"
+                                                onClick={() => {
+                                                  setActiveDeleteWIP(log);
+                                                }}
+                                                className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-red-600 cursor-pointer bg-white"
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                              </button>
+                                            </div>
+                                          )}
                                         </div>
+
+                                        {log.title && (
+                                          <div className="font-bold text-xs text-markee-text mb-1 bg-linear-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent">
+                                            {log.title}
+                                          </div>
+                                        )}
                                         <PromptText text={log.prompt_content} />
                                       </blockquote>
                                     </div>
@@ -3707,6 +4661,216 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                 className="px-4 py-2 border border-markee-border bg-white text-markee-text hover:bg-markee-bg rounded-lg transition-colors text-xs font-semibold cursor-pointer"
               >
                 Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit WIP Modal */}
+      {activeEditWIP && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
+              <h3 className="text-base font-bold text-markee-text">Sửa bản nháp WIP</h3>
+              <button
+                type="button"
+                onClick={() => setActiveEditWIP(null)}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              <div>
+                <label htmlFor="editWipTitleInput" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Tiêu đề bản nháp
+                </label>
+                <input
+                  id="editWipTitleInput"
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder="Nhập tiêu đề..."
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="editWipTrackSelect" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Phòng ban (Track)
+                </label>
+                <select
+                  id="editWipTrackSelect"
+                  value={editTrack}
+                  onChange={(e) => setEditTrack(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                >
+                  <option value="">Khác (Chưa phân loại)</option>
+                  <option value="Track 1: SI Delivery">Track 1: SI Delivery</option>
+                  <option value="Track 2: Marketing">Track 2: Marketing</option>
+                  <option value="Track 3: Dev + DevOps">Track 3: Dev + DevOps</option>
+                  <option value="Track 4: AI Team">Track 4: AI Team</option>
+                  <option value="Track 5: Sales">Track 5: Sales</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="editWipContentInput" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Nội dung Markdown
+                </label>
+                <textarea
+                  id="editWipContentInput"
+                  rows={10}
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  placeholder="Nhập nội dung markdown của bản nháp..."
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary font-mono"
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => setActiveEditWIP(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleEditWIP}
+                disabled={isEditingWIP || !editTitle.trim() || !editContent.trim()}
+                className="px-4 py-2 bg-markee-primary hover:bg-markee-hover disabled:bg-markee-primary/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+              >
+                {isEditingWIP ? 'Đang lưu...' : 'Lưu thay đổi'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move WIP Modal */}
+      {activeMoveWIP && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
+              <h3 className="text-base font-bold text-markee-text">Chuyển Dự án</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveMoveWIP(null);
+                  setNewProjectId('');
+                }}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              <p className="text-xs text-markee-muted leading-relaxed">
+                Bạn đang chuyển bản nháp <span className="font-bold text-markee-text">"{activeMoveWIP.title || 'Không có tiêu đề'}"</span> sang một dự án khác. 
+                Sau khi chuyển thành công, bản nháp này sẽ biến mất khỏi dòng thời gian của dự án hiện tại.
+              </p>
+              
+              <div>
+                <label htmlFor="moveWipProjectSelect" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Chọn Dự án đích
+                </label>
+                <select
+                  id="moveWipProjectSelect"
+                  value={newProjectId}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setNewProjectId(val === '' ? '' : Number(val));
+                  }}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                >
+                  <option value="">-- Chọn Dự án --</option>
+                  {projects
+                    .filter((p) => p.id !== activeMoveWIP.project_id)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveMoveWIP(null);
+                  setNewProjectId('');
+                }}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleMoveWIP}
+                disabled={isMovingWIP || !newProjectId}
+                className="px-4 py-2 bg-markee-primary hover:bg-markee-hover disabled:bg-markee-primary/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+              >
+                {isMovingWIP ? 'Đang chuyển...' : 'Xác nhận Chuyển'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete WIP Modal */}
+      {activeDeleteWIP && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-sm w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
+            {/* Header */}
+            <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
+              <h3 className="text-base font-bold text-red-600">Xác nhận Xóa</h3>
+              <button
+                type="button"
+                onClick={() => setActiveDeleteWIP(null)}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6">
+              <p className="text-xs text-markee-muted leading-relaxed">
+                Bạn có chắc chắn muốn xóa bản nháp <span className="font-bold text-markee-text">"{activeDeleteWIP.title || 'Không có tiêu đề'}"</span>? 
+                Hành động này không thể hoàn tác.
+              </p>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => setActiveDeleteWIP(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteWIP}
+                disabled={isDeletingWIP}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-600/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+              >
+                {isDeletingWIP ? 'Đang xóa...' : 'Xác nhận Xóa'}
               </button>
             </div>
           </div>
