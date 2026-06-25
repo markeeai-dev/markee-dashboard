@@ -127,25 +127,25 @@ export function ChatMain({
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <RefreshCw className="w-6 h-6 text-markee-primary animate-spin mx-auto mb-2" />
-              <p className="text-sm text-markee-sub">Dang tai hoi thoai...</p>
+              <p className="text-sm text-markee-sub">Đang tải hội thoại...</p>
             </div>
           </div>
         ) : !conversationId ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center max-w-xs">
               <Sparkle className="w-10 h-10 text-markee-primary/20 mx-auto mb-3" />
-              <p className="text-sm font-semibold text-markee-text mb-1">Bat dau hoi thoai moi</p>
-              <p className="text-xs text-markee-sub">Tao hoi thoai moi hoac chon mot hoi thoai co san de bat dau</p>
+              <p className="text-sm font-semibold text-markee-text mb-1">Bắt đầu hội thoại mới</p>
+              <p className="text-xs text-markee-sub">Tạo hội thoại mới hoặc chọn một hội thoại có sẵn để bắt đầu</p>
             </div>
           </div>
         ) : aiMessages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center max-w-md">
               <Sparkle className="w-10 h-10 text-markee-primary/20 mx-auto mb-3" />
-              <p className="text-sm font-semibold text-markee-text mb-2">Chao mung den Markee AI Chat</p>
+              <p className="text-sm font-semibold text-markee-text mb-2">Chào mừng đến Markee AI Chat</p>
               <p className="text-xs text-markee-sub leading-relaxed">
-                Hay gui cau hoi hoac yeu cau cua ban. AI se phan hoi dua tren kien thuc da duoc huan luyen.
-                Ban co the inject asset tu Library de AI co them boi canh chinh xac.
+                Hãy gửi câu hỏi hoặc yêu cầu của bạn. AI sẽ phản hồi dựa trên kiến thức đã được huấn luyện.
+                Bạn có thể inject asset từ Library để AI có thêm bối cảnh chính xác.
               </p>
             </div>
           </div>
@@ -163,7 +163,7 @@ export function ChatMain({
             {error && (
               <div className="text-center py-3">
                 <span className="text-xs text-red-500 bg-red-50 px-3 py-1 rounded-full">
-                  Loi ket noi. Thu lai.
+                  Lỗi kết nối. Thử lại.
                 </span>
               </div>
             )}

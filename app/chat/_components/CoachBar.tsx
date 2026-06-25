@@ -5,9 +5,9 @@ interface Props {
   visible: boolean;
 }
 
-const KEYWORDS_CONTEXT = ['khach', 'cong ty', 'team', 'du an', 'project', 'san pham', 'product', 'markee'];
-const KEYWORDS_OBJECTIVE = ['muc tieu', 'output', 'format', 'viet', 'tao', 'phan tich', 'tong hop', 'de xuat'];
-const KEYWORDS_SPECIFIC = ['vi sao', 'nhu the nao', 'cach', 'giai phap', 'so lieu', 'data', 'vi du', 'buoc'];
+const KEYWORDS_CONTEXT = ['khach', 'cong ty', 'team', 'du an', 'project', 'san pham', 'product', 'markee', 'khách', 'công ty', 'dự án', 'sản phẩm'];
+const KEYWORDS_OBJECTIVE = ['muc tieu', 'output', 'format', 'viet', 'tao', 'phan tich', 'tong hop', 'de xuat', 'mục tiêu', 'viết', 'tạo', 'phân tích', 'tổng hợp', 'đề xuất'];
+const KEYWORDS_SPECIFIC = ['vi sao', 'nhu the nao', 'cach', 'giai phap', 'so lieu', 'data', 'vi du', 'buoc', 'vì sao', 'như thế nào', 'cách', 'giải pháp', 'số liệu', 'ví dụ', 'bước'];
 
 export function CoachBar({ input, visible }: Props) {
   if (!visible || input.length < 5) return null;
@@ -23,17 +23,17 @@ export function CoachBar({ input, visible }: Props) {
   const total = lenScore + contextScore + objectiveScore + specificScore + detailScore;
 
   const missing: string[] = [];
-  if (lenScore < 15) missing.push('Can dai hon');
-  if (contextScore === 0) missing.push('Thieu boi canh');
-  if (objectiveScore === 0) missing.push('Chua ro muc tieu');
-  if (specificScore === 0) missing.push('Can cu the hon');
-  if (detailScore < 10) missing.push('Can chi tiet hon');
+  if (lenScore < 15) missing.push('Cần dài hơn');
+  if (contextScore === 0) missing.push('Thiếu bối cảnh');
+  if (objectiveScore === 0) missing.push('Chưa rõ mục tiêu');
+  if (specificScore === 0) missing.push('Cần cụ thể hơn');
+  if (detailScore < 10) missing.push('Cần chi tiết hơn');
 
   const strengths: string[] = [];
-  if (lenScore >= 18) strengths.push('Do dai tot');
-  if (contextScore > 0) strengths.push('Co boi canh');
-  if (objectiveScore > 0) strengths.push('Muc tieu ro rang');
-  if (specificScore > 0) strengths.push('Cu the');
+  if (lenScore >= 18) strengths.push('Độ dài tốt');
+  if (contextScore > 0) strengths.push('Có bối cảnh');
+  if (objectiveScore > 0) strengths.push('Mục tiêu rõ ràng');
+  if (specificScore > 0) strengths.push('Cụ thể');
 
   const colorClass =
     total >= 80 ? 'text-emerald-600' : total >= 50 ? 'text-amber-600' : 'text-red-500';

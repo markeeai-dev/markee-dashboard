@@ -11,10 +11,10 @@ interface Props {
 }
 
 const HINTS = [
-  'Phan tich doi thu canh tranh cho [san pham]',
-  'Viet proposal cho khach hang [ten]',
-  'Bao cao tuan team [ten team]',
-  'Email follow-up cho [khach hang]',
+  'Phân tích đối thủ cạnh tranh cho [sản phẩm]',
+  'Viết proposal cho khách hàng [tên]',
+  'Báo cáo tuần team [tên team]',
+  'Email follow-up cho [khách hàng]',
 ];
 
 export function Composer({ input, isLoading, onInputChange, onSubmit, onInputValueChange }: Props & { onInputValueChange?: (v: string) => void }) {
@@ -81,7 +81,7 @@ export function Composer({ input, isLoading, onInputChange, onSubmit, onInputVal
             value={input}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
-            placeholder="Nhap message... (Enter gui, Shift+Enter xuong dong)"
+            placeholder="Nhập message... (Enter gửi, Shift+Enter xuống dòng)"
             rows={1}
             className="w-full resize-none rounded-xl border border-markee-border bg-markee-bg/50 px-4 py-2.5 text-sm text-markee-text placeholder:text-markee-sub focus:outline-none focus:border-markee-primary/40 focus:ring-1 focus:ring-markee-primary/10 transition-all"
           />
@@ -89,7 +89,7 @@ export function Composer({ input, isLoading, onInputChange, onSubmit, onInputVal
         <button
           type="submit"
           disabled={!input.trim() || isLoading}
-          className="shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-markee-primary text-white hover:bg-markee-hover disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer"
+          className="btn-press shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-markee-primary text-white hover:bg-markee-hover disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer"
         >
           <Send className="w-4 h-4" />
         </button>
@@ -99,7 +99,7 @@ export function Composer({ input, isLoading, onInputChange, onSubmit, onInputVal
         <span className="text-[10px] text-markee-sub">
           Model: <span className="font-semibold text-markee-primary">Gemini 2.0 Flash</span>
         </span>
-        <span className="text-[10px] text-markee-sub">Mien phi</span>
+        <span className="text-[10px] text-markee-sub">Miễn phí</span>
       </div>
     </div>
   );

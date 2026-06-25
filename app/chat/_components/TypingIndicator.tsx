@@ -8,7 +8,7 @@ export function TypingIndicator() {
         <span className="w-2 h-2 rounded-full bg-markee-primary/40 animate-bounce-dot-2" />
         <span className="w-2 h-2 rounded-full bg-markee-primary/40 animate-bounce-dot-3" />
       </div>
-      <span className="text-[11px] text-markee-sub ml-2">Dang phan hoi...</span>
+      <span className="text-[11px] text-markee-sub ml-2">Đang phản hồi...</span>
     </div>
   );
 }

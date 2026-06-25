@@ -1,5 +1,6 @@
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
+import { ALL_TRACK_DB_VALUES } from "./org-structure";
 
 export type UserRole = "admin" | "user";
 export type SkillStatus = "pending" | "approved" | "rejected";
@@ -215,7 +216,7 @@ export async function fetchApprovedSkills(page = 0, pageSize = DEFAULT_PAGE_SIZE
 
   if (teamTrack && teamTrack !== "Tất cả") {
     if (teamTrack === "Khác") {
-      query = query.or('team_track.is.null,team_track.eq.,team_track.not.in.("Track 1: SI Delivery","Track 2: Marketing","Track 3: Dev + DevOps","Track 4: AI Team","Track 5: Sales")');
+      query = query.or(`team_track.is.null,team_track.eq.,team_track.not.in.(${ALL_TRACK_DB_VALUES.map((t) => `"` + t + `"`).join(",")})`);
     } else {
       query = query.eq("team_track", teamTrack);
     }
@@ -364,7 +365,7 @@ export async function fetchLibraryCounts(userEmail?: string): Promise<LibraryCou
   const byTrack: Record<string, number> = {};
   let total = 0;
 
-  const knownTracks = ["Track 1: SI Delivery", "Track 2: Marketing", "Track 3: Dev + DevOps", "Track 4: AI Team", "Track 5: Sales"];
+  const knownTracks = ALL_TRACK_DB_VALUES;
   let trackSum = 0;
 
   (data || []).forEach((row) => {

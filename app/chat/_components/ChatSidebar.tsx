@@ -67,10 +67,10 @@ export function ChatSidebar({ conversations, activeConvId, loading, onSelect, on
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-markee-primary text-white text-xs font-semibold hover:bg-markee-hover transition-colors cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Moi</span>
+            <span>Mới</span>
           </button>
         </div>
-        <p className="text-[11px] text-markee-sub leading-tight">Inject asset tu Library de AI co context chinh xac</p>
+        <p className="text-[11px] text-markee-sub leading-tight">Inject asset từ Library để AI có context chính xác</p>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -86,13 +86,13 @@ export function ChatSidebar({ conversations, activeConvId, loading, onSelect, on
         ) : conversations.length === 0 ? (
           <div className="p-6 text-center">
             <MessageSquare className="w-8 h-8 text-markee-sub mx-auto mb-2 opacity-40" />
-            <p className="text-xs text-markee-sub">Chua co hoi thoai nao</p>
+            <p className="text-xs text-markee-sub">Chưa có hội thoại nào</p>
           </div>
         ) : (
           <div className="p-2 space-y-4">
             {grouped.homNay.length > 0 && (
               <div>
-                <div className="px-2 mb-1 text-[10px] font-semibold text-markee-sub uppercase tracking-wider">Hom nay</div>
+                <div className="px-2 mb-1 text-[10px] font-semibold text-markee-sub uppercase tracking-wider">Hôm nay</div>
                 {grouped.homNay.map((c) => (
                   <ConversationItem
                     key={c.id}
@@ -108,7 +108,7 @@ export function ChatSidebar({ conversations, activeConvId, loading, onSelect, on
 
             {grouped.homQua.length > 0 && (
               <div>
-                <div className="px-2 mb-1 text-[10px] font-semibold text-markee-sub uppercase tracking-wider">Hom qua</div>
+                <div className="px-2 mb-1 text-[10px] font-semibold text-markee-sub uppercase tracking-wider">Hôm qua</div>
                 {grouped.homQua.map((c) => (
                   <ConversationItem
                     key={c.id}
@@ -124,7 +124,7 @@ export function ChatSidebar({ conversations, activeConvId, loading, onSelect, on
 
             {grouped.truocDo.length > 0 && (
               <div>
-                <div className="px-2 mb-1 text-[10px] font-semibold text-markee-sub uppercase tracking-wider">Truoc do</div>
+                <div className="px-2 mb-1 text-[10px] font-semibold text-markee-sub uppercase tracking-wider">Trước đó</div>
                 {grouped.truocDo.map((c) => (
                   <ConversationItem
                     key={c.id}
