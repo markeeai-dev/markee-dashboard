@@ -43,3 +43,30 @@ body {
   background: #A0A0A0;
   border-radius: 4px;
 }
+
+@keyframes bounce-dot-1 {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes bounce-dot-2 {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+@keyframes bounce-dot-3 {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.animate-bounce-dot-1 {
+  animation: bounce-dot-1 0.8s ease-in-out infinite;
+}
+
+.animate-bounce-dot-2 {
+  animation: bounce-dot-2 0.8s ease-in-out 0.15s infinite;
+}
+
+.animate-bounce-dot-3 {
+  animation: bounce-dot-3 0.8s ease-in-out 0.3s infinite;
+}

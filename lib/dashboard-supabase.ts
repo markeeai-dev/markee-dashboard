@@ -1117,3 +1117,135 @@ export async function fetchMyWIPs(email: string): Promise<AISession[]> {
   }));
 }
 
+export interface Conversation {
+  id: string;
+  user_id: string;
+  title: string;
+  project_id: number | null;
+  model: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  conversation_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  injected_assets: { id: number; title: string }[];
+  created_at: string;
+}
+
+export async function fetchConversations(email: string): Promise<Conversation[]> {
+  const { data, error } = await supabase
+    .from("conversations")
+    .select("*")
+    .eq("user_id", email)
+    .order("updated_at", { ascending: false });
+
+  if (error) {
+    console.error("Error fetching conversations:", error);
+    return [];
+  }
+  return data || [];
+}
+
+export async function createConversation(email: string, title?: string): Promise<Conversation | null> {
+  const { data, error } = await supabase
+    .from("conversations")
+    .insert({
+      user_id: email,
+      title: title || 'Hoi thoai moi',
+      model: 'gemini',
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Error creating conversation:", error);
+    return null;
+  }
+  return data;
+}
+
+export async function deleteConversation(id: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("conversations")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    console.error("Error deleting conversation:", error);
+    return false;
+  }
+  return true;
+}
+
+export async function updateConversationTitle(id: string, title: string): Promise<void> {
+  const { error } = await supabase
+    .from("conversations")
+    .update({ title, updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  if (error) {
+    console.error("Error updating conversation title:", error);
+  }
+}
+
+export async function fetchMessages(conversationId: string): Promise<ChatMessage[]> {
+  const { data, error } = await supabase
+    .from("messages")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error("Error fetching messages:", error);
+    return [];
+  }
+  return (data || []).map((m) => ({
+    ...m,
+    injected_assets: m.injected_assets || [],
+  }));
+}
+
+export async function insertMessage(msg: {
+  conversation_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  injected_assets?: { id: number; title: string }[];
+}): Promise<ChatMessage | null> {
+  const { data, error } = await supabase
+    .from("messages")
+    .insert(msg)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Error inserting message:", error);
+    return null;
+  }
+  return data;
+}
+
+export async function fetchInjectAssets(email: string, search?: string): Promise<{ id: number; title: string; category: string }[]> {
+  let query = supabase
+    .from("skill_library")
+    .select("id, title, category")
+    .eq("status", "approved")
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  if (search) {
+    query = query.ilike("title", `%${search}%`);
+  }
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("Error fetching inject assets:", error);
+    return [];
+  }
+  return data || [];
+}
+

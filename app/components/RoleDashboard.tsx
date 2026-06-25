@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, User, Edit, Trash2, ArrowLeftRight, Settings } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, User, Edit, Trash2, ArrowLeftRight, Settings, MessageSquare } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -71,6 +71,7 @@ import {
 } from '@/lib/dashboard-supabase';
 import { supabase } from '@/lib/supabase';
 import UserGuideModal from './UserGuideModal';
+import ChatShell from '@/app/chat/_components/ChatShell';
 
 const PAGE_SIZE = 6;
 const TOOL_COLORS = ['#E3000F', '#FF3344', '#f59e0b', '#a855f7', '#059669', '#0d9488'];
@@ -1715,7 +1716,7 @@ export default function RoleDashboard() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
-  const [activeTab, setActiveTab] = useState<'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'chat'>('overview');
   const [isGuideOpen, setIsGuideOpen] = useState(false);
 
   async function loadProfile() {
@@ -1816,6 +1817,19 @@ export default function RoleDashboard() {
             <span>Thư viện kỹ năng</span>
           </button>
 
+          <button
+            type="button"
+            onClick={() => setActiveTab('chat')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
+              activeTab === 'chat'
+                ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+            }`}
+          >
+            <MessageSquare className="w-4 h-4" />
+            <span>AI Chat</span>
+          </button>
+
           {profile.role === 'user' && (
             <button
               type="button"
@@ -1895,7 +1909,7 @@ export default function RoleDashboard() {
         </header>
 
         {/* Scrollable Content Container */}
-        <div className="flex-1 overflow-y-auto">
+        <div className={`flex-1 ${activeTab === 'chat' ? 'flex flex-col min-h-0' : 'overflow-y-auto'}`}>
           {activeTab === 'overview' && profile.role === 'admin' && (
             <AdminDashboard
               profile={profile}
@@ -1921,6 +1935,10 @@ export default function RoleDashboard() {
 
           {activeTab === 'knowledge_hub' && profile.role === 'admin' && (
             <KnowledgeHubDashboard />
+          )}
+
+          {activeTab === 'chat' && (
+            <ChatShell profile={profile} />
           )}
         </div>
       </div>
