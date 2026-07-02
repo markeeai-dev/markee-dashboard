@@ -1,15 +1,10 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText } from 'ai';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { authenticateRequest, AuthError } from '@/lib/api-auth';
 
 const openai = createOpenAI({
   apiKey: process.env.SHOPAIKEY_API_KEY,
-  baseURL: 'https://api.shopaikey.com/v1',
+  baseURL: process.env.SHOPAIKEY_BASE_URL,
 });
 
 const SYSTEM_PROMPT = `Bạn là Markee AI Assistant — trợ lý AI chuyên nghiệp của Markee AI Ops Center.
@@ -27,6 +22,8 @@ Vai trò của bạn:
 
 export async function POST(req: Request) {
   try {
+    const { user, supabase } = await authenticateRequest(req);
+
     const body = await req.json();
     const { messages, conversationId, sessionId, model: requestedModel } = body;
 
@@ -34,7 +31,30 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Missing messages' }, { status: 400 });
     }
 
-    // Extract the last user message text for DB persistence
+    if (sessionId) {
+      const { data: session, error } = await supabase
+        .from('chat_sessions')
+        .select('id')
+        .eq('id', sessionId)
+        .eq('user_id', user.email)
+        .single();
+
+      if (error || !session) {
+        return Response.json({ error: 'Session not found or access denied' }, { status: 403 });
+      }
+    } else if (conversationId) {
+      const { data: conversation, error } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('id', conversationId)
+        .eq('user_id', user.email)
+        .single();
+
+      if (error || !conversation) {
+        return Response.json({ error: 'Conversation not found or access denied' }, { status: 403 });
+      }
+    }
+
     const lastUserMessage = [...messages].reverse().find(
       (m: { role: string }) => m.role === 'user'
     );
@@ -44,17 +64,14 @@ export async function POST(req: Request) {
         : JSON.stringify(lastUserMessage.content)
       : '';
 
-    // Persist user message to the appropriate table
     if (userContent) {
       if (sessionId) {
-        // New AIChat path: write to chat_messages
         await supabase.from('chat_messages').insert({
           session_id: sessionId,
           role: 'user',
           content: userContent,
         });
       } else if (conversationId) {
-        // Legacy ChatShell path: write to messages
         await supabase.from('messages').insert({
           conversation_id: conversationId,
           role: 'user',
@@ -77,14 +94,12 @@ export async function POST(req: Request) {
         if (!text) return;
 
         if (sessionId) {
-          // New AIChat path
           await supabase.from('chat_messages').insert({
             session_id: sessionId,
             role: 'assistant',
             content: text,
           });
         } else if (conversationId) {
-          // Legacy ChatShell path
           await supabase.from('messages').insert({
             conversation_id: conversationId,
             role: 'assistant',
@@ -100,6 +115,9 @@ export async function POST(req: Request) {
 
     return result.toUIMessageStreamResponse();
   } catch (error) {
+    if (error instanceof AuthError) {
+      return Response.json({ error: error.message }, { status: error.status });
+    }
     console.error('Chat API error:', error);
     return Response.json(
       { error: 'Lỗi hệ thống AI Chat' },

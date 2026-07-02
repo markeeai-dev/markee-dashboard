@@ -48,6 +48,7 @@ export default function AIChat({ profile }: AIChatProps) {
   const loadMessagesAbortRef = useRef<AbortController | null>(null);
   const selectedModelRef = useRef(selectedModel);
   selectedModelRef.current = selectedModel;
+  const sendingRef = useRef(false);
 
   // --- DB-loaded messages (UI-authoritative baseline) ---
   const [dbMessages, setDbMessages] = useState<ChatMessageRow[]>([]);
@@ -330,17 +331,19 @@ export default function AIChat({ profile }: AIChatProps) {
   const handleSendMessage = useCallback(() => {
     const content = inputValue.trim();
 
-    // Guard: check BEFORE any state mutation
     if (!content) return;
+    if (sendingRef.current) return;
     if (status !== 'ready') return;
 
-    // Clear input immediately for responsive UX
+    sendingRef.current = true;
     setInputValue('');
 
-    // Auto-create session if none active
     if (!activeSessionId) {
       const doCreateAndSend = async () => {
-        if (!profile?.authUser?.id) return;
+        if (!profile?.authUser?.id) {
+          sendingRef.current = false;
+          return;
+        }
         try {
           const id = crypto.randomUUID();
           const { data, error } = await supabase
@@ -359,26 +362,26 @@ export default function AIChat({ profile }: AIChatProps) {
           setSessions((prev) => [newSession, ...prev]);
           setActiveSessionId(newSession.id);
 
-          // Send the message
           sendMessage({
             parts: [{ type: 'text', text: content }],
             role: 'user',
           });
         } catch (e) {
           console.error('Auto-create session failed:', e);
-          // Restore input on failure
           setInputValue(content);
+        } finally {
+          sendingRef.current = false;
         }
       };
       doCreateAndSend();
       return;
     }
 
-    // Session exists — send immediately via useChat (provides optimistic UI)
     sendMessage({
       parts: [{ type: 'text', text: content }],
       role: 'user',
     });
+    sendingRef.current = false;
   }, [inputValue, status, activeSessionId, profile?.authUser?.id, sendMessage]);
 
   // --- Inject prompt from sidebar ---

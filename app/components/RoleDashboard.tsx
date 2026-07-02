@@ -5,7 +5,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, User, Edit, Trash2, ArrowLeftRight, Settings } from 'lucide-react';
 import {
@@ -466,7 +466,7 @@ function UserDashboard({
     if (!activeDeleteWip) return;
     setIsDeletingWip(true);
     try {
-      const { error } = await supabase.from('skill_library').delete().eq('id', activeDeleteWip.id);
+      const { error } = await supabase.from('skill_library').delete().eq('id', activeDeleteWip.id).eq('author_id', profile.email);
       if (error) throw error;
 
       showWipToast('Xóa phiên AI thành công!', 'success');
@@ -491,7 +491,7 @@ function UserDashboard({
     if (!activeMoveWip || !moveWipProjectId) return;
     setIsMovingWip(true);
     try {
-      const { error } = await supabase.from('skill_library').update({ project_id: moveWipProjectId }).eq('id', activeMoveWip.id);
+      const { error } = await supabase.from('skill_library').update({ project_id: moveWipProjectId }).eq('id', activeMoveWip.id).eq('author_id', profile.email);
       if (error) throw error;
 
       showWipToast('Chuyển dự án thành công!', 'success');
@@ -524,7 +524,8 @@ function UserDashboard({
           markdown_content: editWipContent, 
           team_track: editWipTrack 
         })
-        .eq('id', activeEditWip.id);
+        .eq('id', activeEditWip.id)
+        .eq('author_id', profile.email);
       
       if (error) throw error;
 
@@ -576,7 +577,10 @@ function UserDashboard({
     return workspaceSkills.filter((skill) => skill.status === 'pending');
   }, [workspaceSkills]);
 
+  const loadRequestIdRef = useRef(0);
+
   async function loadInitialData() {
+    const requestId = ++loadRequestIdRef.current;
     setLoading(true);
 
     try {
@@ -589,6 +593,7 @@ function UserDashboard({
           fetchApprovedSkills(page, PAGE_SIZE, profile.email, debouncedSearchTerm, dbTrack, selectedType),
           countsPromise,
         ]);
+        if (requestId !== loadRequestIdRef.current) return;
         setLibrary(skills);
         setCounts(libCounts);
         return;
@@ -599,10 +604,11 @@ function UserDashboard({
         fetchTrendingSkills(5, profile.email),
         fetchMyWorkspaceSkills(profile.email),
         fetchMyWIPs(profile.email),
-        fetchProjects(),
+        fetchProjects(profile.email, profile.role === 'admin'),
         countsPromise,
       ]);
 
+      if (requestId !== loadRequestIdRef.current) return;
       setLibrary(skills);
       setTrendingSkills(trending);
       setWorkspaceSkills(workspace);
@@ -610,7 +616,9 @@ function UserDashboard({
       setProjects(allProjects);
       setCounts(libCounts);
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   }
 
@@ -2097,6 +2105,7 @@ function UserManagement() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [selectedLicense, setSelectedLicense] = useState<AILicense | null>(null);
+  const [isCreatingLicense, setIsCreatingLicense] = useState(false);
 
   // Create license form state
   const [newLicenseEmail, setNewLicenseEmail] = useState('');
@@ -2192,6 +2201,8 @@ function UserManagement() {
       return;
     }
 
+    if (isCreatingLicense) return;
+    setIsCreatingLicense(true);
     showToast('Đang tạo bản quyền...', 'loading');
     try {
       const newLic = await createAILicense({
@@ -2213,6 +2224,8 @@ function UserManagement() {
     } catch (err) {
       console.error(err);
       showToast('Lỗi khi tạo bản quyền AI', 'error');
+    } finally {
+      setIsCreatingLicense(false);
     }
   }
 
@@ -2339,7 +2352,7 @@ function UserManagement() {
   const getLicenseStatus = (lic: AILicense) => {
     const isCanceled = localStorage.getItem(`license_status_${lic.id}`) === 'Canceled';
     if (isCanceled) return 'Canceled';
-    const isExpired = new Date(lic.expiration_date) < new Date();
+    const isExpired = new Date(lic.expiration_date + "T23:59:59") < new Date();
     return isExpired ? 'Expired' : 'Active';
   };
 
@@ -4090,6 +4103,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   async function handleCreateProject() {
     const trimmedName = projectName.trim();
     if (!trimmedName) return;
+    if (isCreating) return;
     setIsCreating(true);
     try {
       const newProject = await createNewProject(trimmedName, profile.email);
@@ -4122,7 +4136,11 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   }
 
 
+  const logsLoadingRef = useRef(false);
+
   async function loadUserLogs(projId: number, userEmail: string, isInitial = false) {
+    if (logsLoadingRef.current && !isInitial) return;
+    logsLoadingRef.current = true;
     setLogsLoading(true);
     const nextPage = isInitial ? 0 : page + 1;
     try {
@@ -4138,6 +4156,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
       console.error(err);
     } finally {
       setLogsLoading(false);
+      logsLoadingRef.current = false;
     }
   }
 
@@ -4213,20 +4232,12 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     }
   }
 
+  const [isSavingSummary, setIsSavingSummary] = useState(false);
+
   async function handleSaveSummary(newSummary: SummaryItem) {
     if (!selectedProject) return;
-    
-    let currentSummaries: SummaryItem[] = [];
-    if (selectedProject.master_summary) {
-      try {
-        const parsed = JSON.parse(selectedProject.master_summary) as SummaryItem[];
-        if (Array.isArray(parsed)) {
-          currentSummaries = parsed;
-        }
-      } catch (e) {
-        console.error("Error parsing existing master_summary:", e);
-      }
-    }
+    if (isSavingSummary) return;
+    setIsSavingSummary(true);
     
     const summaryItem = {
       title: newSummary.title,
@@ -4237,12 +4248,26 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
       timestamp: new Date().toISOString(),
     };
     
-    const updatedSummaries = [...currentSummaries, summaryItem];
-    const serialized = JSON.stringify(updatedSummaries);
-    
     try {
       showToast('Đang lưu bản tổng hợp...', 'loading');
-      await updateProjectSummary(selectedProject.id, serialized);
+      await supabase.rpc('append_project_summary', {
+        p_project_id: selectedProject.id,
+        p_item_json: JSON.stringify([summaryItem]),
+      });
+      
+      let currentSummaries: SummaryItem[] = [];
+      if (selectedProject.master_summary) {
+        try {
+          const parsed = JSON.parse(selectedProject.master_summary) as SummaryItem[];
+          if (Array.isArray(parsed)) {
+            currentSummaries = parsed;
+          }
+        } catch (e) {
+          console.error("Error parsing existing master_summary:", e);
+        }
+      }
+      const updatedSummaries = [...currentSummaries, summaryItem];
+      const serialized = JSON.stringify(updatedSummaries);
       
       const updatedProj = {
         ...selectedProject,
@@ -4259,6 +4284,8 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     } catch (err) {
       console.error(err);
       showToast('Lỗi khi lưu tổng hợp tri thức', 'error');
+    } finally {
+      setIsSavingSummary(false);
     }
   }
 

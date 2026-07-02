@@ -1,19 +1,58 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+import { authenticateRequest, requireAdmin, AuthError } from "@/lib/api-auth";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 export async function POST(req: Request) {
   try {
+    const { user, supabase } = await authenticateRequest(req);
+
     const { projectId } = await req.json();
     if (!projectId) {
       return NextResponse.json({ error: "Missing projectId" }, { status: 400 });
     }
 
-    // 1. Fetch all WIP skills for this project
-    const { data: wipSkills, error: fetchError } = await supabase.from("skill_library").select("title, markdown_content, author_id, session_tokens").eq("project_id", projectId).eq("skill_type", "wip");
+    const { data: project, error: projectError } = await supabase
+      .from("projects")
+      .select("id, created_by")
+      .eq("id", projectId)
+      .single();
+
+    if (projectError || !project) {
+      return NextResponse.json({ error: "Dự án không tồn tại" }, { status: 404 });
+    }
+
+    let hasAccess = project.created_by === user.email;
+
+    if (!hasAccess) {
+      const { data: wipCount } = await supabase
+        .from("skill_library")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", projectId)
+        .eq("author_id", user.email)
+        .eq("skill_type", "wip");
+
+      hasAccess = (wipCount?.length ?? 0) > 0;
+    }
+
+    if (!hasAccess) {
+      try {
+        await requireAdmin(supabase, user.email);
+        hasAccess = true;
+      } catch {
+        // not admin, no access
+      }
+    }
+
+    if (!hasAccess) {
+      return NextResponse.json({ error: "Bạn không có quyền truy cập dự án này" }, { status: 403 });
+    }
+
+    const { data: wipSkills, error: fetchError } = await supabase
+      .from("skill_library")
+      .select("title, markdown_content, author_id, session_tokens")
+      .eq("project_id", projectId)
+      .eq("skill_type", "wip");
 
     if (fetchError) {
       console.error("Error fetching WIP skills:", fetchError);
@@ -24,7 +63,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Không tìm thấy bản tóm tắt công việc (WIP) nào trong dự án này để tổng hợp." }, { status: 404 });
     }
 
-    // 2. Extract contributors names
     const emails = Array.from(new Set(wipSkills.map((s) => s.author_id).filter(Boolean)));
     let contributors = "Hệ thống";
     if (emails.length > 0) {
@@ -37,11 +75,9 @@ export async function POST(req: Request) {
       }
     }
 
-    // 3. Aggregate content & tokens
     const totalTokens = wipSkills.reduce((sum, s) => sum + (s.session_tokens || 0), 0);
     const combinedContent = wipSkills.map((s) => `### Tiêu đề: ${s.title}\n\n${s.markdown_content || ""}`).join("\n\n---\n\n");
 
-    // 4. Prompt Gemini
     const systemPrompt = `Bạn là AI Project Architect.
 
 Nhiệm vụ:
@@ -71,11 +107,19 @@ QUY TẮC:
     "Insight cấp cao 3"
   ]
 }`;
+
+    if (!GEMINI_API_KEY) {
+      return NextResponse.json({ error: "Server misconfiguration: missing GEMINI_API_KEY" }, { status: 500 });
+    }
+
     let geminiResponse: Response;
     try {
-      geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": GEMINI_API_KEY,
+        },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: [{ parts: [{ text: combinedContent }] }],
@@ -145,6 +189,9 @@ QUY TẮC:
       model: "Auto-Summary (Gemini 2.5 Flash)",
     });
   } catch (error) {
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     console.error("Internal Server Error in summarize-project:", error);
     return NextResponse.json({ error: "Lỗi hệ thống nội bộ" }, { status: 500 });
   }

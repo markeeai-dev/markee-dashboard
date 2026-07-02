@@ -78,6 +78,8 @@ export interface AdminOverviewMetrics {
 
 const DEFAULT_PAGE_SIZE = 8;
 
+export const COST_PER_THOUSAND_TOKENS = 0.015;
+
 function getEmailName(email: string) {
   return email.split("@")[0] || email;
 }
@@ -249,8 +251,8 @@ export async function fetchApprovedSkills(page = 0, pageSize = DEFAULT_PAGE_SIZE
     };
   }
 
-  // If there is a search term, retrieve all matching candidates to filter in memory diacritics-insensitively
-  const { data, error } = await query.order("created_at", { ascending: false });
+  // If there is a search term, retrieve matching candidates (bounded) to filter in memory diacritics-insensitively
+  const { data, error } = await query.order("created_at", { ascending: false }).limit(500);
 
   if (error) {
     console.error("Error fetching approved skills for search:", error);
@@ -393,31 +395,13 @@ export async function fetchLibraryCounts(userEmail?: string): Promise<LibraryCou
 }
 
 export async function toggleSkillVote(skillId: number, userEmail: string) {
-  const { data: existingLike, error: existingError } = await supabase.from("user_likes").select("id").eq("user_email", userEmail).eq("skill_id", skillId).maybeSingle();
-
-  if (existingError) throw existingError;
-
-  if (existingLike) {
-    const { error: deleteError } = await supabase.from("user_likes").delete().eq("id", existingLike.id);
-    if (deleteError) throw deleteError;
-
-    const { error: decrementError } = await supabase.rpc("decrement_like", { skill_id_param: skillId });
-    if (decrementError) throw decrementError;
-
-    return { id: skillId, liked: false };
-  }
-
-  const { error: insertError } = await supabase.from("user_likes").insert({
-    user_email: userEmail,
-    skill_id: skillId,
+  const { data, error } = await supabase.rpc("toggle_like", {
+    p_skill_id: skillId,
+    p_user_email: userEmail,
   });
 
-  if (insertError) throw insertError;
-
-  const { error: incrementError } = await supabase.rpc("increment_like", { skill_id: skillId });
-  if (incrementError) throw incrementError;
-
-  return { id: skillId, liked: true };
+  if (error) throw error;
+  return data as { id: number; liked: boolean };
 }
 
 export async function recordSkillDownload(skillId: number) {
@@ -465,11 +449,39 @@ export async function updateSkillStatus(skillId: number, status: Extract<SkillSt
 }
 
 export async function approveSkill(skillId: number) {
-  return updateSkillStatus(skillId, "approved");
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch("/api/admin/approve-skill", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    body: JSON.stringify({ skillId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Lỗi duyệt skill" }));
+    throw new Error(err.error || "Lỗi duyệt skill");
+  }
+  const result = await res.json();
+  return result.data;
 }
 
 export async function rejectSkill(skillId: number) {
-  return updateSkillStatus(skillId, "rejected");
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch("/api/admin/reject-skill", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    body: JSON.stringify({ skillId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Lỗi từ chối skill" }));
+    throw new Error(err.error || "Lỗi từ chối skill");
+  }
+  const result = await res.json();
+  return result.data;
 }
 
 export async function fetchTeamTokenKpi() {
@@ -484,24 +496,25 @@ export async function fetchTeamTokenKpi() {
 
   return {
     totalTokens,
-    costUsd: totalTokens * 0.015,
+    costUsd: (totalTokens / 1000) * COST_PER_THOUSAND_TOKENS,
   };
 }
 
 function getPeriodStart(period: AnalyticsPeriod) {
   if (period === "all") return null;
 
-  const date = new Date();
-  date.setDate(date.getDate() - (period === "7d" ? 6 : 29));
-  date.setHours(0, 0, 0, 0);
-  return date.toISOString();
+  const now = new Date();
+  const vnNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+  vnNow.setDate(vnNow.getDate() - (period === "7d" ? 6 : 29));
+  vnNow.setHours(0, 0, 0, 0);
+  return vnNow.toISOString();
 }
 
 function formatChartDate(value: string) {
   return new Intl.DateTimeFormat("vi-VN", {
     day: "2-digit",
     month: "2-digit",
-  }).format(new Date(value));
+  }).format(new Date(value + "T00:00:00"));
 }
 
 function formatToolName(name: string): string {
@@ -617,16 +630,56 @@ export async function fetchAllUsers(): Promise<AppUser[]> {
 }
 
 export async function updateUserRole(userId: number, role: UserRole) {
-  const { error } = await supabase.from("users").update({ role }).eq("id", userId);
-  if (error) throw error;
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch("/api/admin/update-user-role", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    body: JSON.stringify({ userId, role }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Lỗi cập nhật quyền" }));
+    throw new Error(err.error || "Lỗi cập nhật quyền");
+  }
 }
 
-export async function fetchProjects(): Promise<Project[]> {
-  const { data: projectsData, error: projectsError } = await supabase.from("projects").select("*").order("created_at", { ascending: false });
+export async function fetchProjects(userEmail?: string, isAdmin = false): Promise<Project[]> {
+  const projectsQuery = supabase.from("projects").select("*").order("created_at", { ascending: false });
+
+  if (!isAdmin && userEmail) {
+    const { data: userProjectIds } = await supabase
+      .from("skill_library")
+      .select("project_id")
+      .eq("author_id", userEmail)
+      .eq("skill_type", "wip");
+
+    const memberProjectIds = new Set((userProjectIds || []).map((p) => p.project_id).filter(Boolean));
+
+    const { data: allProjects, error: projectsError } = await projectsQuery;
+    if (projectsError) {
+      console.error("Error fetching projects:", projectsError);
+      return [];
+    }
+
+    const filteredProjects = (allProjects || []).filter(
+      (p) => p.created_by === userEmail || memberProjectIds.has(p.id)
+    );
+
+    return await enrichProjectData(filteredProjects);
+  }
+
+  const { data: projectsData, error: projectsError } = await projectsQuery;
   if (projectsError) {
     console.error("Error fetching projects:", projectsError);
     return [];
   }
+
+  return await enrichProjectData(projectsData || []);
+}
+
+async function enrichProjectData(projectsData: Record<string, unknown>[]): Promise<Project[]> {
 
   const { data: wips, error: wipsError } = await supabase.from("skill_library").select("project_id, author_id, created_at").eq("skill_type", "wip");
 
@@ -660,7 +713,7 @@ export async function fetchProjects(): Promise<Project[]> {
 
   projectsData.forEach((p) => {
     if (p.created_by) {
-      allMemberEmails.add(p.created_by);
+      allMemberEmails.add(p.created_by as string);
     }
   });
 
@@ -680,7 +733,9 @@ export async function fetchProjects(): Promise<Project[]> {
   }
 
   return projectsData.map((p) => {
-    const emailsSet = projectMemberEmails.get(p.id) || new Set<string>();
+    const pid = p.id as number;
+    const createdBy = (p.created_by as string) || "";
+    const emailsSet = projectMemberEmails.get(pid) || new Set<string>();
     const membersList = Array.from(emailsSet).map((email) => {
       const u = userMap.get(email);
       return {
@@ -692,11 +747,13 @@ export async function fetchProjects(): Promise<Project[]> {
 
     return {
       ...p,
-      logCount: projectCounts.get(p.id) || 0,
-      authorName: userMap.get(p.created_by)?.name || getEmailName(p.created_by),
+      id: pid,
+      created_by: createdBy,
+      logCount: projectCounts.get(pid) || 0,
+      authorName: userMap.get(createdBy)?.name || getEmailName(createdBy),
       members: membersList,
-      lastWipCreatedAt: projectLastWip.get(p.id) || null,
-    };
+      lastWipCreatedAt: projectLastWip.get(pid) || null,
+    } as unknown as Project;
   });
 }
 
@@ -866,9 +923,10 @@ export async function fetchAIUsageStats(): Promise<AIUsageStat[]> {
 }
 
 export async function createAILicense(license: { email: string; ai_tool: string; plan_name: string; monthly_cost: number; expiration_date: string; status?: string }): Promise<AILicense> {
+  const expDate = new Date(license.expiration_date + "T23:59:59");
   const payload = {
     ...license,
-    status: license.status || "Active",
+    status: license.status || (expDate >= new Date() ? "Active" : "Expired"),
   };
   const { data, error } = await supabase.from("ai_licenses").insert(payload).select("*").single();
   if (error) throw error;
@@ -899,28 +957,21 @@ export async function updateAILicense(
     status?: string | null;
   },
 ): Promise<AILicense> {
-  // If the expiration date is set to a future date, set status to Active
-  const status = new Date(updates.expiration_date) >= new Date() ? "Active" : updates.status || "Active";
-  
-  const allowedKeys = ["ai_tool", "plan_name", "monthly_cost", "expiration_date", "status"];
-  const filteredUpdates = Object.keys(updates)
-    .filter(key => allowedKeys.includes(key))
-    .reduce((obj, key) => {
-      obj[key] = (updates as any)[key];
-      return obj;
-    }, {} as any);
-
-  const { data, error } = await supabase
-    .from("ai_licenses")
-    .update({
-      ...filteredUpdates,
-      status,
-    })
-    .eq("id", id)
-    .select("*")
-    .single();
-  if (error) throw error;
-  return data;
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch("/api/admin/update-license", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    body: JSON.stringify({ licenseId: id, updates }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Lỗi cập nhật bản quyền" }));
+    throw new Error(err.error || "Lỗi cập nhật bản quyền");
+  }
+  const result = await res.json();
+  return result.data;
 }
 
 export async function cancelAILicense(id: number): Promise<AILicense> {
@@ -930,8 +981,19 @@ export async function cancelAILicense(id: number): Promise<AILicense> {
 }
 
 export async function deleteAILicense(id: number): Promise<void> {
-  const { error } = await supabase.from("ai_licenses").delete().eq("id", id);
-  if (error) throw error;
+  const { data: { session } } = await supabase.auth.getSession();
+  const res = await fetch("/api/admin/delete-license", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+    },
+    body: JSON.stringify({ licenseId: id }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: "Lỗi xóa bản quyền" }));
+    throw new Error(err.error || "Lỗi xóa bản quyền");
+  }
 }
 
 
