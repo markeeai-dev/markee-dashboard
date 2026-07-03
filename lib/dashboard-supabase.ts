@@ -645,8 +645,16 @@ export async function updateUserRole(userId: number, role: UserRole) {
   }
 }
 
-export async function fetchProjects(userEmail?: string, isAdmin = false): Promise<Project[]> {
-  const projectsQuery = supabase.from("projects").select("*").order("created_at", { ascending: false });
+export async function fetchProjects(
+  userEmail?: string,
+  isAdmin = false,
+  filterType?: 'WIP_GLOBAL' | 'PERSONAL'
+): Promise<Project[]> {
+  let projectsQuery = supabase.from("projects").select("*").order("created_at", { ascending: false });
+
+  if (filterType) {
+    projectsQuery = projectsQuery.eq("type", filterType);
+  }
 
   if (!isAdmin && userEmail) {
     const { data: userProjectIds } = await supabase
@@ -875,8 +883,16 @@ export async function fetchProjectSessionsForUser(projectId: number, authorId: s
   };
 }
 
-export async function createNewProject(name: string, userEmail: string): Promise<Project> {
-  const { data, error } = await supabase.from("projects").insert({ name, created_by: userEmail }).select("*").single();
+export async function createNewProject(
+  name: string,
+  userEmail: string,
+  type: "WIP_GLOBAL" | "PERSONAL" = "WIP_GLOBAL"
+): Promise<Project> {
+  const { data, error } = await supabase
+    .from("projects")
+    .insert({ name, created_by: userEmail, type })
+    .select("*")
+    .single();
 
   if (error) throw error;
   return data as Project;
@@ -893,6 +909,11 @@ export interface AILicense {
   status: string | null;
   weekly_used?: string;
   usagePercent?: number;
+  last_ping_at?: string | null;
+  last_active_device?: string | null;
+  last_active_user?: string | null;
+  assigned_users?: string[];
+  reset_time?: string;
 }
 
 export interface AIUsageStat {
@@ -922,7 +943,7 @@ export async function fetchAIUsageStats(): Promise<AIUsageStat[]> {
   return data || [];
 }
 
-export async function createAILicense(license: { email: string; ai_tool: string; plan_name: string; monthly_cost: number; expiration_date: string; status?: string }): Promise<AILicense> {
+export async function createAILicense(license: { email: string; assigned_users?: string[]; ai_tool: string; plan_name: string; monthly_cost: number; expiration_date: string; status?: string }): Promise<AILicense> {
   const expDate = new Date(license.expiration_date + "T23:59:59");
   const payload = {
     ...license,
@@ -950,6 +971,8 @@ export async function renewAILicense(id: number, newExpirationDate: string): Pro
 export async function updateAILicense(
   id: number,
   updates: {
+    email?: string;
+    assigned_users?: string[];
     ai_tool: string;
     plan_name: string;
     monthly_cost: number;
