@@ -5,9 +5,11 @@
 /* eslint-disable @next/next/no-img-element */
 
 
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, User, Edit, Trash2, ArrowLeftRight, Settings } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, Files, User, Edit, Trash2, ArrowLeftRight, Settings, Menu } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -70,9 +72,9 @@ import {
   fetchMyWIPs,
 } from '@/lib/dashboard-supabase';
 import { supabase } from '@/lib/supabase';
-import { DEPARTMENT_TRACKS, mapTrackDisplayToDbValue } from '@/lib/org-structure';
 import UserGuideModal from './UserGuideModal';
 import AIChat from './AIChat/AIChat';
+import FileManagement from './FileManagement';
 
 const PAGE_SIZE = 6;
 const TOOL_COLORS = ['#E3000F', '#FF3344', '#f59e0b', '#a855f7', '#059669', '#0d9488'];
@@ -86,6 +88,29 @@ function formatNumber(value: number) {
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('vi-VN').format(value) + ' VNĐ';
+}
+
+function formatLicenseCurrency(value: number, currency: string | null | undefined) {
+  if (currency === 'USD') {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+  }
+  return new Intl.NumberFormat('vi-VN').format(value) + ' VNĐ';
+}
+
+function getHeartbeatStatus(lastPingAtStr: string | null | undefined) {
+  if (!lastPingAtStr) return 'offline';
+  const lastPing = new Date(lastPingAtStr);
+  const now = new Date();
+  const diffMs = now.getTime() - lastPing.getTime();
+  const diffMins = diffMs / 1000 / 60;
+  if (diffMins < 5) return 'active';
+  if (diffMins < 15) return 'idle';
+  return 'offline';
+}
+
+function formatResetTime(resetTimeStr: string | null | undefined) {
+  if (!resetTimeStr) return "Chưa có dữ liệu đặt lại";
+  return `Ngày đặt lại: ${resetTimeStr}`;
 }
 
 function stripMarkdown(value: string, maxLength = 180) {
@@ -207,7 +232,7 @@ function ConfirmationModal({
     : 'bg-markee-primary hover:bg-markee-hover text-white';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-5 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-5 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-2xl border border-markee-border bg-white p-6 shadow-2xl">
         <div className={`mb-5 h-1.5 w-16 rounded-full ${isApprove ? 'bg-emerald-600' : 'bg-markee-primary'}`} />
         <h2 className="text-lg font-bold text-markee-text">
@@ -398,7 +423,7 @@ function PaginationControls({
         Trang trước
       </button>
       <div className="rounded-xl border border-markee-border bg-markee-bg px-4 py-2 text-xs font-semibold text-markee-muted">
-         {page + 1} / {totalPages}
+        {page + 1} / {totalPages}
       </div>
       <button
         type="button"
@@ -413,6 +438,12 @@ function PaginationControls({
   );
 }
 
+function mapTrackToDbValue(track: string): string {
+  if (track === "Tất cả") return "";
+  const match = track.match(/(Track \d+:[^(]+)/);
+  return match ? match[1].trim() : track;
+}
+
 function UserDashboard({
   profile,
   refreshKey = 0,
@@ -422,7 +453,29 @@ function UserDashboard({
   refreshKey?: number;
   mode?: 'full' | 'library-only';
 }) {
-  const [activeView, setActiveView] = useState<'library' | 'workspace'>('library');
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const [activeView, _setActiveView] = useState<'library' | 'workspace'>(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const tab = searchParams.get('tab');
+      if (tab === 'my-space') return 'workspace';
+      if (tab === 'shared') return 'library';
+    }
+    return 'library';
+  });
+
+  const setActiveView = (view: 'library' | 'workspace') => {
+    _setActiveView(view);
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      params.set('tab', view === 'workspace' ? 'my-space' : 'shared');
+      router.replace(`${window.location.pathname}?${params.toString()}`);
+    }
+  };
+
   const [library, setLibrary] = useState<PaginatedSkills>({ items: [], total: 0, hasMore: false, nextPage: 0 });
   const [workspaceSkills, setWorkspaceSkills] = useState<SkillCard[]>([]);
   const [trendingSkills, setTrendingSkills] = useState<SkillCard[]>([]);
@@ -432,7 +485,25 @@ function UserDashboard({
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
   const isLibraryOnly = mode === 'library-only';
 
-  const [workspaceTab, setWorkspaceTab] = useState<'approved' | 'pending' | 'wip'>('approved');
+  const [workspaceTab, _setWorkspaceTab] = useState<'approved' | 'pending' | 'wip'>(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const wtab = searchParams.get('wtab');
+      if (wtab && ['approved', 'pending', 'wip'].includes(wtab)) {
+        return wtab as 'approved' | 'pending' | 'wip';
+      }
+    }
+    return 'approved';
+  });
+
+  const setWorkspaceTab = (tab: 'approved' | 'pending' | 'wip') => {
+    _setWorkspaceTab(tab);
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      params.set('wtab', tab);
+      router.replace(`${window.location.pathname}?${params.toString()}`);
+    }
+  };
   const [wips, setWips] = useState<AISession[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [wipPage, setWipPage] = useState(0);
@@ -466,11 +537,11 @@ function UserDashboard({
     if (!activeDeleteWip) return;
     setIsDeletingWip(true);
     try {
-      const { error } = await supabase.from('skill_library').delete().eq('id', activeDeleteWip.id).eq('author_id', profile.email);
+      const { error } = await supabase.from('skill_library').delete().eq('id', activeDeleteWip.id);
       if (error) throw error;
 
       showWipToast('Xóa phiên AI thành công!', 'success');
-      
+
       const targetId = activeDeleteWip.id;
       setDeletingWipIds(prev => [...prev, targetId]);
       setActiveDeleteWip(null);
@@ -491,11 +562,11 @@ function UserDashboard({
     if (!activeMoveWip || !moveWipProjectId) return;
     setIsMovingWip(true);
     try {
-      const { error } = await supabase.from('skill_library').update({ project_id: moveWipProjectId }).eq('id', activeMoveWip.id).eq('author_id', profile.email);
+      const { error } = await supabase.from('skill_library').update({ project_id: moveWipProjectId }).eq('id', activeMoveWip.id);
       if (error) throw error;
 
       showWipToast('Chuyển dự án thành công!', 'success');
-      
+
       const targetId = activeMoveWip.id;
       setDeletingWipIds(prev => [...prev, targetId]);
       setActiveMoveWip(null);
@@ -519,14 +590,13 @@ function UserDashboard({
     try {
       const { error } = await supabase
         .from('skill_library')
-        .update({ 
-          title: editWipTitle, 
-          markdown_content: editWipContent, 
-          team_track: editWipTrack 
+        .update({
+          title: editWipTitle,
+          markdown_content: editWipContent,
+          team_track: editWipTrack
         })
-        .eq('id', activeEditWip.id)
-        .eq('author_id', profile.email);
-      
+        .eq('id', activeEditWip.id);
+
       if (error) throw error;
 
       showWipToast('Cập nhật phiên AI thành công!', 'success');
@@ -549,8 +619,6 @@ function UserDashboard({
 
 
   const [selectedTrack, setSelectedTrack] = useState('Tất cả');
-  const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
-  const [expandedTracks, setExpandedTracks] = useState<Set<string>>(new Set());
   const [selectedType, setSelectedType] = useState('Tất cả');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [previewSkill, setPreviewSkill] = useState<SkillCard | null>(null);
@@ -577,14 +645,11 @@ function UserDashboard({
     return workspaceSkills.filter((skill) => skill.status === 'pending');
   }, [workspaceSkills]);
 
-  const loadRequestIdRef = useRef(0);
-
   async function loadInitialData() {
-    const requestId = ++loadRequestIdRef.current;
     setLoading(true);
 
     try {
-      const dbTrack = mapTrackDisplayToDbValue(selectedTrack);
+      const dbTrack = mapTrackToDbValue(selectedTrack);
       const isWorkspace = !isLibraryOnly && activeView === 'workspace';
       const countsPromise = fetchLibraryCounts(isWorkspace ? profile.email : undefined);
 
@@ -593,7 +658,6 @@ function UserDashboard({
           fetchApprovedSkills(page, PAGE_SIZE, profile.email, debouncedSearchTerm, dbTrack, selectedType),
           countsPromise,
         ]);
-        if (requestId !== loadRequestIdRef.current) return;
         setLibrary(skills);
         setCounts(libCounts);
         return;
@@ -604,11 +668,10 @@ function UserDashboard({
         fetchTrendingSkills(5, profile.email),
         fetchMyWorkspaceSkills(profile.email),
         fetchMyWIPs(profile.email),
-        fetchProjects(profile.email, profile.role === 'admin'),
+        fetchProjects(undefined, undefined, 'WIP_GLOBAL'),
         countsPromise,
       ]);
 
-      if (requestId !== loadRequestIdRef.current) return;
       setLibrary(skills);
       setTrendingSkills(trending);
       setWorkspaceSkills(workspace);
@@ -616,9 +679,7 @@ function UserDashboard({
       setProjects(allProjects);
       setCounts(libCounts);
     } finally {
-      if (requestId === loadRequestIdRef.current) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   }
 
@@ -640,9 +701,9 @@ function UserDashboard({
   }, [workspaceTab]);
 
   const displayedSkills = !isLibraryOnly && activeView === 'workspace'
-    ? (workspaceTab === 'approved' 
-        ? approvedWorkspaceSkills.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) 
-        : pendingWorkspaceSkills.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE))
+    ? (workspaceTab === 'approved'
+      ? approvedWorkspaceSkills.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
+      : pendingWorkspaceSkills.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE))
     : library.items;
 
   const WIP_PAGE_SIZE = 8;
@@ -671,11 +732,10 @@ function UserDashboard({
                       setPage(0);
                       setSelectedType(type);
                     }}
-                    className={`text-left px-3 py-2 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between w-full ${
-                      isActive
+                    className={`text-left px-3 py-2 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between w-full ${isActive
                         ? "font-bold text-markee-primary bg-red-50"
                         : "text-gray-500 hover:text-markee-primary hover:bg-gray-50"
-                    }`}
+                      }`}
                   >
                     <span>{type}</span>
                     <span className="ml-auto bg-slate-100 text-slate-500 text-[10px] font-medium py-0.5 px-2 rounded-full">
@@ -691,132 +751,38 @@ function UserDashboard({
           <div>
             <h3 className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2.5">Phòng ban</h3>
             <div className="flex flex-col gap-1">
-              {/* "Tất cả" button */}
-              <button
-                key="all"
-                type="button"
-                onClick={() => {
-                  setPage(0);
-                  setSelectedTrack('Tất cả');
-                  setSelectedPosition(null);
-                  setExpandedTracks(new Set());
-                }}
-                className={`text-left px-3 py-2 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between w-full ${
-                  selectedTrack === 'Tất cả'
-                    ? "font-bold text-markee-primary bg-red-50"
-                    : "text-gray-500 hover:text-markee-primary hover:bg-gray-50"
-                }`}
-              >
-                <span className="truncate mr-2">Tất cả</span>
-                <span className="ml-auto bg-slate-100 text-slate-500 text-[10px] font-medium py-0.5 px-2 rounded-full shrink-0">
-                  {counts.total}
-                </span>
-              </button>
-
-              {/* Department tracks with expandable positions */}
-              {DEPARTMENT_TRACKS.map((track) => {
-                const isTrackActive = selectedTrack === track.displayLabel;
-                const isExpanded = expandedTracks.has(track.dbValue);
-                const trackCount = counts.byTrack[track.dbValue] || 0;
-
+              {[
+                "Tất cả",
+                "Track 1: SI Delivery (System/SOC)",
+                "Track 2: Marketing (SEO/Ads)",
+                "Track 3: Dev + DevOps (SaaS)",
+                "Track 4: AI Team (Products)",
+                "Track 5: Sales (Closing)",
+                "Khác",
+              ].map((track) => {
+                const isActive = selectedTrack === track;
+                const dbTrack = mapTrackToDbValue(track);
+                const count = track === "Tất cả" ? counts.total : (counts.byTrack[dbTrack] || 0);
                 return (
-                  <div key={track.dbValue}>
-                    {/* Track header */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isTrackActive && selectedPosition === null) {
-                          // Already filtering by this entire track — just toggle expand/collapse
-                          setExpandedTracks((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(track.dbValue)) {
-                              next.delete(track.dbValue);
-                            } else {
-                              next.add(track.dbValue);
-                            }
-                            return next;
-                          });
-                        } else {
-                          // Filter by this entire track + expand positions
-                          setPage(0);
-                          setSelectedTrack(track.displayLabel);
-                          setSelectedPosition(null);
-                          setExpandedTracks((prev) => {
-                            const next = new Set(prev);
-                            next.add(track.dbValue);
-                            return next;
-                          });
-                        }
-                      }}
-                      className={`text-left px-3 py-2 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between w-full ${
-                        isTrackActive && !selectedPosition
-                          ? "font-bold text-markee-primary bg-red-50"
-                          : "text-gray-500 hover:text-markee-primary hover:bg-gray-50"
+                  <button
+                    key={track}
+                    type="button"
+                    onClick={() => {
+                      setPage(0);
+                      setSelectedTrack(track);
+                    }}
+                    className={`text-left px-3 py-2 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between w-full ${isActive
+                        ? "font-bold text-markee-primary bg-red-50"
+                        : "text-gray-500 hover:text-markee-primary hover:bg-gray-50"
                       }`}
-                    >
-                      <span className="flex items-center gap-1.5 truncate mr-2">
-                        <ChevronDown
-                          size={12}
-                          className={`shrink-0 transition-transform ${isExpanded ? '' : '-rotate-90'}`}
-                        />
-                        <span>{track.displayLabel}</span>
-                      </span>
-                      <span className="ml-auto bg-slate-100 text-slate-500 text-[10px] font-medium py-0.5 px-2 rounded-full shrink-0">
-                        {trackCount}
-                      </span>
-                    </button>
-
-                    {/* Position list (expandable) */}
-                    {isExpanded && (
-                      <div className="ml-5 border-l border-gray-100 pl-3 mt-0.5 space-y-0.5">
-                        {track.positions.map((pos) => {
-                          const isPosActive = selectedPosition === pos.id;
-                          return (
-                            <button
-                              key={pos.id}
-                              type="button"
-                              onClick={() => {
-                                setPage(0);
-                                setSelectedTrack(track.displayLabel);
-                                setSelectedPosition(pos.id);
-                              }}
-                              className={`text-left px-3 py-1.5 rounded-md text-xs transition-all cursor-pointer block w-full ${
-                                isPosActive
-                                  ? "font-semibold text-markee-primary bg-red-50 border-l-2 border-markee-primary"
-                                  : "text-gray-400 hover:text-gray-600 hover:bg-gray-50 border-l-2 border-transparent"
-                              }`}
-                            >
-                              {pos.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                  >
+                    <span className="truncate mr-2">{track}</span>
+                    <span className="ml-auto bg-slate-100 text-slate-500 text-[10px] font-medium py-0.5 px-2 rounded-full shrink-0">
+                      {count}
+                    </span>
+                  </button>
                 );
               })}
-
-              {/* "Khác" button (flat, no positions) */}
-              <button
-                key="other"
-                type="button"
-                onClick={() => {
-                  setPage(0);
-                  setSelectedTrack('Khác');
-                  setSelectedPosition(null);
-                  setExpandedTracks(new Set());
-                }}
-                className={`text-left px-3 py-2 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-between w-full ${
-                  selectedTrack === 'Khác'
-                    ? "font-bold text-markee-primary bg-red-50"
-                    : "text-gray-500 hover:text-markee-primary hover:bg-gray-50"
-                }`}
-              >
-                <span className="truncate mr-2">Khác</span>
-                <span className="ml-auto bg-slate-100 text-slate-500 text-[10px] font-medium py-0.5 px-2 rounded-full shrink-0">
-                  {counts.byTrack["Khác"] || 0}
-                </span>
-              </button>
             </div>
           </div>
         </aside>
@@ -837,9 +803,8 @@ function UserDashboard({
                     setActiveView('library');
                     setPage(0);
                   }}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all cursor-pointer ${
-                    activeView === 'library' ? 'bg-markee-primary text-white' : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
-                  }`}
+                  className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all cursor-pointer ${activeView === 'library' ? 'bg-markee-primary text-white' : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
+                    }`}
                 >
                   Thư viện chung
                 </button>
@@ -849,9 +814,8 @@ function UserDashboard({
                     setActiveView('workspace');
                     setPage(0);
                   }}
-                  className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all cursor-pointer ${
-                    activeView === 'workspace' ? 'bg-markee-primary text-white' : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
-                  }`}
+                  className={`rounded-lg px-3 py-2 text-xs font-semibold transition-all cursor-pointer ${activeView === 'workspace' ? 'bg-markee-primary text-white' : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
+                    }`}
                 >
                   Không gian của tôi
                 </button>
@@ -874,7 +838,7 @@ function UserDashboard({
               <button
                 type="button"
                 onClick={() => setIsUploadModalOpen(true)}
-                className="btn-press inline-flex items-center gap-1.5 rounded-xl bg-markee-primary px-5 py-3 text-xs font-semibold text-white transition-colors hover:bg-markee-hover cursor-pointer shadow-sm shrink-0"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-markee-primary px-5 py-3 text-xs font-semibold text-white transition-colors hover:bg-markee-hover cursor-pointer shadow-sm shrink-0"
               >
                 <Plus className="h-4 w-4" />
                 Upload Asset
@@ -891,11 +855,10 @@ function UserDashboard({
                     setWorkspaceTab('approved');
                     setPage(0);
                   }}
-                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${
-                    workspaceTab === 'approved'
+                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${workspaceTab === 'approved'
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
-                  }`}
+                    }`}
                 >
                   Kỹ năng đã duyệt ({approvedWorkspaceSkills.length})
                 </button>
@@ -905,11 +868,10 @@ function UserDashboard({
                     setWorkspaceTab('pending');
                     setPage(0);
                   }}
-                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${
-                    workspaceTab === 'pending'
+                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${workspaceTab === 'pending'
                       ? 'bg-amber-500/10 text-amber-700 border border-amber-500/30'
                       : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
-                  }`}
+                    }`}
                 >
                   Kỹ năng đang chờ duyệt ({pendingWorkspaceSkills.length})
                 </button>
@@ -919,17 +881,16 @@ function UserDashboard({
                     setWorkspaceTab('wip');
                     setWipPage(0);
                   }}
-                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${
-                    workspaceTab === 'wip'
+                  className={`rounded-lg px-4 py-2 text-xs font-semibold transition-colors cursor-pointer ${workspaceTab === 'wip'
                       ? 'bg-purple-50 text-purple-700 border border-purple-200'
                       : 'border border-markee-border bg-white text-markee-muted hover:bg-markee-bg'
-                  }`}
+                    }`}
                 >
                   Tóm tắt phiên AI ({wips.length})
                 </button>
               </div>
             )}
-            
+
             {loading ? (
               <div className="rounded-lg border border-markee-border bg-white p-8 text-center text-sm text-markee-muted">Đang tải dữ liệu...</div>
             ) : (
@@ -941,13 +902,12 @@ function UserDashboard({
                         const isDeleting = deletingWipIds.includes(wip.id);
                         const project = projects.find(p => p.id === wip.project_id);
                         return (
-                          <div 
-                            key={wip.id} 
-                            className={`bg-white border border-markee-border rounded-xl p-5 shadow-xs relative flex flex-col justify-between transition-all duration-500 ease-out hover:shadow-md ${
-                              isDeleting 
-                                ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden' 
+                          <div
+                            key={wip.id}
+                            className={`bg-white border border-markee-border rounded-xl p-5 shadow-xs relative flex flex-col justify-between transition-all duration-500 ease-out hover:shadow-md ${isDeleting
+                                ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden'
                                 : ''
-                            }`}
+                              }`}
                           >
                             <div>
                               <div className="flex items-start justify-between">
@@ -1080,7 +1040,7 @@ function UserDashboard({
 
       {/* Upload Asset Modal */}
       {isUploadModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-in fade-in duration-200 modal-backdrop">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl relative animate-in zoom-in-95 duration-200">
             {/* Header */}
             <div className="flex justify-between items-center pb-4 border-b border-gray-100 mb-4">
@@ -1132,11 +1092,10 @@ function UserDashboard({
                         key={type}
                         type="button"
                         onClick={() => setUploadType(type)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
-                          isActive
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${isActive
                             ? "bg-purple-100 text-purple-800 border-purple-200"
                             : "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100"
-                        }`}
+                          }`}
                       >
                         {type}
                       </button>
@@ -1223,7 +1182,7 @@ function UserDashboard({
 
       {/* Preview Asset Modal */}
       {previewSkill && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-in fade-in duration-200 modal-backdrop">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
           <div className="w-full max-w-3xl h-[85vh] rounded-xl bg-white p-6 shadow-xl relative flex flex-col justify-between animate-in zoom-in-95 duration-200">
             <div>
               <button
@@ -1232,7 +1191,7 @@ function UserDashboard({
               >
                 <X className="h-5 w-5" />
               </button>
-              
+
               <div className="flex flex-wrap gap-2 items-center mb-3">
                 <span className="bg-purple-50 text-purple-700 border border-purple-100 px-2 py-0.5 rounded text-[10px] font-semibold uppercase">
                   {previewSkill.skill_type || 'Workflow'}
@@ -1240,7 +1199,7 @@ function UserDashboard({
                 <span className="text-xs text-gray-400">·</span>
                 <span className="text-xs text-gray-500 font-medium">Tác giả: {previewSkill.authorName}</span>
               </div>
-              
+
               <h3 className="text-xl font-bold text-gray-900 mb-4">{previewSkill.title}</h3>
             </div>
 
@@ -1273,7 +1232,7 @@ function UserDashboard({
 
       {/* Edit WIP Modal */}
       {activeEditWip && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
             {/* Header */}
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
@@ -1361,7 +1320,7 @@ function UserDashboard({
 
       {/* Move WIP Modal */}
       {activeMoveWip && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
             {/* Header */}
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
@@ -1383,7 +1342,7 @@ function UserDashboard({
               <p className="text-xs text-markee-muted leading-relaxed">
                 Bạn đang chuyển phiên AI <span className="font-bold text-markee-text">&quot;{activeMoveWip.title || 'Không có tiêu đề'}&quot;</span> sang một dự án khác.
               </p>
-              
+
               <div>
                 <label htmlFor="userMoveWipProjectSelect" className="block text-xs font-semibold text-markee-text mb-1.5">
                   Chọn Dự án đích
@@ -1436,7 +1395,7 @@ function UserDashboard({
 
       {/* Delete WIP Modal */}
       {activeDeleteWip && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-sm w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
             {/* Header */}
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
@@ -1453,7 +1412,7 @@ function UserDashboard({
             {/* Body */}
             <div className="p-6">
               <p className="text-xs text-markee-muted leading-relaxed">
-                Bạn có chắc chắn muốn xóa phiên AI <span className="font-bold text-markee-text">&quot;{activeDeleteWip.title || 'Không có tiêu đề'}&quot;</span>? 
+                Bạn có chắc chắn muốn xóa phiên AI <span className="font-bold text-markee-text">&quot;{activeDeleteWip.title || 'Không có tiêu đề'}&quot;</span>?
                 Hành động này không thể hoàn tác.
               </p>
             </div>
@@ -1482,13 +1441,12 @@ function UserDashboard({
 
       {/* Toast Alert */}
       {wipToast && (
-        <div className={`fixed bottom-5 right-5 z-60 px-4.5 py-3 rounded-xl shadow-xl flex items-center gap-2 border text-xs font-semibold animate-in slide-in-from-bottom-5 duration-300 ${
-          wipToast.type === 'success' 
-            ? 'bg-emerald-50 border-emerald-200 text-emerald-800' 
+        <div className={`fixed bottom-5 right-5 z-60 px-4.5 py-3 rounded-xl shadow-xl flex items-center gap-2 border text-xs font-semibold animate-in slide-in-from-bottom-5 duration-300 ${wipToast.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
             : wipToast.type === 'error'
-            ? 'bg-red-50 border-red-200 text-red-800'
-            : 'bg-blue-50 border-blue-200 text-blue-800'
-        }`}>
+              ? 'bg-red-50 border-red-200 text-red-800'
+              : 'bg-blue-50 border-blue-200 text-blue-800'
+          }`}>
           {wipToast.type === 'success' && <span>✅</span>}
           {wipToast.type === 'error' && <span>❌</span>}
           {wipToast.type === 'loading' && <span className="animate-spin">⏳</span>}
@@ -1527,9 +1485,8 @@ function AdminOverview({
               key={option.id}
               type="button"
               onClick={() => onPeriodChange(option.id)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
-                period === option.id ? 'bg-markee-primary text-white' : 'text-markee-muted hover:bg-markee-bg'
-              }`}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${period === option.id ? 'bg-markee-primary text-white' : 'text-markee-muted hover:bg-markee-bg'
+                }`}
             >
               {option.label}
             </button>
@@ -1627,9 +1584,8 @@ function AdminOverview({
               <div key={person.email} className="rounded-xl border border-markee-border bg-markee-bg p-3 flex flex-col justify-between min-h-22.5 transition-all hover:border-markee-sub">
                 <div className="mb-2 flex items-center justify-between">
                   <Medal
-                    className={`h-5 w-5 ${
-                      index === 0 ? 'text-yellow-500' : index === 1 ? 'text-slate-400' : index === 2 ? 'text-amber-600' : 'text-slate-400'
-                    }`}
+                    className={`h-5 w-5 ${index === 0 ? 'text-yellow-500' : index === 1 ? 'text-slate-400' : index === 2 ? 'text-amber-600' : 'text-slate-400'
+                      }`}
                   />
                   <span className="text-xs font-bold text-markee-sub">#{index + 1}</span>
                 </div>
@@ -1739,11 +1695,10 @@ function AdminDashboard({
                   key={skill.id}
                   type="button"
                   onClick={() => setSelectedSkillId(skill.id)}
-                  className={`block w-full rounded-lg border p-3 text-left transition-all ${
-                    selectedSkill?.id === skill.id
+                  className={`block w-full rounded-lg border p-3 text-left transition-all ${selectedSkill?.id === skill.id
                       ? 'border-markee-primary bg-red-50 text-markee-primary font-semibold'
                       : 'border-markee-border bg-markee-bg text-markee-text hover:bg-white'
-                  }`}
+                    }`}
                 >
                   <div className="truncate text-xs font-semibold">{skill.title}</div>
                   <div className="mt-1 text-xs text-markee-muted">
@@ -1811,11 +1766,54 @@ function AdminDashboard({
 }
 
 export default function RoleDashboard() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
-  const [activeTab, setActiveTab] = useState<'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat'>('overview');
+  const [activeTab, _setActiveTab] = useState<'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file'>(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const tab = searchParams.get('tab');
+      if (tab === 'my-space' || tab === 'shared') {
+        return 'library';
+      }
+      if (tab && ['overview', 'library', 'projects', 'users', 'assets', 'knowledge_hub', 'ai_chat', 'chat-folders', 'quan-ly-file'].includes(tab)) {
+        return tab as 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file';
+      }
+      if (window.location.pathname.startsWith('/projects')) {
+        return 'projects';
+      }
+    }
+    return 'overview';
+  });
+
+  const setActiveTab = (tab: 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file') => {
+    _setActiveTab(tab);
+    setIsMainSidebarOpen(false);
+    const params = new URLSearchParams();
+    params.set('tab', tab);
+    router.replace(`${pathname}?${params.toString()}`);
+  };
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'my-space' || tab === 'shared') {
+      _setActiveTab('library');
+    } else if (tab && ['overview', 'library', 'projects', 'users', 'assets', 'knowledge_hub', 'ai_chat', 'chat-folders', 'quan-ly-file'].includes(tab)) {
+      _setActiveTab(tab as 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file');
+    } else if (window.location.pathname.startsWith('/projects')) {
+      _setActiveTab('projects');
+    } else {
+      if (profile) {
+        _setActiveTab(profile.role === 'admin' ? 'overview' : 'library');
+      }
+    }
+  }, [searchParams, profile?.role]);
+
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(false);
 
   async function loadProfile() {
     setLoading(true);
@@ -1823,8 +1821,17 @@ export default function RoleDashboard() {
     try {
       const p = await getCurrentUserProfile();
       setProfile(p);
-      if (p && p.role === 'user') {
-        setActiveTab('library');
+      if (p) {
+        if (p.role === 'user') {
+          _setActiveTab('library');
+        }
+        if (typeof window !== 'undefined') {
+          const searchParams = new URLSearchParams(window.location.search);
+          const tab = searchParams.get('tab');
+          if (tab && ['overview', 'library', 'projects', 'users', 'assets', 'knowledge_hub', 'ai_chat', 'chat-folders'].includes(tab)) {
+            _setActiveTab(tab as 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders');
+          }
+        }
       }
     } finally {
       setLoading(false);
@@ -1861,7 +1868,8 @@ export default function RoleDashboard() {
   return (
     <div className="flex min-h-screen bg-markee-bg text-markee-text font-sans">
       {/* Sidebar (Cột trái) */}
-      <aside className="w-64 bg-white border-r border-markee-border flex flex-col shrink-0">
+      <aside className={`fixed md:relative inset-y-0 left-0 z-50 w-64 bg-white border-r border-markee-border flex flex-col transition-transform duration-300 transform ${isMainSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        } shrink-0`}>
         {/* Logo */}
         <div className="p-5 border-b border-markee-border flex items-center gap-3">
           <img src="https://markeeai.com/logo.svg" alt="Markee Logo" className="w-8 h-8 shrink-0" />
@@ -1873,7 +1881,7 @@ export default function RoleDashboard() {
 
         {/* User Info */}
         <div className="p-4 border-b border-markee-border bg-markee-bg/20 flex items-center gap-3">
-          <div 
+          <div
             className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0 shadow-inner"
             style={{ backgroundColor: profile.dbUser?.avatar_color || '#E3000F' }}
           >
@@ -1888,127 +1896,161 @@ export default function RoleDashboard() {
         {/* Menu Items */}
         <nav className="p-4 flex-1 space-y-1">
           {profile.role === 'admin' && (
-            <button
-              type="button"
+            <Link
+              href="?tab=overview"
+              scroll={false}
               onClick={() => setActiveTab('overview')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-                activeTab === 'overview'
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'overview'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
-              }`}
+                }`}
             >
               <span>📊</span>
               <span>Tổng quan</span>
-            </button>
+            </Link>
           )}
 
-          <button
-            type="button"
+          <Link
+            href="?tab=library"
+            scroll={false}
             onClick={() => setActiveTab('library')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === 'library'
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'library'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
-            }`}
+              }`}
           >
             <span>📚</span>
             <span>Thư viện kỹ năng</span>
-          </button>
+          </Link>
 
-          <button
-            type="button"
+          <Link
+            href="?tab=ai_chat"
+            scroll={false}
             onClick={() => setActiveTab('ai_chat')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === 'ai_chat'
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'ai_chat'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
-            }`}
+              }`}
           >
             <span>💬</span>
             <span>Trò chuyện cùng AI</span>
-          </button>
+          </Link>
 
-          {profile.role === 'user' && (
-            <button
-              type="button"
-              onClick={() => setActiveTab('assets')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-                activeTab === 'assets'
+          {profile.role === 'admin' && (
+            <Link
+              href="?tab=projects"
+              scroll={false}
+              onClick={() => setActiveTab('projects')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'projects'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+                }`}
+            >
+              <span>📁</span>
+              <span>Quản Lý dự án</span>
+            </Link>
+          )}
+
+          <Link
+            href="?tab=knowledge_hub"
+            scroll={false}
+            onClick={() => setActiveTab('knowledge_hub')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'knowledge_hub'
+                ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
               }`}
+          >
+            <span>🧠</span>
+            <span>Kho Tri thức</span>
+          </Link>
+
+          <Link
+            href="?tab=quan-ly-file"
+            scroll={false}
+            onClick={() => setActiveTab('quan-ly-file')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'quan-ly-file'
+                ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+              }`}
+          >
+            <Files className="w-4 h-4 shrink-0" />
+            <span>Quản lý File</span>
+          </Link>
+
+          {profile.role === 'user' && (
+            <Link
+              href="?tab=assets"
+              scroll={false}
+              onClick={() => setActiveTab('assets')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'assets'
+                  ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                  : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+                }`}
             >
               <span>💳</span>
               <span>Tài khoản AI của tôi</span>
-            </button>
+            </Link>
           )}
 
           {profile.role === 'admin' && (
-            <>
-              <button
-                type="button"
-                onClick={() => setActiveTab('projects')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-                  activeTab === 'projects'
-                    ? 'bg-markee-primary text-white shadow-md shadow-red-100'
-                    : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+            <Link
+              href="?tab=users"
+              scroll={false}
+              onClick={() => setActiveTab('users')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'users'
+                  ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                  : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
-              >
-                <span>📁</span>
-                <span>Quản lý Dự án</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('users')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-                  activeTab === 'users'
-                    ? 'bg-markee-primary text-white shadow-md shadow-red-100'
-                    : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
-                }`}
-              >
-                <span>👥</span>
-                <span>Quản lý User</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('knowledge_hub')}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-                  activeTab === 'knowledge_hub'
-                    ? 'bg-markee-primary text-white shadow-md shadow-red-100'
-                    : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
-                }`}
-              >
-                <span>🧠</span>
-                <span>Kho Tri thức</span>
-              </button>
-            </>
+            >
+              <span>👥</span>
+              <span>Quản lý User</span>
+            </Link>
           )}
         </nav>
       </aside>
 
+      {/* Overlay cho Main Sidebar trên Mobile */}
+      {isMainSidebarOpen && (
+        <div
+          onClick={() => setIsMainSidebarOpen(false)}
+          className="fixed inset-0 bg-black/40 z-40 md:hidden animate-in fade-in duration-200"
+        />
+      )}
+
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="h-16 bg-white border-b border-markee-border px-6 flex items-center justify-end gap-3 shrink-0">
-          <button
-            onClick={() => setIsGuideOpen(true)}
-            className="text-markee-primary border border-markee-primary hover:bg-markee-primary/10 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer"
-          >
-            <BookOpen className="w-4 h-4" />
-            <span>Hướng dẫn cài đặt</span>
-          </button>
+        <header className="h-16 bg-white border-b border-markee-border px-6 flex items-center justify-between gap-3 shrink-0">
           <button
             type="button"
-            onClick={() => signOut().then(() => setProfile(null))}
-            className="rounded-lg border border-markee-border bg-white px-3.5 py-1.5 text-xs font-semibold text-markee-text hover:bg-markee-bg transition-colors shadow-xs cursor-pointer"
+            onClick={() => setIsMainSidebarOpen(true)}
+            className="md:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+            title="Mở menu"
           >
-            Đăng xuất
+            <Menu className="h-5 w-5" />
           </button>
+
+          <div className="flex items-center gap-3 ml-auto">
+            <button
+              onClick={() => setIsGuideOpen(true)}
+              className="text-markee-primary border border-markee-primary hover:bg-markee-primary/10 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer"
+            >
+              <BookOpen className="w-4 h-4" />
+              <span>Hướng dẫn cài đặt</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => signOut().then(() => setProfile(null))}
+              className="rounded-lg border border-markee-border bg-white px-3.5 py-1.5 text-xs font-semibold text-markee-text hover:bg-markee-bg transition-colors shadow-xs cursor-pointer"
+            >
+              Đăng xuất
+            </button>
+          </div>
         </header>
 
         {/* Scrollable Content Container */}
-        <div className={`flex-1 ${activeTab === 'ai_chat' ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
-          {activeTab === 'ai_chat' && (
+        <div className={`flex-1 ${(activeTab === 'ai_chat' || activeTab === 'chat-folders') ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
+          {(activeTab === 'ai_chat' || activeTab === 'chat-folders') && (
             <AIChat profile={profile} />
           )}
           {activeTab === 'overview' && profile.role === 'admin' && (
@@ -2026,7 +2068,7 @@ export default function RoleDashboard() {
             <MyAssetsView profile={profile} />
           )}
 
-          {activeTab === 'projects' && profile.role === 'admin' && (
+          {activeTab === 'projects' && (
             <ProjectManagement profile={profile} />
           )}
 
@@ -2034,10 +2076,13 @@ export default function RoleDashboard() {
             <UserManagement />
           )}
 
-          {activeTab === 'knowledge_hub' && profile.role === 'admin' && (
-            <KnowledgeHubDashboard />
+          {activeTab === 'knowledge_hub' && (
+            <KnowledgeHubDashboard setActiveTab={setActiveTab} />
           )}
 
+          {activeTab === 'quan-ly-file' && (
+            <FileManagement />
+          )}
         </div>
       </div>
 
@@ -2091,7 +2136,29 @@ function UserOverviewOnly({ profile }: { profile: UserProfile }) {
 }
 
 function UserManagement() {
-  const [activeTab, setActiveTab] = useState<'users' | 'licenses'>('users');
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const [activeTab, _setActiveTab] = useState<'users' | 'licenses'>(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const utab = searchParams.get('utab');
+      if (utab && ['users', 'licenses'].includes(utab)) {
+        return utab as 'users' | 'licenses';
+      }
+    }
+    return 'licenses';
+  });
+
+  const setActiveTab = (tab: 'users' | 'licenses') => {
+    _setActiveTab(tab);
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      params.set('utab', tab);
+      router.replace(`${window.location.pathname}?${params.toString()}`);
+    }
+  };
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'loading' } | null>(null);
@@ -2100,12 +2167,17 @@ function UserManagement() {
   const [licenses, setLicenses] = useState<AILicense[]>([]);
   const [usageStats, setUsageStats] = useState<AIUsageStat[]>([]);
   const [licensesLoading, setLicensesLoading] = useState(false);
+  const [timeTick, setTimeTick] = useState(0);
+
+  // Filter states
+  const [filterTag, setFilterTag] = useState<'All' | 'Personal' | 'Company'>('All');
+  const [filterTool, setFilterTool] = useState<string>('All');
+  const [filterActivity, setFilterActivity] = useState<'All' | 'Online' | 'Idle' | 'Offline'>('All');
 
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [selectedLicense, setSelectedLicense] = useState<AILicense | null>(null);
-  const [isCreatingLicense, setIsCreatingLicense] = useState(false);
 
   // Create license form state
   const [newLicenseEmail, setNewLicenseEmail] = useState('');
@@ -2113,12 +2185,20 @@ function UserManagement() {
   const [newLicensePlan, setNewLicensePlan] = useState('Pro');
   const [newLicenseCost, setNewLicenseCost] = useState('500000');
   const [newLicenseExpiry, setNewLicenseExpiry] = useState('');
+  const [newLicenseCurrency, setNewLicenseCurrency] = useState('VND');
+  const [newLicenseAssignedUsers, setNewLicenseAssignedUsers] = useState<string[]>([]);
+  const [isUserSelectOpen, setIsUserSelectOpen] = useState(false);
+  const [newLicenseTag, setNewLicenseTag] = useState<'Company' | 'Personal'>('Company');
 
   // Edit license form state
   const [editTool, setEditTool] = useState('ChatGPT');
   const [editPlan, setEditPlan] = useState('Pro');
   const [editCost, setEditCost] = useState('500000');
   const [editExpiry, setEditExpiry] = useState('');
+  const [editCurrency, setEditCurrency] = useState('VND');
+  const [editAssignedUsers, setEditAssignedUsers] = useState<string[]>([]);
+  const [isEditUserSelectOpen, setIsEditUserSelectOpen] = useState(false);
+  const [editTag, setEditTag] = useState<'Company' | 'Personal'>('Company');
 
   async function loadUsers() {
     setLoading(true);
@@ -2133,16 +2213,16 @@ function UserManagement() {
     }
   }
 
-  async function loadLicenses() {
-    setLicensesLoading(true);
+  async function loadLicenses(silent = false) {
+    if (!silent) setLicensesLoading(true);
     try {
       const [lics, stats] = await Promise.all([fetchAILicenses(), fetchAIUsageStats()]);
-      
+
       const licensesWithUsage = await Promise.all(
         lics.map(async (license) => {
           const { data: usageData } = await supabase
             .from('ai_usage_stats')
-            .select('weekly_used')
+            .select('weekly_used, reset_time')
             .eq('email', license.email)
             .ilike('ai_tool', license.ai_tool) // BẮT BUỘC dùng ilike để bỏ qua phân biệt hoa/thường
             .order('created_at', { ascending: false })
@@ -2152,24 +2232,25 @@ function UserManagement() {
           // Ép kiểu Text "19%" thành Number 19 để truyền vào Progress Bar
           let usageNumber = 0;
           if (usageData && usageData.weekly_used) {
-             usageNumber = parseInt(usageData.weekly_used.replace('%', '')) || 0;
+            usageNumber = parseInt(usageData.weekly_used.replace('%', '')) || 0;
           }
 
           return {
             ...license,
             usagePercent: usageNumber,
-            weekly_used: usageData?.weekly_used || '0%'
+            weekly_used: usageData?.weekly_used || '0%',
+            reset_time: usageData?.reset_time || null
           };
         })
       );
-      
+
       setLicenses(licensesWithUsage);
       setUsageStats(stats);
     } catch (e) {
       console.error(e);
       showToast('Không thể tải thông tin bản quyền AI', 'error');
     } finally {
-      setLicensesLoading(false);
+      if (!silent) setLicensesLoading(false);
     }
   }
 
@@ -2196,20 +2277,21 @@ function UserManagement() {
 
   async function handleCreateLicense(e: React.FormEvent) {
     e.preventDefault();
-    if (!newLicenseEmail.trim() || !newLicenseExpiry) {
-      showToast('Vui lòng nhập đầy đủ thông tin', 'error');
+    if (newLicenseAssignedUsers.length === 0 || !newLicenseExpiry) {
+      showToast('Vui lòng chọn nhân viên và ngày hết hạn', 'error');
       return;
     }
 
-    if (isCreatingLicense) return;
-    setIsCreatingLicense(true);
     showToast('Đang tạo bản quyền...', 'loading');
     try {
+      const finalCost = newLicenseCurrency === 'USD' ? Math.round((Number(newLicenseCost) || 0) * 25400) : Math.round(Number(newLicenseCost) || 0);
+      const finalPlanName = newLicenseTag === 'Personal' ? `${newLicensePlan} (Cá nhân)` : newLicensePlan;
       const newLic = await createAILicense({
-        email: newLicenseEmail.trim(),
+        email: newLicenseAssignedUsers[0],
+        assigned_users: newLicenseAssignedUsers,
         ai_tool: newLicenseTool,
-        plan_name: newLicensePlan,
-        monthly_cost: Number(newLicenseCost) || 0,
+        plan_name: finalPlanName,
+        monthly_cost: finalCost,
         expiration_date: newLicenseExpiry,
       });
 
@@ -2217,38 +2299,41 @@ function UserManagement() {
       showToast('Cấp mới bản quyền thành công!', 'success');
       setIsCreateModalOpen(false);
       setNewLicenseEmail('');
+      setNewLicenseAssignedUsers([]);
       setNewLicenseTool('ChatGPT');
       setNewLicensePlan('Pro');
       setNewLicenseCost('500000');
+      setNewLicenseCurrency('VND');
       setNewLicenseExpiry('');
+      setNewLicenseTag('Company');
     } catch (err) {
       console.error(err);
       showToast('Lỗi khi tạo bản quyền AI', 'error');
-    } finally {
-      setIsCreatingLicense(false);
     }
   }
 
   async function handleUpdateLicense(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedLicense || !editExpiry) {
+    if (!selectedLicense || !editExpiry || editAssignedUsers.length === 0) {
       showToast('Vui lòng điền đầy đủ thông tin', 'error');
       return;
     }
 
     showToast('Đang cập nhật bản quyền...', 'loading');
     try {
-      const isPersonal = selectedLicense.plan_name.includes('(Cá nhân)');
-      const finalPlanName = isPersonal ? `${editPlan} (Cá nhân)` : editPlan;
+      const finalPlanName = editTag === 'Personal' ? `${editPlan} (Cá nhân)` : editPlan;
 
+      const finalCost = editCurrency === 'USD' ? Math.round((Number(editCost) || 0) * 25400) : Math.round(Number(editCost) || 0);
       const updatedLic = await updateAILicense(selectedLicense.id, {
+        email: editAssignedUsers[0],
+        assigned_users: editAssignedUsers,
         ai_tool: editTool,
         plan_name: finalPlanName,
-        monthly_cost: Number(editCost) || 0,
+        monthly_cost: finalCost,
         expiration_date: editExpiry,
       });
       setLicenses(prev => prev.map(lic => lic.id === selectedLicense.id ? { ...updatedLic, usagePercent: lic.usagePercent } : lic));
-      
+
       // Clear requested status
       localStorage.removeItem(`license_requested_${selectedLicense.id}`);
 
@@ -2267,8 +2352,15 @@ function UserManagement() {
   }, []);
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeTick(prev => prev + 1);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
     const handleFocus = () => {
-      loadLicenses();
+      loadLicenses(true);
     };
     window.addEventListener('focus', handleFocus);
 
@@ -2282,7 +2374,7 @@ function UserManagement() {
           table: 'ai_usage_stats'
         },
         () => {
-          loadLicenses();
+          loadLicenses(true);
         }
       )
       .on(
@@ -2293,7 +2385,7 @@ function UserManagement() {
           table: 'ai_licenses'
         },
         () => {
-          loadLicenses();
+          loadLicenses(true);
         }
       )
       .subscribe();
@@ -2308,9 +2400,38 @@ function UserManagement() {
     return licenses.filter(lic => lic.status !== 'Canceled');
   }, [licenses]);
 
+  const filteredLicenses = useMemo(() => {
+    return activeLicenses.filter(lic => {
+      // 1. Tag Filter
+      if (filterTag !== 'All') {
+        const isPersonal = lic.plan_name.includes('(Cá nhân)');
+        if (filterTag === 'Personal' && !isPersonal) return false;
+        if (filterTag === 'Company' && isPersonal) return false;
+      }
+
+      // 2. Tool Filter
+      if (filterTool !== 'All') {
+        const toolLower = lic.ai_tool.toLowerCase();
+        const filterToolLower = filterTool.toLowerCase();
+        if (!toolLower.includes(filterToolLower)) return false;
+      }
+
+      // 3. Activity/Heartbeat Filter
+      if (filterActivity !== 'All') {
+        const hbStatus = getHeartbeatStatus(lic.last_ping_at);
+        if (filterActivity === 'Online' && hbStatus !== 'active') return false;
+        if (filterActivity === 'Idle' && hbStatus !== 'idle') return false;
+        if (filterActivity === 'Offline' && hbStatus !== 'offline') return false;
+      }
+
+      return true;
+    });
+  }, [activeLicenses, filterTag, filterTool, filterActivity, timeTick]);
+
   const totalMonthlyCost = useMemo(() => {
     return activeLicenses.reduce((sum, lic) => {
-      return sum + Number(lic.monthly_cost || 0);
+      const val = Number(lic.monthly_cost || 0);
+      return sum + val;
     }, 0);
   }, [activeLicenses]);
 
@@ -2352,7 +2473,7 @@ function UserManagement() {
   const getLicenseStatus = (lic: AILicense) => {
     const isCanceled = localStorage.getItem(`license_status_${lic.id}`) === 'Canceled';
     if (isCanceled) return 'Canceled';
-    const isExpired = new Date(lic.expiration_date + "T23:59:59") < new Date();
+    const isExpired = new Date(lic.expiration_date) < new Date();
     return isExpired ? 'Expired' : 'Active';
   };
 
@@ -2362,13 +2483,12 @@ function UserManagement() {
     <main className="mx-auto max-w-7xl space-y-5 p-5 relative">
       {/* Toast Notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-100 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${
-          toast.type === 'loading'
+        <div className={`fixed top-4 right-4 z-100 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${toast.type === 'loading'
             ? 'bg-amber-50 border-amber-200 text-amber-800'
             : toast.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
               : 'bg-red-50 border-red-200 text-red-800'
-        }`}>
+          }`}>
           {toast.type === 'loading' && <span className="animate-spin mr-1">⏳</span>}
           {toast.type === 'success' && <span className="mr-1">✓</span>}
           {toast.type === 'error' && <span className="mr-1">⚠️</span>}
@@ -2382,23 +2502,22 @@ function UserManagement() {
           <h1 className="text-lg font-bold text-markee-text">Quản lý hệ thống</h1>
           <p className="text-xs text-markee-muted">Quản lý phân quyền và cấp phát bản quyền AI công ty.</p>
         </div>
-        
+
         <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-          <button
-            onClick={() => setActiveTab('users')}
-            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === 'users' ? 'bg-white text-markee-text shadow-xs' : 'text-markee-muted hover:text-markee-text'
-            }`}
-          >
-            Danh sách User
-          </button>
+
           <button
             onClick={() => setActiveTab('licenses')}
-            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === 'licenses' ? 'bg-white text-markee-text shadow-xs' : 'text-markee-muted hover:text-markee-text'
-            }`}
+            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${activeTab === 'licenses' ? 'bg-white text-markee-text shadow-xs' : 'text-markee-muted hover:text-markee-text'
+              }`}
           >
             Quản lý Bản quyền AI
+          </button>
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`px-4 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${activeTab === 'users' ? 'bg-white text-markee-text shadow-xs' : 'text-markee-muted hover:text-markee-text'
+              }`}
+          >
+            Danh sách User
           </button>
         </div>
       </section>
@@ -2410,19 +2529,24 @@ function UserManagement() {
             <div className="text-center py-10 text-sm text-markee-sub">Đang tải danh sách người dùng...</div>
           ) : (
             <div className="overflow-x-auto rounded-xl border border-markee-border bg-white shadow-xs">
-              <table className="w-full border-collapse text-left text-sm text-markee-text">
+              <table className="w-full border-collapse text-left text-sm text-markee-text table-fixed">
                 <thead className="bg-markee-bg text-xs font-semibold uppercase tracking-wider text-markee-muted border-b border-markee-border">
                   <tr>
-                    <th className="px-6 py-4">Tên người dùng</th>
-                    <th className="px-6 py-4">Email</th>
-                    <th className="px-6 py-4">Vai trò (Role)</th>
+                    <th className="px-6 py-4 w-1/4">Tên người dùng</th>
+                    <th className="px-6 py-4 w-1/4">Email</th>
+                    <th className="px-6 py-4 w-1/6">Vai trò (Role)</th>
+                    <th className="px-6 py-4 w-1/6">Trạng thái</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-markee-border">
                   {users.map((user) => (
                     <tr key={user.id} className="hover:bg-markee-bg/20 transition-colors">
-                      <td className="px-6 py-4 font-semibold text-markee-text">{user.full_name || 'Chưa cập nhật'}</td>
-                      <td className="px-6 py-4 text-markee-muted">{user.email}</td>
+                      <td className="px-6 py-4 font-semibold text-markee-text truncate" title={user.full_name || 'Chưa cập nhật'}>
+                        {user.full_name || 'Chưa cập nhật'}
+                      </td>
+                      <td className="px-6 py-4 text-markee-muted truncate" title={user.email}>
+                        {user.email}
+                      </td>
                       <td className="px-6 py-4">
                         <select
                           value={user.role || 'user'}
@@ -2433,11 +2557,18 @@ function UserManagement() {
                           <option value="admin">Admin</option>
                         </select>
                       </td>
+
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Active
+                        </span>
+                      </td>
                     </tr>
                   ))}
                   {users.length === 0 && (
                     <tr>
-                      <td colSpan={3} className="text-center py-8 text-markee-sub">Không tìm thấy người dùng nào.</td>
+                      <td colSpan={5} className="text-center py-8 text-markee-sub">Không tìm thấy người dùng nào.</td>
                     </tr>
                   )}
                 </tbody>
@@ -2461,7 +2592,7 @@ function UserManagement() {
                 </span>
                 <span className="text-[10px] text-markee-muted mt-1">Tính trên các gói tài khoản đang hoạt động</span>
               </div>
-              
+
               <div className="bg-white p-5 rounded-xl border border-markee-border shadow-xs flex-1 flex flex-col justify-center">
                 <span className="text-xs font-bold text-markee-muted uppercase tracking-wider">Tài khoản Active</span>
                 <span className="text-2xl font-black text-markee-text mt-2">{totalActiveCount} tài khoản</span>
@@ -2540,25 +2671,89 @@ function UserManagement() {
               </button>
             </div>
 
+            {/* Filter Bar */}
+            <div className="px-6 py-3.5 bg-slate-50/50 border-b border-markee-border flex flex-wrap gap-4 items-center justify-between animate-in fade-in duration-200">
+              <div className="flex flex-wrap gap-4 items-center">
+                {/* Lọc theo Nhãn */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Nhãn:</span>
+                  <select
+                    value={filterTag}
+                    onChange={(e) => setFilterTag(e.target.value as any)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer"
+                  >
+                    <option value="All">Tất cả</option>
+                    <option value="Personal">Cá nhân</option>
+                    <option value="Company">Công ty</option>
+                  </select>
+                </div>
+
+                {/* Lọc theo Công cụ */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Công cụ:</span>
+                  <select
+                    value={filterTool}
+                    onChange={(e) => setFilterTool(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer"
+                  >
+                    <option value="All">Tất cả</option>
+                    <option value="ChatGPT">ChatGPT</option>
+                    <option value="Claude">Claude</option>
+                    <option value="Gemini">Gemini</option>
+                  </select>
+                </div>
+
+                {/* Lọc theo Trạng thái Hoạt động */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Hoạt động:</span>
+                  <select
+                    value={filterActivity}
+                    onChange={(e) => setFilterActivity(e.target.value as any)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer"
+                  >
+                    <option value="All">Tất cả</option>
+                    <option value="Online">Online</option>
+                    <option value="Idle">Idle</option>
+                    <option value="Offline">Offline</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Reset Filters button */}
+              {(filterTag !== 'All' || filterTool !== 'All' || filterActivity !== 'All') && (
+                <button
+                  onClick={() => {
+                    setFilterTag('All');
+                    setFilterTool('All');
+                    setFilterActivity('All');
+                  }}
+                  className="text-xs font-bold text-markee-primary hover:text-markee-hover transition-colors cursor-pointer border-0 bg-transparent"
+                >
+                  Đặt lại bộ lọc
+                </button>
+              )}
+            </div>
+
             {licensesLoading ? (
               <div className="text-center py-10 text-sm text-markee-sub">Đang tải danh sách bản quyền...</div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-left text-sm text-markee-text">
+                <table className="w-full border-collapse text-left text-sm text-markee-text table-fixed min-w-300">
                   <thead className="bg-markee-bg text-xs font-semibold uppercase tracking-wider text-markee-muted border-b border-markee-border">
                     <tr>
-                      <th className="px-6 py-4">Email nhân viên</th>
-                      <th className="px-6 py-4">Công cụ AI</th>
-                      <th className="px-6 py-4">Loại gói</th>
-                      <th className="px-6 py-4">Chi phí</th>
-                      <th className="px-6 py-4">% Sử dụng tuần</th>
-                      <th className="px-6 py-4">Ngày hết hạn</th>
-                      <th className="px-6 py-4">Trạng thái</th>
-                      <th className="px-6 py-4 text-right">Thao tác</th>
+                      <th className="px-6 py-4 w-48 max-w-62.5 truncate">Người được cấp</th>
+                      <th className="px-6 py-4 w-28 min-w-25">Công cụ AI</th>
+                      <th className="px-6 py-4 w-32 min-w-27.5">Loại gói</th>
+                      <th className="px-6 py-4 w-32 min-w-30 whitespace-nowrap">Chi phí</th>
+                      <th className="px-6 py-4 w-44 min-w-40">% Sử dụng tuần</th>
+                      <th className="px-6 py-4 w-32 min-w-27.5">Ngày hết hạn</th>
+                      <th className="px-6 py-4 w-32 min-w-30 whitespace-nowrap">Trạng thái</th>
+                      <th className="px-6 py-4 w-28 whitespace-normal leading-tight text-center">Hoạt động</th>
+                      <th className="px-6 py-4 w-32 text-right">Thao tác</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-markee-border">
-                    {licenses.map((lic) => {
+                    {filteredLicenses.map((lic) => {
                       const status = getLicenseStatus(lic);
                       let statusBadge = "bg-gray-100 text-gray-700 border-gray-200";
                       let statusText = "Không hoạt động";
@@ -2578,7 +2773,26 @@ function UserManagement() {
 
                       return (
                         <tr key={lic.id} className="hover:bg-markee-bg/20 transition-colors">
-                          <td className="px-6 py-4 font-semibold text-markee-text">{lic.email}</td>
+                          <td className="px-6 py-4 font-semibold text-markee-text truncate max-w-62.5">
+                            {lic.assigned_users && lic.assigned_users.length > 0 ? (
+                              <div className="flex flex-wrap gap-1 items-center max-w-xs animate-in fade-in duration-200" title={lic.assigned_users.join(', ')}>
+                                {lic.assigned_users.slice(0, 2).map((user, idx) => (
+                                  <span key={idx} className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-medium border border-slate-200 truncate max-w-20 inline-block">
+                                    {user.split('@')[0]}
+                                  </span>
+                                ))}
+                                {lic.assigned_users.length > 2 && (
+                                  <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-bold border border-blue-100">
+                                    +{lic.assigned_users.length - 2}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-medium border border-slate-200">
+                                {lic.email ? lic.email.split('@')[0] : 'N/A'}
+                              </span>
+                            )}
+                          </td>
                           <td className="px-6 py-4 text-markee-muted">
                             <span className="px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 font-medium text-xs">
                               {lic.ai_tool}
@@ -2598,26 +2812,36 @@ function UserManagement() {
                               )}
                             </div>
                           </td>
-                          <td className="px-6 py-4 font-semibold text-markee-text">
+                          <td className="px-6 py-4 font-semibold text-markee-text whitespace-nowrap min-w-30">
                             {formatCurrency(lic.monthly_cost)}
                           </td>
                           <td className="px-6 py-4">
                             {(() => {
                               const usagePercent = lic.usagePercent !== undefined ? lic.usagePercent : 0;
                               return (
-                                <div className="flex items-center gap-3 w-full max-w-35">
-                                  {/* Rãnh nền xám (Background Track) */}
-                                  <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
-                                    {/* Thanh màu chạy theo % */}
-                                    <div
-                                      className={`h-full rounded-full transition-all duration-500 ${usagePercent >= 80 ? 'bg-red-500' : 'bg-emerald-500'}`}
-                                      style={{ width: `${usagePercent}%` }}
-                                    ></div>
+                                <div className="relative group/tooltip">
+                                  {/* Tooltip Content */}
+                                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 hidden group-hover/tooltip:block bg-slate-900 text-white text-[10px] font-medium py-1.5 px-3 rounded-lg shadow-xl whitespace-nowrap z-70 animate-in fade-in slide-in-from-bottom-1 duration-150">
+                                    {formatResetTime(lic.reset_time)}
+                                    {/* Tooltip Arrow */}
+                                    <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-slate-900" />
                                   </div>
-                                  {/* Con số % cố định độ rộng để thẳng hàng */}
-                                  <span className="text-sm font-bold text-slate-700 w-12 text-right">
-                                    {usagePercent}%
-                                  </span>
+
+                                  {/* Progress Bar */}
+                                  <div className="flex items-center gap-3 w-full max-w-35 cursor-help">
+                                    {/* Rãnh nền xám (Background Track) */}
+                                    <div className="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                                      {/* Thanh màu chạy theo % */}
+                                      <div
+                                        className={`h-full rounded-full transition-all duration-500 ${usagePercent >= 80 ? 'bg-red-500' : 'bg-emerald-500'}`}
+                                        style={{ width: `${usagePercent}%` }}
+                                      ></div>
+                                    </div>
+                                    {/* Con số % cố định độ rộng để thẳng hàng */}
+                                    <span className="text-sm font-bold text-slate-700 w-12 text-right">
+                                      {usagePercent}%
+                                    </span>
+                                  </div>
                                 </div>
                               );
                             })()}
@@ -2625,10 +2849,46 @@ function UserManagement() {
                           <td className="px-6 py-4 text-markee-muted">
                             {new Date(lic.expiration_date).toLocaleDateString('vi-VN')}
                           </td>
-                          <td className="px-6 py-4">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge}`}>
+                          <td className="px-6 py-4 whitespace-nowrap min-w-30">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${statusBadge} whitespace-nowrap`}>
                               {statusText}
                             </span>
+                          </td>
+                          <td className="px-6 py-4 w-37.5 whitespace-nowrap">
+                            {(() => {
+                              const hbStatus = getHeartbeatStatus(lic.last_ping_at);
+                              if (hbStatus === 'active') {
+                                return (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-help"
+                                    title={`Sử dụng bởi ${lic.last_active_user || 'Không rõ'} trên ${lic.last_active_device || 'Không rõ'}`}
+                                  >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                    Đang hoạt động
+                                  </span>
+                                );
+                              } else if (hbStatus === 'idle') {
+                                return (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-700 border border-amber-200 cursor-help"
+                                    title={`Treo từ ${lic.last_ping_at ? new Date(lic.last_ping_at).toLocaleTimeString() : 'Không rõ'}`}
+                                  >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                    Idle (Treo)
+                                  </span>
+                                );
+                              } else {
+                                return (
+                                  <span
+                                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-700 border border-rose-200 cursor-help"
+                                    title={lic.last_ping_at ? `Lần cuối hoạt động: ${new Date(lic.last_ping_at).toLocaleString('vi-VN')}` : 'Chưa từng hoạt động'}
+                                  >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                    Offline
+                                  </span>
+                                );
+                              }
+                            })()}
                           </td>
                           <td className="px-6 py-4 text-right">
                             <button
@@ -2638,19 +2898,22 @@ function UserManagement() {
                                 setEditPlan(lic.plan_name.replace(' (Cá nhân)', ''));
                                 setEditCost(String(lic.monthly_cost));
                                 setEditExpiry(lic.expiration_date);
+                                setEditCurrency('VND');
+                                setEditAssignedUsers(lic.assigned_users || (lic.email ? [lic.email] : []));
+                                setEditTag(lic.plan_name.includes('(Cá nhân)') ? 'Personal' : 'Company');
                                 setIsRenewModalOpen(true);
                               }}
                               className="text-markee-primary hover:text-markee-hover font-bold text-xs cursor-pointer transition-colors"
                             >
-                              Cập nhật Bản quyền
+                              Cập nhật
                             </button>
                           </td>
                         </tr>
                       );
                     })}
-                    {licenses.length === 0 && (
+                    {filteredLicenses.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="text-center py-8 text-markee-sub">Chưa cấp bản quyền AI nào.</td>
+                        <td colSpan={9} className="text-center py-8 text-markee-sub">Không tìm thấy bản quyền AI nào phù hợp với bộ lọc.</td>
                       </tr>
                     )}
                   </tbody>
@@ -2663,27 +2926,74 @@ function UserManagement() {
 
       {/* Create License Modal */}
       {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <form onSubmit={handleCreateLicense} className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div>
               <h2 className="text-lg font-bold text-markee-text">Cấp mới Bản quyền AI</h2>
               <p className="text-xs text-markee-muted mt-1">Cấp mới quyền sử dụng công cụ AI cho nhân viên.</p>
             </div>
-            
+
             <div className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-markee-text mb-1">Email nhân viên</label>
-                <input
-                  type="email"
-                  required
-                  value={newLicenseEmail}
-                  onChange={(e) => setNewLicenseEmail(e.target.value)}
-                  placeholder="nhanvien@markee.com"
-                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
-                />
+                <label className="block text-xs font-semibold text-markee-text mb-1">Nhân viên được cấp quyền</label>
+                <div className="relative z-60">
+                  <button
+                    type="button"
+                    onClick={() => setIsUserSelectOpen(!isUserSelectOpen)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text text-left focus:outline-none focus:ring-1 focus:ring-markee-primary flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="truncate">
+                      {newLicenseAssignedUsers.length === 0
+                        ? 'Chọn nhân viên...'
+                        : `${newLicenseAssignedUsers.length} nhân viên đã chọn`}
+                    </span>
+                    <span className="text-[10px] text-slate-400">▼</span>
+                  </button>
+                  {isUserSelectOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setIsUserSelectOpen(false)} />
+                      <div className="absolute left-0 right-0 mt-1 z-50 max-h-48 overflow-y-auto bg-white border border-markee-border rounded-lg shadow-lg p-2 space-y-1.5">
+                        {users.map(u => {
+                          const isSelected = newLicenseAssignedUsers.includes(u.email);
+                          return (
+                            <label
+                              key={u.id}
+                              className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded-md cursor-pointer text-xs font-medium text-slate-700"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  if (isSelected) {
+                                    setNewLicenseAssignedUsers(prev => prev.filter(email => email !== u.email));
+                                  } else {
+                                    setNewLicenseAssignedUsers(prev => [...prev, u.email]);
+                                  }
+                                }}
+                                className="rounded text-markee-primary focus:ring-markee-primary"
+                              />
+                              <span className="truncate">{u.full_name || u.email} ({u.email})</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Nhãn tài khoản</label>
+                  <select
+                    value={newLicenseTag}
+                    onChange={(e) => setNewLicenseTag(e.target.value as any)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary outline-none cursor-pointer"
+                  >
+                    <option value="Company">Công ty</option>
+                    <option value="Personal">Cá nhân</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Công cụ AI</label>
                   <select
@@ -2696,6 +3006,9 @@ function UserManagement() {
                     <option value="Gemini">Gemini</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Loại gói</label>
                   <select
@@ -2709,20 +3022,6 @@ function UserManagement() {
                     <option value="Ultra">Ultra</option>
                   </select>
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí tháng (VNĐ)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    required
-                    value={newLicenseCost}
-                    onChange={(e) => setNewLicenseCost(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
-                  />
-                </div>
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Ngày hết hạn</label>
                   <input
@@ -2734,9 +3033,37 @@ function UserManagement() {
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí tháng</label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    required
+                    value={newLicenseCost}
+                    onChange={(e) => setNewLicenseCost(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
+                  />
+                  <select
+                    value={newLicenseCurrency}
+                    onChange={(e) => setNewLicenseCurrency(e.target.value)}
+                    className="px-2 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary outline-none cursor-pointer shrink-0"
+                  >
+                    <option value="VND">VNĐ</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+                {newLicenseCurrency === 'USD' && newLicenseCost && (
+                  <span className="block text-xs text-slate-500 font-bold mt-1">
+                    ~ {new Intl.NumberFormat('vi-VN').format(Math.round(Number(newLicenseCost) * 25400))} VNĐ
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="flex justify-end gap-2.5 pt-2">
+            <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setIsCreateModalOpen(false)}
@@ -2757,7 +3084,7 @@ function UserManagement() {
 
       {/* Update License Modal */}
       {isRenewModalOpen && selectedLicense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <form onSubmit={handleUpdateLicense} className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div>
               <h2 className="text-lg font-bold text-markee-text">Cập nhật Bản quyền</h2>
@@ -2767,7 +3094,66 @@ function UserManagement() {
             </div>
 
             <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-markee-text mb-1">Nhân viên được cấp quyền</label>
+                <div className="relative z-60">
+                  <button
+                    type="button"
+                    onClick={() => setIsEditUserSelectOpen(!isEditUserSelectOpen)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text text-left focus:outline-none focus:ring-1 focus:ring-markee-primary flex items-center justify-between cursor-pointer"
+                  >
+                    <span className="truncate">
+                      {editAssignedUsers.length === 0
+                        ? 'Chọn nhân viên...'
+                        : `${editAssignedUsers.length} nhân viên đã chọn`}
+                    </span>
+                    <span className="text-[10px] text-slate-400">▼</span>
+                  </button>
+                  {isEditUserSelectOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setIsEditUserSelectOpen(false)} />
+                      <div className="absolute left-0 right-0 mt-1 z-50 max-h-48 overflow-y-auto bg-white border border-markee-border rounded-lg shadow-lg p-2 space-y-1.5">
+                        {users.map(u => {
+                          const isSelected = editAssignedUsers.includes(u.email);
+                          return (
+                            <label
+                              key={u.id}
+                              className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-50 rounded-md cursor-pointer text-xs font-medium text-slate-700"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {
+                                  if (isSelected) {
+                                    setEditAssignedUsers(prev => prev.filter(email => email !== u.email));
+                                  } else {
+                                    setEditAssignedUsers(prev => [...prev, u.email]);
+                                  }
+                                }}
+                                className="rounded text-markee-primary focus:ring-markee-primary"
+                              />
+                              <span className="truncate">{u.full_name || u.email} ({u.email})</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Nhãn tài khoản</label>
+                  <select
+                    value={editTag}
+                    onChange={(e) => setEditTag(e.target.value as any)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary outline-none cursor-pointer"
+                  >
+                    <option value="Company">Công ty</option>
+                    <option value="Personal">Cá nhân</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Công cụ AI</label>
                   <select
@@ -2780,6 +3166,9 @@ function UserManagement() {
                     <option value="Gemini">Gemini</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Loại gói</label>
                   <select
@@ -2793,20 +3182,6 @@ function UserManagement() {
                     <option value="Ultra">Ultra</option>
                   </select>
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí tháng (VNĐ)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    required
-                    value={editCost}
-                    onChange={(e) => setEditCost(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
-                  />
-                </div>
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Ngày hết hạn</label>
                   <input
@@ -2818,9 +3193,37 @@ function UserManagement() {
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí tháng</label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    required
+                    value={editCost}
+                    onChange={(e) => setEditCost(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
+                  />
+                  <select
+                    value={editCurrency}
+                    onChange={(e) => setEditCurrency(e.target.value)}
+                    className="px-2 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary outline-none cursor-pointer shrink-0"
+                  >
+                    <option value="VND">VNĐ</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+                {editCurrency === 'USD' && editCost && (
+                  <span className="block text-xs text-slate-500 font-bold mt-1">
+                    ~ {new Intl.NumberFormat('vi-VN').format(Math.round(Number(editCost) * 25400))} VNĐ
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="flex justify-end gap-2.5 pt-2">
+            <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => {
@@ -2862,6 +3265,8 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
   const [declarePlan, setDeclarePlan] = useState('Pro');
   const [declareExpiry, setDeclareExpiry] = useState('');
   const [declareCost, setDeclareCost] = useState('0');
+  const [declareCurrency, setDeclareCurrency] = useState('VND');
+  const [declareTag, setDeclareTag] = useState<'Company' | 'Personal'>('Personal');
 
   // Refresh trigger state to force reload
   const [refreshKey, setRefreshKey] = useState(0);
@@ -2874,6 +3279,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
   const [editLicensePlan, setEditLicensePlan] = useState('');
   const [editLicenseExpiry, setEditLicenseExpiry] = useState('');
   const [editLicenseCost, setEditLicenseCost] = useState('0');
+  const [editLicenseCurrency, setEditLicenseCurrency] = useState('VND');
   const [deletingLicense, setDeletingLicense] = useState<AILicense | null>(null);
 
   function showToast(message: string, type: 'success' | 'error', duration = 3000) {
@@ -2999,18 +3405,22 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
       return;
     }
     try {
+      const finalCost = declareCurrency === 'USD' ? Math.round((Number(declareCost) || 0) * 25400) : Math.round(Number(declareCost) || 0);
+      const finalPlanName = declareTag === 'Personal' ? `${declarePlan} (Cá nhân)` : declarePlan;
       await createAILicense({
         email: profile.email,
         ai_tool: declareTool,
-        plan_name: `${declarePlan} (Cá nhân)`,
-        monthly_cost: Number(declareCost) || 0,
+        plan_name: finalPlanName,
+        monthly_cost: finalCost,
         expiration_date: declareExpiry,
         status: 'Active'
       });
-      showToast('Đã khai báo tài khoản cá nhân thành công!', 'success');
+      showToast('Đã khai báo tài khoản AI thành công!', 'success');
       setIsDeclareModalOpen(false);
       setDeclareExpiry('');
       setDeclareCost('0');
+      setDeclareCurrency('VND');
+      setDeclareTag('Personal');
       setRefreshKey(prev => prev + 1);
     } catch (err) {
       console.error(err);
@@ -3026,10 +3436,11 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
     }
 
     try {
+      const finalCost = editLicenseCurrency === 'USD' ? Math.round((Number(editLicenseCost) || 0) * 25400) : Math.round(Number(editLicenseCost) || 0);
       await updateAILicense(editingLicense.id, {
         ai_tool: editLicenseTool,
         plan_name: `${editLicensePlan} (Cá nhân)`,
-        monthly_cost: Number(editLicenseCost) || 0,
+        monthly_cost: finalCost,
         expiration_date: editLicenseExpiry,
       });
       showToast('Đại diện tài khoản cá nhân đã được cập nhật thành công!', 'success');
@@ -3046,9 +3457,8 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
     <main className="mx-auto max-w-7xl space-y-5 p-5 relative">
       {/* Toast Notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-100 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${
-          toast.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
-        }`}>
+        <div className={`fixed top-4 right-4 z-100 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${toast.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'
+          }`}>
           {toast.type === 'success' ? <span className="mr-1">✓</span> : <span className="mr-1">⚠️</span>}
           {toast.message}
         </div>
@@ -3064,7 +3474,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
           className="px-3.5 py-1.5 bg-markee-primary hover:bg-markee-hover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5"
         >
           <span>➕</span>
-          <span>Khai báo tài khoản cá nhân</span>
+          <span>Khai báo tài khoản AI</span>
         </button>
       </section>
 
@@ -3108,29 +3518,29 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
             return (
               <div
                 key={lic.id}
-                className={`bg-white rounded-xl border p-5 shadow-xs transition-all flex flex-col justify-between min-h-62.5 relative ${borderClass}`}
+                className={`bg-white rounded-xl border p-5 shadow-xs transition-all flex flex-col justify-between min-h-64 relative ${borderClass}`}
                 style={{ opacity: isCanceled ? 0.5 : 1 }}
               >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="px-2.5 py-1 rounded-lg bg-gray-100 text-markee-text font-bold text-xs">
+                    <span className="px-2 py-1 rounded-lg bg-gray-100 text-markee-text font-bold text-xs">
                       {lic.ai_tool}
                     </span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] font-bold text-markee-muted uppercase tracking-wider">
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-bold text-markee-muted uppercase tracking-wider">
                         {displayPlanName}
                       </span>
                       {isPersonal ? (
-                        <span className="px-1.5 py-0.5 rounded-sm text-[8px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                        <span className="px-1.5 py-0.5 rounded-sm text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
                           Cá nhân
                         </span>
                       ) : (
-                        <span className="px-1.5 py-0.5 rounded-sm text-[8px] font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                        <span className="px-1.5 py-0.5 rounded-sm text-xs font-bold bg-blue-50 text-blue-700 border border-blue-100">
                           Công ty
                         </span>
                       )}
 
-                      {isPersonal && usageNum === 0 && (
+                      {isPersonal && (
                         <div className="relative">
                           <button
                             type="button"
@@ -3144,7 +3554,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                           </button>
 
                           {activeMenuLicenseId === lic.id && (
-                            <div className="absolute right-0 mt-1 w-24 bg-white border border-markee-border rounded-lg shadow-lg z-20 py-1">
+                            <div className="absolute right-0 mt-1 w-24 bg-white border border-markee-border rounded-lg shadow-lg z-50 py-1">
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -3154,6 +3564,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                                   setEditLicensePlan(displayPlanName);
                                   setEditLicenseExpiry(lic.expiration_date.split('T')[0]);
                                   setEditLicenseCost(String(lic.monthly_cost));
+                                  setEditLicenseCurrency('VND');
                                   setIsEditLicenseModalOpen(true);
                                   setActiveMenuLicenseId(null);
                                 }}
@@ -3180,9 +3591,8 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                   </div>
 
                   {showWarning && (
-                    <div className={`mt-3 p-2.5 rounded-lg border text-xs font-semibold ${
-                      isExpired ? 'bg-red-50 text-red-800 border-red-100' : 'bg-amber-50 text-amber-800 border-amber-100'
-                    }`}>
+                    <div className={`mt-3 p-2 rounded-lg border text-xs font-semibold ${isExpired ? 'bg-red-50 text-red-800 border-red-100' : 'bg-amber-50 text-amber-800 border-amber-100'
+                      }`}>
                       {isExpired ? '⚠️ Tài khoản đã hết hạn!' : `⏳ Sắp hết hạn (còn ${diffDays} ngày)`}
                     </div>
                   )}
@@ -3205,17 +3615,9 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                         style={{ width: `${Math.min(usageNum, 100)}%` }}
                       />
                     </div>
-                    {match ? (
-                      resetTime && (
-                        <p className="text-sm text-gray-500 italic mt-1">
-                          Hạn mức hằng tuần sẽ đặt lại vào: {resetTime}
-                        </p>
-                      )
-                    ) : (
-                      <p className="text-sm text-gray-500 italic mt-1">
-                        Chưa có dữ liệu sử dụng
-                      </p>
-                    )}
+                    <p className="text-xs text-gray-500 italic mt-1">
+                      Hạn mức hằng tuần sẽ đặt lại vào: {resetTime || 'Đang cập nhật...'}
+                    </p>
                   </div>
                 </div>
 
@@ -3288,7 +3690,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
 
       {/* Self-Renew Modal */}
       {isRenewModalOpen && selectedLicense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <form onSubmit={handleSelfRenew} className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-sm w-full p-6 space-y-4">
             <div>
               <h2 className="text-lg font-bold text-markee-text">Tôi tự gia hạn gói cước</h2>
@@ -3332,17 +3734,28 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
 
       {/* Declare Personal License Modal */}
       {isDeclareModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <form onSubmit={handleDeclareLicense} className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div>
-              <h2 className="text-lg font-bold text-markee-text">Khai báo tài khoản cá nhân</h2>
+              <h2 className="text-lg font-bold text-markee-text">Khai báo tài khoản AI</h2>
               <p className="text-xs text-markee-muted mt-1">
-                Khai báo tài khoản cá nhân tự mua để quản lý và theo dõi.
+                Khai báo tài khoản AI tự mua để quản lý và theo dõi.
               </p>
             </div>
 
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Nhãn tài khoản</label>
+                  <select
+                    value={declareTag}
+                    onChange={(e) => setDeclareTag(e.target.value as any)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary outline-none cursor-pointer"
+                  >
+                    <option value="Personal">Cá nhân</option>
+                    <option value="Company">Công ty</option>
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Công cụ AI</label>
                   <select
@@ -3355,6 +3768,9 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                     <option value="Gemini">Gemini</option>
                   </select>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Loại gói</label>
                   <select
@@ -3368,20 +3784,6 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                     <option value="Ultra">Ultra</option>
                   </select>
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí (VNĐ/tháng)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    required
-                    value={declareCost}
-                    onChange={(e) => setDeclareCost(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
-                  />
-                </div>
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Ngày hết hạn</label>
                   <input
@@ -3393,9 +3795,37 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí</label>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    required
+                    value={declareCost}
+                    onChange={(e) => setDeclareCost(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
+                  />
+                  <select
+                    value={declareCurrency}
+                    onChange={(e) => setDeclareCurrency(e.target.value)}
+                    className="px-2 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary outline-none cursor-pointer shrink-0"
+                  >
+                    <option value="VND">VNĐ</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+                {declareCurrency === 'USD' && declareCost && (
+                  <span className="block text-xs text-slate-500 font-bold mt-1">
+                    ~ {new Intl.NumberFormat('vi-VN').format(Math.round(Number(declareCost) * 25400))} VNĐ
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="flex justify-end gap-2.5 pt-2">
+            <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
                 onClick={() => setIsDeclareModalOpen(false)}
@@ -3415,7 +3845,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
       )}
       {/* Edit Personal License Modal */}
       {isEditLicenseModalOpen && editingLicense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <form onSubmit={handleEditLicense} className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div>
               <h2 className="text-lg font-bold text-markee-text">Chỉnh sửa tài khoản cá nhân</h2>
@@ -3455,15 +3885,31 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí (VNĐ/tháng)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    required
-                    value={editLicenseCost}
-                    onChange={(e) => setEditLicenseCost(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
-                  />
+                  <label className="block text-xs font-semibold text-markee-text mb-1">Chi phí</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      required
+                      value={editLicenseCost}
+                      onChange={(e) => setEditLicenseCost(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary"
+                    />
+                    <select
+                      value={editLicenseCurrency}
+                      onChange={(e) => setEditLicenseCurrency(e.target.value)}
+                      className="px-2 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary outline-none cursor-pointer shrink-0"
+                    >
+                      <option value="VND">VNĐ</option>
+                      <option value="USD">USD</option>
+                    </select>
+                  </div>
+                  {editLicenseCurrency === 'USD' && editLicenseCost && (
+                    <span className="block text-[10px] text-slate-500 font-bold mt-1">
+                      ~ {new Intl.NumberFormat('vi-VN').format(Math.round(Number(editLicenseCost) * 25400))} VNĐ
+                    </span>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-markee-text mb-1">Ngày hết hạn</label>
@@ -3502,7 +3948,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
 
       {/* Delete Confirmation Modal */}
       {deletingLicense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-sm w-full p-6 space-y-4">
             <div>
               <h2 className="text-sm font-bold text-markee-text">Xác nhận xóa tài khoản</h2>
@@ -3569,7 +4015,7 @@ interface FlattenedSummary {
   timestamp: string;
 }
 
-function KnowledgeHubDashboard() {
+function KnowledgeHubDashboard({ setActiveTab }: { setActiveTab: (tab: 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file') => void }) {
   const [stats, setStats] = useState<CurationStats>({ rawSessions: 0, wipDrafts: 0, knowledgeHub: 0 });
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -3582,7 +4028,7 @@ function KnowledgeHubDashboard() {
     try {
       const [curationStats, allProjects] = await Promise.all([
         fetchCurationStats(),
-        fetchProjects()
+        fetchProjects(undefined, undefined, 'WIP_GLOBAL')
       ]);
       setStats(curationStats);
       setProjects(allProjects);
@@ -3629,7 +4075,7 @@ function KnowledgeHubDashboard() {
     const cleanSearch = removeVietnameseTones(searchTerm);
     return flattenedSummaries.filter(s => {
       const cleanTitle = removeVietnameseTones(s.title);
-      const matchSearch = cleanTitle.includes(cleanSearch) || 
+      const matchSearch = cleanTitle.includes(cleanSearch) ||
         s.insights.some(i => removeVietnameseTones(i).includes(cleanSearch));
       const matchProject = selectedProjectFilter === 'Tất cả' || s.projectName === selectedProjectFilter;
       return matchSearch && matchProject;
@@ -3674,7 +4120,7 @@ function KnowledgeHubDashboard() {
           {/* Cột trái: Các bộ lọc */}
           <aside className="lg:col-span-1 bg-white p-5 rounded-xl border border-markee-border shadow-xs space-y-4 self-start">
             <h3 className="text-xs font-bold text-markee-text uppercase tracking-wider border-b border-gray-100 pb-2">Bộ lọc</h3>
-            
+
             <div className="space-y-1.5">
               <label htmlFor="projectFilterSelect" className="block text-xs font-semibold text-markee-text">Dự án</label>
               <select
@@ -3726,7 +4172,7 @@ function KnowledgeHubDashboard() {
                       </span>
                     </div>
 
-                    <p className="text-xs text-markee-muted line-clamp-2">
+                    <p className="text-xs text-markee-muted line-clamp-3 leading-relaxed">
                       {snippet || 'Chưa có nội dung tóm tắt chi tiết.'}
                     </p>
 
@@ -3745,7 +4191,15 @@ function KnowledgeHubDashboard() {
                           <span>{summary.model}</span>
                         </div>
                       </div>
-                      <span className="text-markee-primary text-[10px] font-bold">Xem chi tiết →</span>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSummary(summary)}
+                          className="bg-markee-primary/10 hover:bg-markee-primary/20 text-markee-primary font-bold px-2.5 py-1 rounded-lg transition-all border-0 cursor-pointer text-[10px] shadow-3xs"
+                        >
+                          Xem chi tiết →
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -3763,19 +4217,21 @@ function KnowledgeHubDashboard() {
 
       {/* Modal chi tiết Master Summary */}
       {selectedSummary && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[85vh]">
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
-              <h3 className="text-base font-bold text-markee-text">Chi tiết Tri thức Dự án</h3>
+              <h3 className="text-base font-bold text-markee-text truncate max-w-[85%]" title={selectedSummary.title}>
+                {selectedSummary.title}
+              </h3>
               <button
                 type="button"
                 onClick={() => setSelectedSummary(null)}
-                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold border-0 bg-transparent"
               >
                 ✕
               </button>
             </div>
-            
+
             <div className="flex-1 overflow-y-auto p-6 space-y-5">
               <div className="space-y-4">
                 <div>
@@ -3784,17 +4240,10 @@ function KnowledgeHubDashboard() {
                 </div>
 
                 <div>
-                  <h4 className="text-xs font-bold text-markee-muted uppercase tracking-wider mb-1">Tiêu đề tri thức</h4>
-                  <p className="text-base font-bold text-markee-text bg-gray-50 border border-gray-150 p-3 rounded-lg">{selectedSummary.title}</p>
-                </div>
-                
-                <div>
                   <h4 className="text-xs font-bold text-markee-muted uppercase tracking-wider mb-2">Insight cốt lõi</h4>
-                  <ul className="list-disc pl-5 text-sm text-markee-text space-y-2">
-                    {selectedSummary.insights.map((insight, idx) => (
-                      <li key={idx} className="leading-relaxed">{insight}</li>
-                    ))}
-                  </ul>
+                  <div className="text-sm text-markee-text whitespace-pre-wrap leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-4 max-h-[40vh] overflow-y-auto font-medium">
+                    {selectedSummary.insights.map((insight) => `- ${insight}`).join('\n')}
+                  </div>
                 </div>
 
                 {/* Horizontal Meta Info */}
@@ -3827,13 +4276,31 @@ function KnowledgeHubDashboard() {
               </div>
             </div>
 
-            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end bg-markee-bg/10 shrink-0">
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-3 bg-markee-bg/10 shrink-0">
               <button
                 type="button"
                 onClick={() => setSelectedSummary(null)}
                 className="px-4 py-2 border border-markee-border bg-white text-markee-text hover:bg-markee-bg rounded-lg transition-colors text-xs font-semibold cursor-pointer"
               >
                 Đóng
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const summaryContent = selectedSummary.insights.map(i => `- ${i}`).join('\n');
+                  const payload = {
+                    id: selectedSummary.title + selectedSummary.timestamp,
+                    title: selectedSummary.title,
+                    content: summaryContent,
+                    projectName: selectedSummary.projectName
+                  };
+                  sessionStorage.setItem('markee_pending_knowledge', JSON.stringify(payload));
+                  setSelectedSummary(null);
+                  setActiveTab('ai_chat');
+                }}
+                className="bg-markee-primary hover:bg-markee-hover text-white px-4 py-2 rounded-lg transition-colors text-xs font-semibold cursor-pointer border-0 shadow-sm"
+              >
+                🪄 Chat với tri thức này
               </button>
             </div>
           </div>
@@ -3846,15 +4313,15 @@ function KnowledgeHubDashboard() {
 function PromptText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const shouldTruncate = text.length > 180 || text.split('\n').length > 3;
-  
+
   if (!shouldTruncate) {
     return <p className="whitespace-pre-wrap leading-relaxed">{text}</p>;
   }
-  
+
   const displayText = expanded
     ? text
     : text.slice(0, 180) + '...';
-    
+
   return (
     <div>
       <p className="whitespace-pre-wrap leading-relaxed">{displayText}</p>
@@ -3889,13 +4356,13 @@ function getRelativeTime(dateString: string): string {
   if (!dateString) return '';
   const now = new Date();
   const date = new Date(dateString);
-  
+
   const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const dateDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  
+
   const diffTime = nowDay.getTime() - dateDay.getTime();
   const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-  
+
   if (diffDays <= 0) {
     return 'Hôm nay';
   }
@@ -3921,7 +4388,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   const [projectSearch, setProjectSearch] = useState('');
   const [projectPage, setProjectPage] = useState(0);
 
-  const PROJECT_PAGE_SIZE = 8;
+  const PROJECT_PAGE_SIZE = 9;
   const filteredProjects = useMemo(() => {
     return projects.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()));
   }, [projects, projectSearch]);
@@ -3935,9 +4402,31 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     setProjectPage(0);
   }, [projectSearch]);
 
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [loading, setLoading] = useState(true);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [projectTab, setProjectTab] = useState<'timeline' | 'knowledge_hub'>('timeline');
+  const [projectTab, _setProjectTab] = useState<'timeline' | 'knowledge_hub'>(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const ptab = searchParams.get('ptab');
+      if (ptab && ['timeline', 'knowledge_hub'].includes(ptab)) {
+        return ptab as 'timeline' | 'knowledge_hub';
+      }
+    }
+    return 'timeline';
+  });
+
+  const setProjectTab = (tab: 'timeline' | 'knowledge_hub') => {
+    _setProjectTab(tab);
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      params.set('ptab', tab);
+      router.replace(`${window.location.pathname}?${params.toString()}`);
+    }
+  };
 
   // Modal logs and members states
   const [members, setMembers] = useState<{ email: string; name: string; avatarColor: string }[]>([]);
@@ -3948,6 +4437,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   const [logsLoading, setLogsLoading] = useState(false);
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const filteredLogs = logs;
 
   // Create project states
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -3990,7 +4480,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
       if (error) throw error;
 
       showToast('Xóa bản nháp thành công!', 'success');
-      
+
       const targetId = activeDeleteWIP.id;
       setDeletingIds(prev => [...prev, targetId]);
       setActiveDeleteWIP(null);
@@ -4025,7 +4515,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
       if (error) throw error;
 
       showToast('Chuyển dự án thành công!', 'success');
-      
+
       const targetId = activeMoveWIP.id;
       setDeletingIds(prev => [...prev, targetId]);
       setActiveMoveWIP(null);
@@ -4064,13 +4554,13 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     try {
       const { error } = await supabase
         .from('skill_library')
-        .update({ 
-          title: editTitle, 
-          markdown_content: editContent, 
-          team_track: editTrack 
+        .update({
+          title: editTitle,
+          markdown_content: editContent,
+          team_track: editTrack
         })
         .eq('id', activeEditWIP.id);
-      
+
       if (error) throw error;
 
       showToast('Cập nhật bản nháp thành công!', 'success');
@@ -4103,10 +4593,9 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   async function handleCreateProject() {
     const trimmedName = projectName.trim();
     if (!trimmedName) return;
-    if (isCreating) return;
     setIsCreating(true);
     try {
-      const newProject = await createNewProject(trimmedName, profile.email);
+      const newProject = await createNewProject(trimmedName, profile.email, 'WIP_GLOBAL');
       const projectWithAuthor: Project = {
         ...newProject,
         logCount: 0,
@@ -4128,7 +4617,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   async function loadProjects() {
     setLoading(true);
     try {
-      const data = await fetchProjects();
+      const data = await fetchProjects(undefined, undefined, 'WIP_GLOBAL');
       setProjects(data);
     } finally {
       setLoading(false);
@@ -4136,11 +4625,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   }
 
 
-  const logsLoadingRef = useRef(false);
-
   async function loadUserLogs(projId: number, userEmail: string, isInitial = false) {
-    if (logsLoadingRef.current && !isInitial) return;
-    logsLoadingRef.current = true;
     setLogsLoading(true);
     const nextPage = isInitial ? 0 : page + 1;
     try {
@@ -4156,7 +4641,6 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
       console.error(err);
     } finally {
       setLogsLoading(false);
-      logsLoadingRef.current = false;
     }
   }
 
@@ -4215,12 +4699,12 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: selectedProject.id }),
       });
-      
+
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Lỗi khi gọi API tổng hợp tri thức');
       }
-      
+
       setSummaryResult(data);
     } catch (err: unknown) {
       const errorObj = err instanceof Error ? err : new Error('Lỗi khi tổng hợp tri thức dự án');
@@ -4232,13 +4716,21 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     }
   }
 
-  const [isSavingSummary, setIsSavingSummary] = useState(false);
-
   async function handleSaveSummary(newSummary: SummaryItem) {
     if (!selectedProject) return;
-    if (isSavingSummary) return;
-    setIsSavingSummary(true);
-    
+
+    let currentSummaries: SummaryItem[] = [];
+    if (selectedProject.master_summary) {
+      try {
+        const parsed = JSON.parse(selectedProject.master_summary) as SummaryItem[];
+        if (Array.isArray(parsed)) {
+          currentSummaries = parsed;
+        }
+      } catch (e) {
+        console.error("Error parsing existing master_summary:", e);
+      }
+    }
+
     const summaryItem = {
       title: newSummary.title,
       insights: newSummary.insights,
@@ -4247,28 +4739,14 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
       model: newSummary.model,
       timestamp: new Date().toISOString(),
     };
-    
+
+    const updatedSummaries = [...currentSummaries, summaryItem];
+    const serialized = JSON.stringify(updatedSummaries);
+
     try {
       showToast('Đang lưu bản tổng hợp...', 'loading');
-      await supabase.rpc('append_project_summary', {
-        p_project_id: selectedProject.id,
-        p_item_json: JSON.stringify([summaryItem]),
-      });
-      
-      let currentSummaries: SummaryItem[] = [];
-      if (selectedProject.master_summary) {
-        try {
-          const parsed = JSON.parse(selectedProject.master_summary) as SummaryItem[];
-          if (Array.isArray(parsed)) {
-            currentSummaries = parsed;
-          }
-        } catch (e) {
-          console.error("Error parsing existing master_summary:", e);
-        }
-      }
-      const updatedSummaries = [...currentSummaries, summaryItem];
-      const serialized = JSON.stringify(updatedSummaries);
-      
+      await updateProjectSummary(selectedProject.id, serialized);
+
       const updatedProj = {
         ...selectedProject,
         master_summary: serialized,
@@ -4276,7 +4754,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
       };
       setSelectedProject(updatedProj);
       setProjects(prev => prev.map(p => p.id === selectedProject.id ? updatedProj : p));
-      
+
       showToast('Đã lưu tổng hợp tri thức thành công!', 'success');
       setProjectTab('knowledge_hub');
       setIsSummaryModalOpen(false);
@@ -4284,8 +4762,6 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     } catch (err) {
       console.error(err);
       showToast('Lỗi khi lưu tổng hợp tri thức', 'error');
-    } finally {
-      setIsSavingSummary(false);
     }
   }
 
@@ -4297,13 +4773,12 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
     <main className="mx-auto max-w-7xl space-y-5 p-5 relative">
       {/* Toast Notification */}
       {toast && (
-        <div className={`fixed top-4 right-4 z-100 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${
-          toast.type === 'loading'
+        <div className={`fixed top-4 right-4 z-100 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${toast.type === 'loading'
             ? 'bg-amber-50 border-amber-200 text-amber-800'
             : toast.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
               : 'bg-red-50 border-red-200 text-red-800'
-        }`}>
+          }`}>
           {toast.type === 'loading' && <span className="animate-spin mr-1">⏳</span>}
           {toast.type === 'success' && <span className="mr-1">✓</span>}
           {toast.type === 'error' && <span className="mr-1">⚠️</span>}
@@ -4399,9 +4874,8 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                         <div
                           key={m.email}
                           title={m.name}
-                          className={`inline-flex items-center justify-center w-7 h-7 rounded-full border text-[10px] font-bold shadow-2xs shrink-0 select-none ${
-                            softBgClasses[idx % softBgClasses.length]
-                          }`}
+                          className={`inline-flex items-center justify-center w-7 h-7 rounded-full border text-[10px] font-bold shadow-2xs shrink-0 select-none ${softBgClasses[idx % softBgClasses.length]
+                            }`}
                         >
                           {getInitials(m.name)}
                         </div>
@@ -4442,7 +4916,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
 
       {/* Activity Log Timeline Modal */}
       {selectedProject && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-5xl w-full h-[80vh] max-h-[85vh] overflow-hidden flex flex-col">
             {/* Modal Header */}
             <div className="border-b border-markee-border px-6 py-4 flex items-center justify-between bg-markee-bg/10 shrink-0">
@@ -4451,18 +4925,19 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                 <p className="text-xs text-markee-muted mt-0.5">Timeline ghi nhận các phiên làm việc và tri thức của dự án.</p>
               </div>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleSummarizeProject}
-                  disabled={members.length === 0}
-                  className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer ${
-                    members.length === 0
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                      : 'bg-markee-primary hover:bg-markee-hover text-white'
-                  }`}
-                >
-                  Tổng hợp Tri thức Dự án
-                </button>
+                {profile.role === 'admin' && (
+                  <button
+                    type="button"
+                    onClick={handleSummarizeProject}
+                    disabled={members.length === 0}
+                    className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer ${members.length === 0
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-60'
+                        : 'bg-markee-primary hover:bg-markee-hover text-white'
+                      }`}
+                  >
+                    Tổng hợp Tri thức Dự án
+                  </button>
+                )}
                 <button
                   onClick={() => setSelectedProject(null)}
                   className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold"
@@ -4479,22 +4954,20 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                 <button
                   type="button"
                   onClick={() => setProjectTab('timeline')}
-                  className={`px-4 py-2 text-xs font-bold transition-all border-b-2 cursor-pointer ${
-                    projectTab === 'timeline'
+                  className={`px-4 py-2 text-xs font-bold transition-all border-b-2 cursor-pointer ${projectTab === 'timeline'
                       ? 'border-markee-primary text-markee-primary'
                       : 'border-transparent text-markee-muted hover:text-markee-text'
-                  }`}
+                    }`}
                 >
                   📅 Lịch sử Dự án
                 </button>
                 <button
                   type="button"
                   onClick={() => setProjectTab('knowledge_hub')}
-                  className={`px-4 py-2 text-xs font-bold transition-all border-b-2 cursor-pointer ${
-                    projectTab === 'knowledge_hub'
+                  className={`px-4 py-2 text-xs font-bold transition-all border-b-2 cursor-pointer ${projectTab === 'knowledge_hub'
                       ? 'border-markee-primary text-markee-primary'
                       : 'border-transparent text-markee-muted hover:text-markee-text'
-                  }`}
+                    }`}
                 >
                   🧠 Knowledge Hub ({
                     (() => {
@@ -4525,7 +4998,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                           console.error("Error parsing master_summary:", e);
                         }
                       }
-                      
+
                       if (summaries.length === 0) {
                         return (
                           <div className="text-center py-10 text-sm text-markee-muted">
@@ -4533,7 +5006,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                           </div>
                         );
                       }
-                      
+
                       return (
                         <div className="space-y-4">
                           {summaries.slice().reverse().map((summary: SummaryItem, idx: number) => (
@@ -4581,7 +5054,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                         <h4 className="text-xs font-bold text-markee-muted uppercase tracking-wider mb-3">
                           Thành viên hoạt động
                         </h4>
-                        
+
                         {membersLoading ? (
                           <div className="text-xs text-markee-muted py-2">Đang tải...</div>
                         ) : members.length === 0 ? (
@@ -4596,11 +5069,10 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                   key={m.email}
                                   type="button"
                                   onClick={() => handleSelectMember(m.email)}
-                                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all border ${
-                                    isActive
+                                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all border ${isActive
                                       ? 'bg-markee-primary/10 border-markee-primary/20 text-markee-primary font-bold'
                                       : 'hover:bg-slate-100 border-transparent text-markee-text'
-                                  }`}
+                                    }`}
                                 >
                                   <div
                                     className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-[10px] text-white shrink-0 select-none shadow-3xs"
@@ -4629,16 +5101,18 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
 
                     {/* Right Timeline Panel */}
                     <div className="flex-1 overflow-y-auto pl-2 flex flex-col pr-1 h-full">
+
+
                       {logsLoading && logs.length === 0 ? (
                         <div className="text-center py-10 text-sm text-markee-sub">Đang tải nhật ký hoạt động...</div>
-                      ) : logs.length === 0 ? (
+                      ) : filteredLogs.length === 0 ? (
                         <div className="text-center py-10 text-sm text-markee-sub">
-                          Không có log hoạt động nào.
+                          Không có log hoạt động nào khớp bộ lọc.
                         </div>
                       ) : (
                         <div className="space-y-6">
                           <div className="relative border-l-2 border-markee-border pl-6 ml-3 space-y-8">
-                            {logs.map((log) => {
+                            {filteredLogs.map((log) => {
                               const dateStr = new Date(log.created_at).toLocaleString('vi-VN', {
                                 hour: '2-digit',
                                 minute: '2-digit',
@@ -4664,24 +5138,26 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                 ? "bg-purple-100 text-purple-700 font-semibold px-2 py-0.5 rounded text-xs"
                                 : "bg-gray-200 text-gray-700 px-2 py-0.5 rounded text-xs";
 
-                              const isOwnWIP = profile.email === log.author_id;
+                              const isOwnWIP = profile.email === log.author_id ||
+                                (profile.dbUser?.id && String(profile.dbUser.id) === String(log.author_id)) ||
+                                (profile.authUser?.id && String(profile.authUser.id) === String(log.author_id));
+                              const canManageWIP = profile.role === 'admin' || isOwnWIP;
                               const isDeleting = deletingIds.includes(log.id);
 
                               return (
-                                <div 
-                                  key={log.id} 
-                                  className={`relative transition-all duration-500 ease-out ${
-                                    isDeleting 
-                                      ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden pl-0' 
+                                <div
+                                  key={log.id}
+                                  className={`relative transition-all duration-500 ease-out ${isDeleting
+                                      ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden pl-0'
                                       : ''
-                                  }`}
+                                    }`}
                                 >
                                   {/* Timeline Bullet Node */}
                                   <div
                                     className="absolute -left-7.75 top-1 w-4 h-4 rounded-full border-2 border-white shadow-xs bg-markee-primary"
                                     title={log.author_id}
                                   />
-                                  
+
                                   {/* Log Item Header */}
                                   <div className="flex flex-wrap items-center gap-2 text-xs">
                                     <span className="font-bold text-markee-text">{dateStr}</span>
@@ -4714,8 +5190,8 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                               </span>
                                             )}
                                           </div>
-                                          
-                                          {isOwnWIP && (
+
+                                          {canManageWIP && (
                                             <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
                                               <button
                                                 type="button"
@@ -4804,7 +5280,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
 
       {/* Edit WIP Modal */}
       {activeEditWIP && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in duration-200">
             {/* Header */}
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
@@ -4892,7 +5368,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
 
       {/* Move WIP Modal */}
       {activeMoveWIP && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
             {/* Header */}
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
@@ -4912,10 +5388,10 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
             {/* Body */}
             <div className="p-6 space-y-4">
               <p className="text-xs text-markee-muted leading-relaxed">
-                Bạn đang chuyển bản nháp <span className="font-bold text-markee-text">&quot;{activeMoveWIP.title || 'Không có tiêu đề'}&quot;</span> sang một dự án khác. 
+                Bạn đang chuyển bản nháp <span className="font-bold text-markee-text">&quot;{activeMoveWIP.title || 'Không có tiêu đề'}&quot;</span> sang một dự án khác.
                 Sau khi chuyển thành công, bản nháp này sẽ biến mất khỏi dòng thời gian của dự án hiện tại.
               </p>
-              
+
               <div>
                 <label htmlFor="moveWipProjectSelect" className="block text-xs font-semibold text-markee-text mb-1.5">
                   Chọn Dự án đích
@@ -4968,7 +5444,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
 
       {/* Delete WIP Modal */}
       {activeDeleteWIP && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-sm w-full overflow-hidden flex flex-col animate-in fade-in zoom-in duration-200">
             {/* Header */}
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
@@ -4985,7 +5461,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
             {/* Body */}
             <div className="p-6">
               <p className="text-xs text-markee-muted leading-relaxed">
-                Bạn có chắc chắn muốn xóa bản nháp <span className="font-bold text-markee-text">&quot;{activeDeleteWIP.title || 'Không có tiêu đề'}&quot;</span>? 
+                Bạn có chắc chắn muốn xóa bản nháp <span className="font-bold text-markee-text">&quot;{activeDeleteWIP.title || 'Không có tiêu đề'}&quot;</span>?
                 Hành động này không thể hoàn tác.
               </p>
             </div>
@@ -5014,7 +5490,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
 
       {/* Create Project Modal */}
       {isCreateModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
             <div>
               <h2 className="text-lg font-bold text-markee-text">Tạo dự án mới</h2>
@@ -5063,7 +5539,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
 
       {/* Summarize Project Result Modal */}
       {isSummaryModalOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-2xl w-full overflow-hidden flex flex-col max-h-[85vh]">
             {/* Header */}
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
@@ -5080,7 +5556,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                 ✕
               </button>
             </div>
-            
+
             {/* Body */}
             <div className="flex-1 overflow-y-auto p-6 space-y-5">
               {isSummarizing ? (
@@ -5095,7 +5571,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                     <h4 className="text-xs font-bold text-markee-muted uppercase tracking-wider mb-1">Tiêu đề đề xuất</h4>
                     <p className="text-base font-bold text-markee-text bg-gray-50 border border-gray-150 p-3 rounded-lg">{summaryResult.title}</p>
                   </div>
-                  
+
                   <div>
                     <h4 className="text-xs font-bold text-markee-muted uppercase tracking-wider mb-2">Insight cốt lõi</h4>
                     <ul className="list-disc pl-5 text-sm text-markee-text space-y-2">
