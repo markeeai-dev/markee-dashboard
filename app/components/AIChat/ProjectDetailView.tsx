@@ -40,6 +40,8 @@ interface ProjectDetailViewProps {
   departments: { id: number; name: string }[];
   teams: { id: number; name: string; department_id: number }[];
   skills: { id: number; title: string; team_id: number; markdown_content: string }[];
+  stagedFile?: File | null;
+  setStagedFile?: (file: File | null) => void;
 }
 
 export default function ProjectDetailView({
@@ -58,6 +60,8 @@ export default function ProjectDetailView({
   departments,
   teams,
   skills,
+  stagedFile = null,
+  setStagedFile,
 }: ProjectDetailViewProps) {
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -182,6 +186,7 @@ export default function ProjectDetailView({
               skills={skills}
               hideProjectSelector={true}
               onOpenSkillModal={() => setIsSkillModalOpen(true)}
+              setStagedFile={setStagedFile}
             />
           </div>
         </div>

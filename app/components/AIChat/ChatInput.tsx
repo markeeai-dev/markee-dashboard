@@ -38,6 +38,7 @@ interface ChatInputProps {
   onClearPendingKnowledgeProjectName?: () => void;
   onSummarizeChat?: () => void;
   hasMessages?: boolean;
+  setStagedFile?: (file: File | null) => void;
 }
 
 export default function ChatInput({
@@ -63,11 +64,31 @@ export default function ChatInput({
   onClearPendingKnowledgeProjectName,
   onSummarizeChat,
   hasMessages = false,
+  setStagedFile,
 }: ChatInputProps) {
   const [isPlusMenuOpen, setIsPlusMenuOpen] = useState(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [projectSearchQuery, setProjectSearchQuery] = useState('');
+  // Local state render pill ngay lập tức - không phụ thuộc prop chain
+  const [stagedFile, setStagedFileLocal] = useState<File | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // KHÔNG dùng fileInputRef nữa - dùng global DOM ID để tránh mất ref khi dropdown unmount
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    console.log('=== ĐÃ CHỌN FILE ===', file); // Bắt buộc giữ dòng log này
+    if (file) {
+      setStagedFileLocal(file);
+      // Gọi callback báo lên AIChat (nếu có prop setStagedFile truyền xuống)
+      if (typeof setStagedFile === 'function') setStagedFile(file);
+    }
+    e.target.value = ''; // Reset để chọn lại được
+  };
+
+  const handleClearStagedFile = () => {
+    setStagedFileLocal(null);
+    if (typeof setStagedFile === 'function') setStagedFile(null);
+  };
 
   const searchParams = useSearchParams();
   const sessionIdParam = searchParams?.get('session_id');
@@ -96,6 +117,14 @@ export default function ChatInput({
 
   return (
     <div className="border-t border-slate-100 p-4 shrink-0 bg-white relative">
+      {/* INPUT FILE: Đặt ngoài cùng với global ID, KHÔNG nằm trong dropdown */}
+      <input
+        id="global-hidden-file-input"
+        type="file"
+        onChange={handleFileChange}
+        accept=".txt,.html,.csv,.json,.md,.js,.tsx"
+        className="hidden"
+      />
       {/* Plus Menu Popover */}
       {isPlusMenuOpen && (
         <>
@@ -128,6 +157,19 @@ export default function ChatInput({
                 <span className="text-[10px] text-slate-400 font-bold">➔</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => {
+                // Vanilla DOM: dùng ID thay vì ref để tránh mất ràng buộc khi dropdown unmount
+                document.getElementById('global-hidden-file-input')?.click();
+                setIsPlusMenuOpen(false);
+              }}
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:text-slate-900 hover:bg-slate-50 font-semibold flex items-center justify-between cursor-pointer bg-transparent border-0 transition-colors"
+            >
+              <span>📎 Đính kèm File</span>
+              <span className="text-[10px] text-slate-400 font-bold">➔</span>
+            </button>
 
             {/* Tri thức từ Skills Library */}
             <div className="border-t border-slate-100 my-1" />
@@ -171,6 +213,23 @@ export default function ChatInput({
               }}
               className="hover:bg-purple-100 p-0.5 rounded-full cursor-pointer ml-1 flex items-center justify-center border-0 bg-transparent text-purple-400 hover:text-purple-700 transition-colors font-bold text-[10px]"
               title="Gỡ tri thức này"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Staged File Badge */}
+      {stagedFile && (
+        <div className="max-w-4xl mx-auto mb-2 flex items-center gap-2">
+          <div className="inline-flex items-center gap-1.5 bg-slate-100 border border-slate-200 text-slate-700 text-[10px] font-semibold px-2.5 py-1 rounded-lg shadow-3xs max-w-full">
+            <span>📎 {stagedFile.name}</span>
+            <button
+              type="button"
+              onClick={() => handleClearStagedFile()}
+              className="hover:bg-slate-200 p-0.5 rounded-full cursor-pointer ml-1 flex items-center justify-center border-0 bg-transparent text-slate-400 hover:text-slate-700 transition-colors font-bold text-[10px]"
+              title="Gỡ file này"
             >
               ✕
             </button>

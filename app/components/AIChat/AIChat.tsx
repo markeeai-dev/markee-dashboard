@@ -168,6 +168,7 @@ export default function AIChat({ profile }: AIChatProps) {
   const [pendingKnowledgeProjectName, setPendingKnowledgeProjectName] = useState<string | null>(null);
   const [initialMsgToSend, setInitialMsgToSend] = useState<string | null>(null);
   const [hiddenContext, setHiddenContext] = useState<{ title: string; content: string } | null>(null);
+  const [stagedFile, setStagedFile] = useState<File | null>(null);
 
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
@@ -254,6 +255,7 @@ export default function AIChat({ profile }: AIChatProps) {
       }
     }
   }, [profile?.authUser?.id]);
+
 
   // Dismiss toast automatically
   useEffect(() => {
@@ -656,11 +658,35 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
     isSendingRef.current = true;
     setIsGenerating(true);
 
-    // Lớp bảo vệ 1: Clear state ngay tức thì để UI cập nhật giấu badge ngay lập tức
+    // Snapshot and clear state immediately so UI badge disappears at once
     const localHiddenContext = hiddenContext;
-    const localPendingProjectName = pendingKnowledgeProjectName;
+    const localStagedFile = stagedFile;
     setPendingKnowledgeProjectName(null);
     setHiddenContext(null);
+    setStagedFile(null);  // Dọn dẹp ngay, không chờ API
+
+    // Đọc nội dung file (nếu có) bằng FileReader trước khi gửi
+    let enrichedContent = content;
+    if (localStagedFile) {
+      try {
+        const fileText = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => resolve(ev.target?.result as string ?? '');
+          reader.onerror = () => reject(reader.error);
+          reader.readAsText(localStagedFile);
+        });
+        if (fileText) {
+          enrichedContent = `${content}\n\n--- DỮ LIỆU FILE ĐÍNH KÈM: ${localStagedFile.name} ---\n${fileText}`;
+        }
+      } catch (readErr) {
+        console.error('Lỗi đọc file đính kèm:', readErr);
+      }
+    }
+
+    // Short display label in DB/UI (do not store full file content in DB)
+    const dbContent = localStagedFile
+      ? `${content}\n\n📎 Đính kèm: ${localStagedFile.name}`
+      : content;
 
     let currentSessionId = activeSessionId;
 
@@ -669,8 +695,7 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
       if (!currentSessionId) {
         if (!profile?.authUser?.id) return;
         const newSessionId = generateUUID();
-        
-        let finalProjectId = pendingSessionProjectId;
+        const finalProjectId = pendingSessionProjectId;
 
         const { data: newSess, error: sessErr } = await supabase
           .from('chat_sessions')
@@ -689,7 +714,6 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
         setActiveSessionId(newSessionId);
         setPendingSessionProjectId(null);
 
-        // C. Redirect to Chat session UI via search params
         const params = new URLSearchParams(window.location.search);
         params.delete('folderId');
         params.set('tab', 'ai_chat');
@@ -697,16 +721,16 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
         router.replace(`${window.location.pathname}?${params.toString()}`);
       }
 
-      // 2. Insert user message to Supabase
+      // 2. Insert user message to Supabase (display label, not full file content)
       const { error: userMsgErr } = await supabase.from('chat_messages').insert({
         session_id: currentSessionId,
         role: 'user',
-        content,
+        content: dbContent,
       });
       if (userMsgErr) throw userMsgErr;
 
-      // 3. Update local state
-      const newUserMsg: Message = { role: 'user', content };
+      // 3. Update local state (show display label in chat bubble)
+      const newUserMsg: Message = { role: 'user', content: dbContent };
       setMessages((prev) => [...prev, newUserMsg]);
 
       // 4. Update session title if it was the default title
@@ -723,11 +747,11 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
         );
       }
 
-      // 5. Build context history for OpenRouter
-      const history: { role: string; content: string }[] = [...messages, newUserMsg].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      // 5. Build context history — use enrichedContent (with file text) for AI only
+      const history: { role: string; content: string }[] = [
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+        { role: 'user', content: enrichedContent },
+      ];
 
       if (localHiddenContext) {
         history.unshift({
@@ -757,13 +781,11 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
           currentDisabled.add(model);
           setDisabledModels(new Set(currentDisabled));
 
-          // Tìm model tiếp theo khả dụng
           const nextModel = fallbackList.find(m => !currentDisabled.has(m));
           if (!nextModel) {
             throw new Error("Tất cả các model trong chuỗi dự phòng đều thất bại.");
           }
 
-          // Cảnh báo Toast về việc Fallback
           setToast({
             message: `${model} đang bận, đã tự động dùng ${nextModel}`,
             type: 'warning'
@@ -776,7 +798,6 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
       const result = await runFetchWithFallback(selectedModel);
       aiReply = result.reply;
 
-      // Nếu có sự thay đổi model so với model ban đầu được chọn
       if (result.finalModel !== selectedModel) {
         setSelectedModel(result.finalModel);
       }
@@ -811,9 +832,35 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
     isSendingRef.current = true;
     setIsGenerating(true);
 
+    const localStagedFile = stagedFile;
+    setStagedFile(null);  // Dọn dẹp ngay lập tức
+
+    // Đọc nội dung file (nếu có) bằng FileReader trước khi gửi
+    let enrichedContent = content;
+    if (localStagedFile && content !== 'Đoạn chat mới') {
+      try {
+        const fileText = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => resolve(ev.target?.result as string ?? '');
+          reader.onerror = () => reject(reader.error);
+          reader.readAsText(localStagedFile);
+        });
+        if (fileText) {
+          enrichedContent = `${content}\n\n--- DỮ LIỆU FILE ĐÍNH KÈM: ${localStagedFile.name} ---\n${fileText}`;
+        }
+      } catch (readErr) {
+        console.error('Lỗi đọc file đính kèm:', readErr);
+      }
+    }
+
+    const dbContent = (localStagedFile && content !== 'Đoạn chat mới')
+      ? `${content}\n\n📎 Đính kèm: ${localStagedFile.name}`
+      : content;
+
     try {
       if (!profile?.authUser?.id) return;
       const newSessionId = generateUUID();
+
       const title = content === 'Đoạn chat mới' ? 'Đoạn chat mới' : content.slice(0, 30) + (content.length > 30 ? '...' : '');
 
       const { data: newSess, error: sessErr } = await supabase
@@ -836,11 +883,11 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
         const { error: userMsgErr } = await supabase.from('chat_messages').insert({
           session_id: newSessionId,
           role: 'user',
-          content,
+          content: dbContent,
         });
         if (userMsgErr) throw userMsgErr;
 
-        const newUserMsg: Message = { role: 'user', content };
+        const newUserMsg: Message = { role: 'user', content: dbContent };
         setMessages([newUserMsg]);
 
         const params = new URLSearchParams(window.location.search);
@@ -849,7 +896,11 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
         params.set('session_id', newSessionId);
         router.replace(`${window.location.pathname}?${params.toString()}`);
 
-        const history = [newUserMsg];
+        // History dùng enrichedContent để AI đọc được nội dung file
+        const history: { role: string; content: string }[] = [{
+          role: 'user',
+          content: enrichedContent
+        }];
         let aiReply = '';
         const currentDisabled = new Set(disabledModels);
         const fallbackList = [
@@ -986,6 +1037,8 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
           departments={departments}
           teams={teams}
           skills={skills}
+          stagedFile={stagedFile}
+          setStagedFile={setStagedFile}
         />
       ) : (
         <ChatWindow
@@ -1010,6 +1063,8 @@ ${messages.map(m => `${m.role === 'user' ? 'Người dùng' : 'AI'}: ${m.content
           pendingKnowledgeProjectName={pendingKnowledgeProjectName}
           onClearPendingKnowledgeProjectName={() => setPendingKnowledgeProjectName(null)}
           onSummarizeChat={handleSummarizeChat}
+          stagedFile={stagedFile}
+          setStagedFile={setStagedFile}
         />
       )}
 

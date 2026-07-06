@@ -1,8 +1,10 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Search, Download, FileText, Image as ImageIcon, RefreshCw, AlertCircle } from 'lucide-react';
+import { Search, Download, FileText, Image as ImageIcon, RefreshCw, AlertCircle, Eye } from 'lucide-react';
+import FilePreviewModal from './FilePreviewModal';
 
 interface AISession {
   id: number;
@@ -30,12 +32,23 @@ interface AppUser {
   full_name: string | null;
 }
 
-export default function FileManagement() {
+interface FileManagementProps {
+  setActiveTab?: (tab: 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file') => void;
+}
+
+export default function FileManagement({ setActiveTab }: FileManagementProps) {
+  const router = useRouter();
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [previewFile, setPreviewFile] = useState<{
+    file_name: string;
+    storage_path: string;
+    mime_type: string;
+    source_url: string;
+  } | null>(null);
 
   const fetchFiles = async () => {
     setLoading(true);
@@ -293,16 +306,31 @@ export default function FileManagement() {
 
                       {/* Download Action */}
                       <td className="p-4 text-center">
-                        <a
-                          href={fileUrl}
-                          download={file.file_name}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center p-2 text-slate-400 hover:text-markee-primary hover:bg-red-50 rounded-xl transition-colors border-0 bg-transparent cursor-pointer"
-                          title="Tải về tệp tin"
-                        >
-                          <Download className="w-4 h-4" />
-                        </a>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewFile({
+                              file_name: file.file_name,
+                              storage_path: file.storage_path,
+                              mime_type: file.mime_type || '',
+                              source_url: fileUrl
+                            })}
+                            className="inline-flex items-center justify-center p-2 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-xl transition-colors border-0 bg-transparent cursor-pointer"
+                            title="Xem trước tệp tin"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <a
+                            href={fileUrl}
+                            download={file.file_name}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center p-2 text-slate-400 hover:text-markee-primary hover:bg-red-50 rounded-xl transition-colors border-0 bg-transparent cursor-pointer"
+                            title="Tải về tệp tin"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -312,6 +340,20 @@ export default function FileManagement() {
           </div>
         </div>
       )}
+      <FilePreviewModal
+        isOpen={!!previewFile}
+        onClose={() => setPreviewFile(null)}
+        file={previewFile}
+        onSelectForChat={() => {
+          if (setActiveTab) {
+            setActiveTab('ai_chat');
+          } else {
+            const params = new URLSearchParams(window.location.search);
+            params.set('tab', 'ai_chat');
+            router.replace(`${window.location.pathname}?${params.toString()}`);
+          }
+        }}
+      />
     </main>
   );
 }

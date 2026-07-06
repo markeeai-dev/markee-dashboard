@@ -75,6 +75,7 @@ import { supabase } from '@/lib/supabase';
 import UserGuideModal from './UserGuideModal';
 import AIChat from './AIChat/AIChat';
 import FileManagement from './FileManagement';
+import FilePreviewModal from './FilePreviewModal';
 
 const PAGE_SIZE = 6;
 const TOOL_COLORS = ['#E3000F', '#FF3344', '#f59e0b', '#a855f7', '#059669', '#0d9488'];
@@ -1023,15 +1024,31 @@ function UserDashboard({
                                       ({formatWipFileSize(parsedAttachedFile.size_bytes)})
                                     </span>
                                   </div>
-                                  <a
-                                    href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsedAttachedFile.storage_path}?download=${parsedAttachedFile.file_name}`}
-                                    download={parsedAttachedFile.file_name}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-markee-primary hover:text-red-700 font-bold rounded text-[11px] transition-colors shrink-0 flex items-center gap-1 cursor-pointer"
-                                  >
-                                    Tải xuống
-                                  </a>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => window.dispatchEvent(new CustomEvent('markee_open_file_preview', {
+                                        detail: {
+                                          file_name: parsedAttachedFile.file_name,
+                                          storage_path: parsedAttachedFile.storage_path,
+                                          mime_type: parsedAttachedFile.mime_type || '',
+                                          source_url: `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsedAttachedFile.storage_path}`
+                                        }
+                                      }))}
+                                      className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-800 font-bold rounded text-[11px] transition-colors flex items-center gap-1 cursor-pointer"
+                                    >
+                                      👁️ Xem trước
+                                    </button>
+                                    <a
+                                      href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsedAttachedFile.storage_path}?download=${parsedAttachedFile.file_name}`}
+                                      download={parsedAttachedFile.file_name}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-markee-primary hover:text-red-700 font-bold rounded text-[11px] transition-colors flex items-center gap-1 cursor-pointer"
+                                    >
+                                      Tải xuống
+                                    </a>
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -1840,6 +1857,12 @@ export default function RoleDashboard() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
+  const [previewFile, setPreviewFile] = useState<{
+    file_name: string;
+    storage_path: string;
+    mime_type: string;
+    source_url: string;
+  } | null>(null);
   const [activeTab, _setActiveTab] = useState<'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file'>(() => {
     if (typeof window !== 'undefined') {
       const searchParams = new URLSearchParams(window.location.search);
@@ -1878,6 +1901,19 @@ export default function RoleDashboard() {
       }
     }
   }, [searchParams, profile?.role]);
+
+  useEffect(() => {
+    const handleOpenPreview = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail) {
+        setPreviewFile(customEvent.detail);
+      }
+    };
+    window.addEventListener('markee_open_file_preview', handleOpenPreview);
+    return () => {
+      window.removeEventListener('markee_open_file_preview', handleOpenPreview);
+    };
+  }, []);
 
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(false);
@@ -2148,12 +2184,18 @@ export default function RoleDashboard() {
           )}
 
           {activeTab === 'quan-ly-file' && (
-            <FileManagement />
+            <FileManagement setActiveTab={setActiveTab} />
           )}
         </div>
       </div>
 
       <UserGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
+      <FilePreviewModal
+        isOpen={!!previewFile}
+        onClose={() => setPreviewFile(null)}
+        file={previewFile}
+        onSelectForChat={() => setActiveTab('ai_chat')}
+      />
     </div>
   );
 }
@@ -5385,15 +5427,31 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                                   ({formatWipFileSize(parsed.size_bytes)})
                                                 </span>
                                               </div>
-                                              <a
-                                                href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsed.storage_path}?download=${parsed.file_name}`}
-                                                download={parsed.file_name}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-markee-primary hover:text-red-700 font-bold rounded text-[11px] transition-colors shrink-0 flex items-center gap-1 cursor-pointer font-sans"
-                                              >
-                                                Tải xuống
-                                              </a>
+                                              <div className="flex items-center gap-2 shrink-0">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => window.dispatchEvent(new CustomEvent('markee_open_file_preview', {
+                                                    detail: {
+                                                      file_name: parsed.file_name,
+                                                      storage_path: parsed.storage_path,
+                                                      mime_type: parsed.mime_type || '',
+                                                      source_url: `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsed.storage_path}`
+                                                    }
+                                                  }))}
+                                                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-800 font-bold rounded text-[11px] transition-colors flex items-center gap-1 cursor-pointer font-sans"
+                                                >
+                                                  👁️ Xem trước
+                                                </button>
+                                                <a
+                                                  href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsed.storage_path}?download=${parsed.file_name}`}
+                                                  download={parsed.file_name}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-markee-primary hover:text-red-700 font-bold rounded text-[11px] transition-colors flex items-center gap-1 cursor-pointer font-sans"
+                                                >
+                                                  Tải xuống
+                                                </a>
+                                              </div>
                                             </div>
                                           );
                                         })()}
