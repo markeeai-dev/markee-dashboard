@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, Files, User, Edit, Trash2, ArrowLeftRight, Settings, Menu } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Medal, Search, ThumbsUp, BookOpen, Plus, X, Folder, Files, User, Edit, Trash2, ArrowLeftRight, Settings, Menu, MoreVertical } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -276,7 +276,23 @@ function ConfirmationModal({
   );
 }
 
-function getSkillTrackName(skill: SkillCard): string {
+function getSkillTrackName(
+  skill: SkillCard,
+  departments: { id: number; name: string }[] = [],
+  teams: { id: number; name: string; department_id: number }[] = []
+): string {
+  if (skill.department_id) {
+    const dept = departments.find((d) => d.id === skill.department_id);
+    if (dept) {
+      if (skill.team_id) {
+        const team = teams.find((t) => t.id === skill.team_id);
+        if (team) {
+          return `${dept.name} - ${team.name}`;
+        }
+      }
+      return dept.name;
+    }
+  }
   return skill.team_track || 'Khác';
 }
 
@@ -286,17 +302,28 @@ function SkillCardItem({
   showStatus = false,
   allowVoting = true,
   onPreview,
+  onEdit,
+  onDelete,
+  departments = [],
+  teams = [],
+  projects = [],
 }: {
   skill: SkillCard;
   userEmail: string;
   showStatus?: boolean;
   allowVoting?: boolean;
   onPreview: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  departments?: { id: number; name: string }[];
+  teams?: { id: number; name: string; department_id: number }[];
+  projects?: { id: number; name: string }[];
 }) {
   const [likes, setLikes] = useState(skill.likes_count || 0);
   const [downloads, setDownloads] = useState(skill.downloads_count || 0);
   const [liked, setLiked] = useState(Boolean(skill.likedByCurrentUser));
   const [busyAction, setBusyAction] = useState<'vote' | 'download' | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const summary = stripMarkdown(skill.markdown_content || '');
 
   async function handleDownload() {
@@ -315,13 +342,14 @@ function SkillCardItem({
 
   const rawType = skill.skill_type || 'Workflow';
   const typeName = rawType === 'context_pack' ? 'Context Pack' : rawType.charAt(0).toUpperCase() + rawType.slice(1);
-  const trackName = getSkillTrackName(skill);
+  const project = (skill as any).project || projects.find((p) => p.id === skill.project_id);
+  const projectName = project?.name || 'Khác';
 
   return (
-    <article className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md flex flex-col justify-between h-full min-h-55">
-      <div>
+    <article className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md flex flex-col h-full min-h-55 relative">
+      <div className="flex-grow">
         {/* Header */}
-        <div className="flex justify-between items-start gap-3">
+        <div className="flex justify-between items-start gap-3 relative">
           <div className="flex flex-wrap gap-1.5">
             <span className="bg-purple-50 text-purple-700 border border-purple-100 px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase">
               {typeName}
@@ -330,6 +358,65 @@ function SkillCardItem({
               {showStatus ? skill.status : 'APPROVED'}
             </span>
           </div>
+
+          {/* Action Menu (Kebab) */}
+          {(onEdit || onDelete) && (
+            <div className="relative z-10">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsMenuOpen(!isMenuOpen);
+                }}
+                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-full hover:bg-gray-100 cursor-pointer transition-colors flex items-center justify-center border-0 bg-transparent"
+                title="Thao tác"
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+
+              {isMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-20"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsMenuOpen(false);
+                    }}
+                  />
+                  <div className="absolute right-0 mt-1.5 w-32 rounded-lg bg-white shadow-lg border border-gray-100 py-1.5 z-30 animate-in fade-in slide-in-from-top-1 duration-100">
+                    {onEdit && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
+                          onEdit();
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-1.5 cursor-pointer border-0 bg-transparent transition-colors"
+                      >
+                        <Edit className="h-3.5 w-3.5 text-gray-400" />
+                        Chỉnh sửa
+                      </button>
+                    )}
+                    {onDelete && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsMenuOpen(false);
+                          onDelete();
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-1.5 cursor-pointer border-0 bg-transparent transition-colors"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                        Xóa
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Title & Body */}
@@ -347,11 +434,11 @@ function SkillCardItem({
       </div>
 
       {/* Footer */}
-      <div className="mt-5 pt-4 border-t border-gray-100 flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between">
+      <div className="mt-auto pt-4 border-t border-gray-100 flex flex-col sm:flex-row gap-4 sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-gray-400">
           <div className="flex items-center gap-1">
             <Folder className="h-3 w-3 text-gray-400" />
-            <span className="font-medium text-gray-500">{trackName}</span>
+            <span className="font-medium text-gray-500">{projectName}</span>
           </div>
           <span className="text-gray-300">•</span>
           <div className="flex items-center gap-1">
@@ -536,6 +623,179 @@ function UserDashboard({
   const [deletingWipIds, setDeletingWipIds] = useState<number[]>([]);
   const [wipToast, setWipToast] = useState<{ message: string; type: 'success' | 'error' | 'loading' } | null>(null);
 
+  // States cho việc Sửa/Xóa Skill
+  const [activeEditSkill, setActiveEditSkill] = useState<SkillCard | null>(null);
+  const [editSkillTitle, setEditSkillTitle] = useState('');
+  const [editSkillContent, setEditSkillContent] = useState('');
+  const [editSkillType, setEditSkillType] = useState('skill');
+  const [editSkillDeptId, setEditSkillDeptId] = useState<number | null>(null);
+  const [editSkillTeamId, setEditSkillTeamId] = useState<number | null>(null);
+  const [editSkillProjectId, setEditSkillProjectId] = useState<number | null>(null);
+  const [editSkillFile, setEditSkillFile] = useState<File | null>(null);
+  const [isSavingSkill, setIsSavingSkill] = useState(false);
+
+  const [activeDeleteSkill, setActiveDeleteSkill] = useState<SkillCard | null>(null);
+  const [isDeletingSkill, setIsDeletingSkill] = useState(false);
+
+  function handleEditSkillOpen(skill: SkillCard) {
+    setActiveEditSkill(skill);
+    setEditSkillTitle(skill.title);
+    setEditSkillContent(skill.markdown_content || '');
+    setEditSkillType(skill.skill_type || 'skill');
+    setEditSkillDeptId(skill.department_id || null);
+    setEditSkillTeamId(skill.team_id || null);
+    setEditSkillProjectId(skill.project_id || null);
+    setEditSkillFile(null);
+  }
+
+  async function handleEditSkillSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editSkillTitle.trim() || !editSkillContent.trim()) {
+      showWipToast('Vui lòng điền đầy đủ các trường bắt buộc', 'error');
+      return;
+    }
+    setIsSavingSkill(true);
+    showWipToast('Đang cập nhật tài sản...', 'loading');
+    try {
+      let attachedFileJson = activeEditSkill?.attached_file;
+
+      if (editSkillFile) {
+        // Xóa file cũ
+        if (activeEditSkill?.attached_file) {
+          let oldPath = '';
+          try {
+            const parsed = typeof activeEditSkill.attached_file === 'string'
+              ? JSON.parse(activeEditSkill.attached_file)
+              : activeEditSkill.attached_file;
+            oldPath = parsed?.storage_path || '';
+          } catch (err) {
+            console.error("Lỗi parse attached_file cũ:", err);
+          }
+          if (oldPath) {
+            await supabase.storage.from('chat_attachments').remove([oldPath]);
+          }
+        }
+
+        // Tải file mới
+        const fileExt = editSkillFile.name.split('.').pop();
+        const uniqueName = `${Date.now()}_${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
+        const filePath = `skill_attachments/${uniqueName}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('chat_attachments')
+          .upload(filePath, editSkillFile);
+
+        if (uploadErr) throw uploadErr;
+
+        attachedFileJson = {
+          file_name: editSkillFile.name,
+          file_size: editSkillFile.size,
+          file_type: editSkillFile.type,
+          storage_path: filePath,
+        };
+      }
+
+      const { error } = await supabase
+        .from('skill_library')
+        .update({
+          title: editSkillTitle.trim(),
+          markdown_content: editSkillContent.trim(),
+          skill_type: editSkillType,
+          department_id: editSkillDeptId,
+          team_id: editSkillTeamId,
+          project_id: editSkillProjectId,
+          attached_file: attachedFileJson
+        })
+        .eq('id', activeEditSkill?.id);
+
+      if (error) throw error;
+
+      showWipToast('Cập nhật tài sản thành công!', 'success');
+      setActiveEditSkill(null);
+
+      const updatedProject = projects.find(p => p.id === editSkillProjectId) || null;
+
+      // Cập nhật state
+      setWorkspaceSkills(prev => prev.map(item => item.id === activeEditSkill?.id ? {
+        ...item,
+        title: editSkillTitle.trim(),
+        markdown_content: editSkillContent.trim(),
+        skill_type: editSkillType,
+        department_id: editSkillDeptId || undefined,
+        team_id: editSkillTeamId || undefined,
+        project_id: editSkillProjectId || undefined,
+        project: updatedProject ? { id: updatedProject.id, name: updatedProject.name } : null,
+        attached_file: attachedFileJson
+      } as SkillCard : item));
+
+      setLibrary(prev => ({
+        ...prev,
+        items: prev.items.map(item => item.id === activeEditSkill?.id ? {
+          ...item,
+          title: editSkillTitle.trim(),
+          markdown_content: editSkillContent.trim(),
+          skill_type: editSkillType,
+          department_id: editSkillDeptId || undefined,
+          team_id: editSkillTeamId || undefined,
+          project_id: editSkillProjectId || undefined,
+          project: updatedProject ? { id: updatedProject.id, name: updatedProject.name } : null,
+          attached_file: attachedFileJson
+        } as SkillCard : item)
+      }));
+
+    } catch (err) {
+      console.error('Error editing skill:', err);
+      showWipToast('Lỗi khi cập nhật tài sản', 'error');
+    } finally {
+      setIsSavingSkill(false);
+    }
+  }
+
+  async function handleDeleteSkillSubmit() {
+    if (!activeDeleteSkill) return;
+    setIsDeletingSkill(true);
+    showWipToast('Đang xóa tài sản...', 'loading');
+    try {
+      if (activeDeleteSkill.attached_file) {
+        let oldPath = '';
+        try {
+          const parsed = typeof activeDeleteSkill.attached_file === 'string'
+            ? JSON.parse(activeDeleteSkill.attached_file)
+            : activeDeleteSkill.attached_file;
+          oldPath = parsed?.storage_path || '';
+        } catch (err) {
+          console.error("Lỗi parse attached_file để xóa:", err);
+        }
+        if (oldPath) {
+          await supabase.storage.from('chat_attachments').remove([oldPath]);
+        }
+      }
+
+      const { error } = await supabase
+        .from('skill_library')
+        .delete()
+        .eq('id', activeDeleteSkill.id);
+
+      if (error) throw error;
+
+      showWipToast('Xóa tài sản thành công!', 'success');
+
+      setWorkspaceSkills(prev => prev.filter(item => item.id !== activeDeleteSkill.id));
+      setLibrary(prev => ({
+        ...prev,
+        items: prev.items.filter(item => item.id !== activeDeleteSkill.id),
+        total: Math.max(0, prev.total - 1)
+      }));
+
+      setActiveDeleteSkill(null);
+    } catch (err) {
+      console.error('Error deleting skill:', err);
+      showWipToast('Lỗi khi xóa tài sản', 'error');
+    } finally {
+      setIsDeletingSkill(false);
+    }
+  }
+
   function showWipToast(message: string, type: 'success' | 'error' | 'loading', duration = 3000) {
     setWipToast({ message, type });
     if (type !== 'loading') {
@@ -574,20 +834,21 @@ function UserDashboard({
     if (!activeMoveWip || !moveWipProjectId) return;
     setIsMovingWip(true);
     try {
-      const { error } = await supabase.from('skill_library').update({ project_id: moveWipProjectId }).eq('id', activeMoveWip.id);
+      const newProjId = Number(moveWipProjectId);
+      const { error } = await supabase.from('skill_library').update({ project_id: newProjId }).eq('id', activeMoveWip.id);
       if (error) throw error;
 
       showWipToast('Chuyển dự án thành công!', 'success');
 
       const targetId = activeMoveWip.id;
-      setDeletingWipIds(prev => [...prev, targetId]);
+      const updatedProject = projects.find(p => p.id === newProjId) || null;
+      setWips(prev => prev.map(w => w.id === targetId ? { 
+        ...w, 
+        project_id: newProjId,
+        project: updatedProject ? { id: updatedProject.id, name: updatedProject.name } : null
+      } : w));
       setActiveMoveWip(null);
       setMoveWipProjectId('');
-
-      setTimeout(() => {
-        setWips(prev => prev.filter(w => w.id !== targetId));
-        setDeletingWipIds(prev => prev.filter(id => id !== targetId));
-      }, 500);
     } catch (err) {
       console.error('Error moving WIP:', err);
       showWipToast('Lỗi khi chuyển dự án', 'error');
@@ -994,12 +1255,12 @@ function UserDashboard({
                         return (
                           <div
                             key={wip.id}
-                            className={`bg-white border border-markee-border rounded-xl p-5 shadow-xs relative flex flex-col justify-between transition-all duration-500 ease-out hover:shadow-md ${isDeleting
+                            className={`bg-white border border-markee-border rounded-xl p-5 shadow-xs relative flex flex-col h-full min-h-[220px] transition-all duration-500 ease-out hover:shadow-md ${isDeleting
                                 ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden'
                                 : ''
                               }`}
                           >
-                            <div>
+                            <div className="flex-grow">
                               <div className="flex items-start justify-between">
                                 <div className="space-y-1">
                                   <div className="text-xs text-markee-muted flex items-center gap-1.5 flex-wrap">
@@ -1035,7 +1296,7 @@ function UserDashboard({
                                     title="Chuyển Dự án"
                                     onClick={() => {
                                       setActiveMoveWip(wip);
-                                      setMoveWipProjectId('');
+                                      setMoveWipProjectId(wip.project_id ? wip.project_id : '');
                                     }}
                                     className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white"
                                   >
@@ -1098,10 +1359,10 @@ function UserDashboard({
                               )}
                             </div>
 
-                            <div className="border-t border-markee-border/60 mt-4 pt-3 flex items-center justify-between text-[11px] text-markee-muted">
+                            <div className="border-t border-markee-border/60 mt-auto pt-3 flex items-center justify-between text-[11px] text-markee-muted">
                               <div className="flex items-center gap-1.5">
                                 <span>📁 Dự án:</span>
-                                <span className="font-semibold text-markee-text truncate max-w-37.5">{project?.name || 'Khác / Chưa phân loại'}</span>
+                                <span className="font-semibold text-markee-text truncate max-w-37.5">{project?.name || 'Khác'}</span>
                               </div>
                               <div>
                                 🪙 <span className="font-semibold">{wip.tokens_used || 0}</span> tokens
@@ -1140,6 +1401,11 @@ function UserDashboard({
                           showStatus={!isLibraryOnly && activeView === 'workspace'}
                           allowVoting={isLibraryOnly || activeView === 'library'}
                           onPreview={() => setPreviewSkill(skill)}
+                          onEdit={(profile.email === skill.author_id || profile.role === 'admin' || profile.role === 'super_admin') ? () => handleEditSkillOpen(skill) : undefined}
+                          onDelete={(profile.email === skill.author_id || profile.role === 'admin' || profile.role === 'super_admin') ? () => setActiveDeleteSkill(skill) : undefined}
+                          departments={departments}
+                          teams={teams}
+                          projects={projects}
                         />
                       ))}
                     </div>
@@ -1332,6 +1598,188 @@ function UserDashboard({
         </div>
       )}
 
+      {/* Edit Asset Modal */}
+      {activeEditSkill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl relative animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex justify-between items-center pb-4 border-b border-gray-100 mb-4">
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                <Edit className="h-4 w-4 text-markee-primary" />
+                Chỉnh sửa {activeEditSkill.title}
+              </h3>
+              <button
+                onClick={() => setActiveEditSkill(null)}
+                className="text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+                disabled={isSavingSkill}
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSkillSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                  Tiêu đề *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editSkillTitle}
+                  onChange={(e) => setEditSkillTitle(e.target.value)}
+                  placeholder="Nhập tiêu đề tài sản..."
+                  className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-xs text-gray-800 focus:outline-none focus:border-markee-primary bg-white outline-none transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                  Nội dung chi tiết *
+                </label>
+                <textarea
+                  required
+                  rows={5}
+                  value={editSkillContent}
+                  onChange={(e) => setEditSkillContent(e.target.value)}
+                  placeholder="Dán hoặc nhập nội dung tài sản chi tiết..."
+                  className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-xs text-gray-800 focus:outline-none focus:border-markee-primary bg-white outline-none transition-colors resize-none leading-relaxed"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Loại Tài Sản
+                  </label>
+                  <select
+                    value={editSkillType}
+                    onChange={(e) => setEditSkillType(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-xs text-gray-800 focus:outline-none focus:border-markee-primary bg-white outline-none transition-colors cursor-pointer"
+                  >
+                    <option value="prompt">Prompt</option>
+                    <option value="skill">Skill</option>
+                    <option value="sop">SOP</option>
+                    <option value="context_pack">Context Pack</option>
+                    <option value="workflow">Workflow</option>
+                    <option value="checklist">Checklist</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Gán vào Dự án
+                  </label>
+                  <select
+                    value={editSkillProjectId || ''}
+                    onChange={(e) => setEditSkillProjectId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-xs text-gray-800 focus:outline-none focus:border-markee-primary bg-white outline-none transition-colors cursor-pointer"
+                  >
+                    <option value="">Không gán vào dự án</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Phòng ban
+                  </label>
+                  <select
+                    value={editSkillDeptId || ''}
+                    onChange={(e) => {
+                      const val = e.target.value ? Number(e.target.value) : null;
+                      setEditSkillDeptId(val);
+                      setEditSkillTeamId(null);
+                    }}
+                    className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-xs text-gray-800 focus:outline-none focus:border-markee-primary bg-white outline-none transition-colors cursor-pointer"
+                  >
+                    <option value="">Tất cả phòng ban</option>
+                    {departments.map((dept) => (
+                      <option key={dept.id} value={dept.id}>{dept.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Team phụ trách
+                  </label>
+                  <select
+                    value={editSkillTeamId || ''}
+                    disabled={!editSkillDeptId}
+                    onChange={(e) => setEditSkillTeamId(e.target.value ? Number(e.target.value) : null)}
+                    className="w-full rounded-lg border border-gray-200 px-3.5 py-2.5 text-xs text-gray-800 focus:outline-none focus:border-markee-primary bg-white outline-none transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <option value="">Tất cả team</option>
+                    {teams
+                      .filter((t) => !editSkillDeptId || t.department_id === editSkillDeptId)
+                      .map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex justify-end items-center gap-2 pt-4 border-t border-gray-100 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setActiveEditSkill(null)}
+                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
+                  disabled={isSavingSkill}
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingSkill}
+                  className="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-4 py-2 text-xs font-semibold text-white transition-colors cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                >
+                  {isSavingSkill && <span className="animate-spin text-[10px]">⏳</span>}
+                  Lưu thay đổi
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Skill Confirmation Modal (Red warning) */}
+      {activeDeleteSkill && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl relative animate-in zoom-in-95 duration-200">
+            <h3 className="text-sm font-bold text-red-600 flex items-center gap-2 mb-2">
+              ⚠️ Xác nhận Xóa Tài Sản
+            </h3>
+            <p className="text-xs text-gray-600 leading-relaxed mb-6">
+              Bạn có chắc chắn muốn xóa tài sản <strong className="text-gray-900">"{activeDeleteSkill.title}"</strong> không? Hành động này không thể hoàn tác.
+            </p>
+            <div className="flex justify-end items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveDeleteSkill(null)}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer"
+                disabled={isDeletingSkill}
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteSkillSubmit}
+                disabled={isDeletingSkill}
+                className="rounded-lg bg-red-600 hover:bg-red-700 px-4 py-2 text-xs font-semibold text-white transition-colors cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              >
+                {isDeletingSkill && <span className="animate-spin text-[10px]">⏳</span>}
+                Xóa ngay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Preview Asset Modal */}
       {previewSkill && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
@@ -1424,7 +1872,7 @@ function UserDashboard({
                   onChange={(e) => setEditWipTrack(e.target.value)}
                   className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
                 >
-                  <option value="">Khác (Chưa phân loại)</option>
+                  <option value="">Khác</option>
                   <option value="Track 1: SI Delivery">Track 1: SI Delivery</option>
                   <option value="Track 2: Marketing">Track 2: Marketing</option>
                   <option value="Track 3: Dev + DevOps">Track 3: Dev + DevOps</option>
@@ -1508,14 +1956,14 @@ function UserDashboard({
                   }}
                   className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
                 >
-                  <option value="">-- Chọn Dự án --</option>
-                  {projects
-                    .filter((p) => p.id !== activeMoveWip.project_id)
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
+                  {!activeMoveWip.project_id && (
+                    <option value="">-- Chọn Dự án --</option>
+                  )}
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -4638,6 +5086,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectSearch, setProjectSearch] = useState('');
   const [projectPage, setProjectPage] = useState(0);
+  const [openMenuProjectId, setOpenMenuProjectId] = useState<number | null>(null);
 
   const [departments, setDepartments] = useState<{ id: number; name: string }[]>([]);
   const [teams, setTeams] = useState<{ id: number; name: string; department_id: number }[]>([]);
@@ -4741,6 +5190,83 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
   const [isDeletingWIP, setIsDeletingWIP] = useState(false);
 
   const [deletingIds, setDeletingIds] = useState<number[]>([]);
+
+  // States cho việc Sửa/Xóa Project
+  const [activeEditProject, setActiveEditProject] = useState<Project | null>(null);
+  const [editProjectName, setEditProjectName] = useState('');
+  const [isEditingProject, setIsEditingProject] = useState(false);
+
+  const [activeDeleteProject, setActiveDeleteProject] = useState<Project | null>(null);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
+
+  function handleEditProjectOpen(proj: Project) {
+    setActiveEditProject(proj);
+    setEditProjectName(proj.name);
+  }
+
+  async function handleEditProjectSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = editProjectName.trim();
+    if (!trimmed || !activeEditProject) return;
+    setIsEditingProject(true);
+    showToast('Đang cập nhật dự án...', 'loading');
+    try {
+      const { error } = await supabase
+        .from('projects')
+        .update({ name: trimmed })
+        .eq('id', activeEditProject.id);
+
+      if (error) throw error;
+
+      showToast('Cập nhật dự án thành công!', 'success');
+      setProjects(prev => prev.map(p => p.id === activeEditProject.id ? { ...p, name: trimmed } : p));
+      if (selectedProject?.id === activeEditProject.id) {
+        setSelectedProject(prev => prev ? { ...prev, name: trimmed } : null);
+      }
+      setActiveEditProject(null);
+    } catch (err) {
+      console.error('Error editing project:', err);
+      showToast('Lỗi khi cập nhật dự án', 'error');
+    } finally {
+      setIsEditingProject(false);
+    }
+  }
+
+  async function handleDeleteProjectSubmit() {
+    if (!activeDeleteProject) return;
+    setIsDeletingProject(true);
+    showToast('Đang xóa dự án...', 'loading');
+    try {
+      // Cập nhật project_id = null cho các skills thuộc project này để tránh lỗi foreign key
+      const { error: updateSkillsError } = await supabase
+        .from('skill_library')
+        .update({ project_id: null })
+        .eq('project_id', activeDeleteProject.id);
+      if (updateSkillsError) {
+        console.error("Lỗi khi cập nhật link project_id cho skills:", updateSkillsError);
+      }
+
+      // Xóa project
+      const { error } = await supabase
+        .from('projects')
+        .delete()
+        .eq('id', activeDeleteProject.id);
+
+      if (error) throw error;
+
+      showToast('Xóa dự án thành công!', 'success');
+      setProjects(prev => prev.filter(p => p.id !== activeDeleteProject.id));
+      if (selectedProject?.id === activeDeleteProject.id) {
+        setSelectedProject(null);
+      }
+      setActiveDeleteProject(null);
+    } catch (err) {
+      console.error('Error deleting project:', err);
+      showToast('Lỗi khi xóa dự án', 'error');
+    } finally {
+      setIsDeletingProject(false);
+    }
+  }
 
   async function handleDeleteWIP() {
     if (!activeDeleteWIP) return;
@@ -5143,13 +5669,70 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                 >
                   <div className="space-y-4">
                     {/* Header */}
-                    <div>
-                      <h3 className="text-lg font-bold text-markee-text truncate group-hover:text-markee-primary transition-colors">
-                        {project.name}
-                      </h3>
-                      <p className="text-xs text-markee-muted truncate mt-1">
-                        Dự án theo dõi hoạt động AI. Tạo bởi {project.authorName}
-                      </p>
+                    <div className="flex justify-between items-start gap-2 relative">
+                      <div className="min-w-0 flex-1">
+                        <h3 className="text-lg font-bold text-markee-text truncate group-hover:text-markee-primary transition-colors">
+                          {project.name}
+                        </h3>
+                        <p className="text-xs text-markee-muted truncate mt-1">
+                          Dự án theo dõi hoạt động AI. Tạo bởi {project.authorName}
+                        </p>
+                      </div>
+
+                      {/* Action Menu (Kebab) cho Project */}
+                      {(project.created_by === profile.email || profile.role === 'admin' || profile.role === 'super_admin') && (
+                        <div className="relative z-10 shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenMenuProjectId(openMenuProjectId === project.id ? null : project.id);
+                            }}
+                            className="text-gray-400 hover:text-gray-600 p-1.5 rounded-full hover:bg-gray-100 cursor-pointer transition-colors flex items-center justify-center border-0 bg-transparent"
+                            title="Thao tác"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </button>
+
+                          {openMenuProjectId === project.id && (
+                            <>
+                              <div
+                                className="fixed inset-0 z-20"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenMenuProjectId(null);
+                                }}
+                              />
+                              <div className="absolute right-0 mt-1.5 w-32 rounded-lg bg-white shadow-lg border border-gray-100 py-1.5 z-30 animate-in fade-in slide-in-from-top-1 duration-100">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenMenuProjectId(null);
+                                    handleEditProjectOpen(project);
+                                  }}
+                                  className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-1.5 cursor-pointer border-0 bg-transparent transition-colors"
+                                >
+                                  <Edit className="h-3.5 w-3.5 text-gray-400" />
+                                  Chỉnh sửa
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenMenuProjectId(null);
+                                    setActiveDeleteProject(project);
+                                  }}
+                                  className="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-1.5 cursor-pointer border-0 bg-transparent transition-colors"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 text-red-400" />
+                                  Xóa
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Stats */}
@@ -5527,7 +6110,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                                                 title="Chuyển Dự án"
                                                 onClick={() => {
                                                   setActiveMoveWIP(log);
-                                                  setNewProjectId('');
+                                                  setNewProjectId(log.project_id ? log.project_id : '');
                                                 }}
                                                 className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white"
                                               >
@@ -5687,7 +6270,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                   onChange={(e) => setEditTrack(e.target.value)}
                   className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
                 >
-                  <option value="">Khác (Chưa phân loại)</option>
+                  <option value="">Khác</option>
                   <option value="Track 1: SI Delivery">Track 1: SI Delivery</option>
                   <option value="Track 2: Marketing">Track 2: Marketing</option>
                   <option value="Track 3: Dev + DevOps">Track 3: Dev + DevOps</option>
@@ -5772,14 +6355,14 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                   }}
                   className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
                 >
-                  <option value="">-- Chọn Dự án --</option>
-                  {projects
-                    .filter((p) => p.id !== activeMoveWIP.project_id)
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
+                  {!activeMoveWIP.project_id && (
+                    <option value="">-- Chọn Dự án --</option>
+                  )}
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -5898,6 +6481,90 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                 className="px-4 py-2 bg-markee-primary hover:bg-markee-hover disabled:bg-markee-primary/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer"
               >
                 {isCreating ? 'Đang tạo...' : 'Tạo mới'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Project Modal */}
+      {activeEditProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-markee-text">Chỉnh sửa {activeEditProject.name}</h2>
+              <p className="text-xs text-markee-muted mt-1">Vui lòng nhập tên mới cho dự án.</p>
+            </div>
+            <form onSubmit={handleEditProjectSubmit} className="space-y-4">
+              <div>
+                <label htmlFor="editProjectNameInput" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Tên dự án
+                </label>
+                <input
+                  id="editProjectNameInput"
+                  type="text"
+                  required
+                  value={editProjectName}
+                  onChange={(e) => setEditProjectName(e.target.value)}
+                  placeholder="Nhập tên dự án..."
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                  autoFocus
+                />
+              </div>
+              <div className="flex justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveEditProject(null);
+                    setEditProjectName('');
+                  }}
+                  className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+                  disabled={isEditingProject}
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEditingProject || !editProjectName.trim()}
+                  className="px-4 py-2 bg-markee-primary hover:bg-markee-hover disabled:bg-markee-primary/60 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+                >
+                  {isEditingProject ? 'Đang lưu...' : 'Lưu thay đổi'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Project Confirmation Modal (Red warning) */}
+      {activeDeleteProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-red-600 flex items-center gap-2">
+                ⚠️ Xác nhận Xóa Dự Án
+              </h2>
+              <p className="text-xs text-gray-600 leading-relaxed mt-2">
+                Bạn có chắc chắn muốn xóa dự án <strong className="text-gray-900">"{activeDeleteProject.name}"</strong> không? Hành động này không thể hoàn tác.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setActiveDeleteProject(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted hover:bg-markee-bg hover:text-markee-text rounded-lg transition-colors text-xs font-semibold cursor-pointer"
+                disabled={isDeletingProject}
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteProjectSubmit}
+                disabled={isDeletingProject}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-xs font-semibold cursor-pointer shadow-sm flex items-center gap-1.5"
+              >
+                {isDeletingProject && <span className="animate-spin text-[10px]">⏳</span>}
+                Xóa ngay
               </button>
             </div>
           </div>

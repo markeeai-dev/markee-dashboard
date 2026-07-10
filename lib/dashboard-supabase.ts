@@ -37,6 +37,7 @@ export interface SkillLibraryRow {
   attached_file?: any;
   department_id?: number;
   team_id?: number;
+  project_id?: number | null;
 }
 
 export interface SkillCard extends SkillLibraryRow {
@@ -217,7 +218,7 @@ export async function fetchApprovedSkills(
   const from = page * pageSize;
   const to = from + pageSize - 1;
 
-  let query = supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count, team_track, department_id, team_id", { count: "exact" }).eq("status", "approved").not("skill_type", "ilike", "wip");
+  let query = supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count, team_track, department_id, team_id, project_id, attached_file", { count: "exact" }).eq("status", "approved").not("skill_type", "ilike", "wip");
 
   if (departmentId !== undefined && departmentId !== null) {
     query = query.eq("department_id", departmentId);
@@ -310,7 +311,7 @@ export async function fetchApprovedSkills(
 export async function fetchTrendingSkills(limit = 5, userEmail?: string): Promise<SkillCard[]> {
   const { data, error } = await supabase
     .from("skill_library")
-    .select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count")
+    .select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count, team_track, department_id, team_id, project_id, attached_file")
     .eq("status", "approved")
     .eq("skill_type", "workflow")
     .order("likes_count", { ascending: false, nullsFirst: false })
@@ -347,7 +348,7 @@ export async function fetchTeamTracks(): Promise<string[]> {
 }
 
 export async function fetchMyWorkspaceSkills(email: string): Promise<SkillCard[]> {
-  const { data, error } = await supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count, team_track, attached_file, department_id, team_id").eq("author_id", email).not("skill_type", "ilike", "wip").order("created_at", { ascending: false });
+  const { data, error } = await supabase.from("skill_library").select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count, team_track, attached_file, department_id, team_id, project_id").eq("author_id", email).not("skill_type", "ilike", "wip").order("created_at", { ascending: false });
 
   if (error) {
     console.error("Error fetching workspace skills:", error);
@@ -463,7 +464,7 @@ export async function downloadSkillMarkdown(skill: SkillCard) {
 export async function fetchPendingSkills(): Promise<SkillCard[]> {
   const { data, error } = await supabase
     .from("skill_library")
-    .select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count")
+    .select("id, created_at, title, markdown_content, category, author_id, status, skill_type, likes_count, downloads_count, team_track, department_id, team_id, project_id, attached_file")
     .eq("status", "pending")
     .neq("skill_type", "wip")
     .order("created_at", { ascending: true });

@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Plus, Folder, X, Send, Search } from 'lucide-react';
+import { Plus, Folder, X, Send, Search, Square } from 'lucide-react';
 
 export const MODEL_CONFIG: Record<string, string> = {
   'deepseek-v4-flash': 'DeepSeek V4 Flash',
@@ -84,6 +84,7 @@ interface ChatInputProps {
   setInputValue: (val: string) => void;
   onSendMessage: () => void;
   isGenerating: boolean;
+  onStopGeneration?: () => void;
   selectedModel: string;
   setSelectedModel: (model: string) => void;
   disabledModels: Set<string>;
@@ -111,6 +112,7 @@ export default function ChatInput({
   setInputValue,
   onSendMessage,
   isGenerating,
+  onStopGeneration,
   selectedModel,
   setSelectedModel,
   disabledModels,
@@ -441,15 +443,26 @@ export default function ChatInput({
               ))}
             </select>
 
-            {/* Nút Send */}
-            <button
-              type="button"
-              disabled={!inputValue.trim() || isGenerating}
-              onClick={handleSend}
-              className="rounded-xl bg-markee-primary hover:bg-markee-hover disabled:bg-slate-200 text-white p-2.5 transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0 shadow-sm border-0 flex items-center justify-center"
-            >
-              <Send className="h-4 w-4" />
-            </button>
+            {/* Nút Send / Stop */}
+            {isGenerating ? (
+              <button
+                type="button"
+                onClick={onStopGeneration}
+                className="rounded-xl bg-red-600 hover:bg-red-700 text-white p-2.5 transition-colors cursor-pointer shrink-0 shadow-sm border-0 flex items-center justify-center animate-pulse"
+                title="Dừng tạo câu trả lời"
+              >
+                <Square className="h-4 w-4 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={!inputValue.trim()}
+                onClick={handleSend}
+                className="rounded-xl bg-markee-primary hover:bg-markee-hover disabled:bg-slate-200 text-white p-2.5 transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0 shadow-sm border-0 flex items-center justify-center"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -2,63 +2,8 @@
 
 import React, { useRef, useEffect, useState } from 'react';
 import { Send, Sparkles, User, Laptop, Menu, Plus, X, Folder, BookOpen, Search } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
 import ChatInput from './ChatInput';
-
-// --- Component phụ cho Khối Code ---
-function CodeBlock({ children }: { children: React.ReactNode }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    const getText = (node: React.ReactNode): string => {
-      if (typeof node === 'string' || typeof node === 'number') {
-        return node.toString();
-      }
-      
-      if (Array.isArray(node)) {
-        return node.map(getText).join('');
-      }
-      
-      if (React.isValidElement(node)) {
-        const element = node as React.ReactElement;
-        
-        if (element.props && typeof element.props === 'object' && 'children' in element.props) {
-          return getText(element.props.children as React.ReactNode);
-        }
-      }
-      
-      return '';
-    };
-
-    const codeContent = getText(children);
-    
-    if (codeContent) {
-      navigator.clipboard.writeText(codeContent);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  return (
-    <div className="relative group w-full max-w-full overflow-hidden bg-slate-800 rounded-lg my-2.5 shadow-sm">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/50">
-        <span className="text-[10px] text-slate-400 font-mono">Code</span>
-        <button onClick={handleCopy} className="text-[10px] text-slate-400 hover:text-white transition-colors flex items-center gap-1 opacity-0 group-hover:opacity-100">
-          {copied ? 'Đã copy!' : 'Copy'}
-        </button>
-      </div>
-      <div className="overflow-x-auto">
-        <pre className="p-3 text-slate-100 font-mono text-[11px] leading-normal w-max min-w-full">
-          {children}
-        </pre>
-      </div>
-      {copied && (
-        <div className="absolute bottom-2 left-2 bg-slate-700 text-white text-[10px] px-2 py-1 rounded shadow-lg z-10">
-        </div>
-      )}
-    </div>
-  );
-}
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 // --- Component Card hiển thị file đính kèm trong bong bóng tin nhắn ---
 function FileCard({ fileName }: { fileName: string }) {
@@ -126,6 +71,7 @@ interface ChatWindowProps {
   onSummarizeChat?: () => void;
   stagedFile?: File | null;
   setStagedFile?: (file: File | null) => void;
+  onStopGeneration?: () => void;
 }
 
 export default function ChatWindow({
@@ -150,6 +96,7 @@ export default function ChatWindow({
   pendingKnowledgeProjectName = null,
   onClearPendingKnowledgeProjectName,
   onSummarizeChat,
+  onStopGeneration,
   stagedFile = null,
   setStagedFile,
 }: ChatWindowProps) {
@@ -217,23 +164,8 @@ export default function ChatWindow({
                     {isUser ? (
                       renderUserContent(msg.content)
                     ) : (
-                      <div className="w-full min-w-0 wrap-break-word prose max-w-none prose-p:my-2 prose-p:leading-relaxed text-xs">
-                        <ReactMarkdown
-                          components={{
-                            p: ({ children }) => <p className="my-2 leading-relaxed wrap-break-word">{children}</p>,
-                            pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-                            code: ({ inline, className, children, ...props }: React.ComponentPropsWithoutRef<'code'> & { inline?: boolean }) => {
-                              const isInline = inline || !/language-(\w+)/.exec(className || '');
-                              return isInline ? (
-                                <code className="bg-slate-100 text-red-600 px-1 py-0.5 rounded font-mono text-[11px] wrap-break-word" {...props}>{children}</code>
-                              ) : (
-                                <code className="font-mono text-[11px]" {...props}>{children}</code>
-                              );
-                            },
-                          }}
-                        >
-                          {msg.content.replace(/\n{3,}/g, '\n\n')}
-                        </ReactMarkdown>
+                      <div className="w-full min-w-0 wrap-break-word text-xs">
+                        <MarkdownRenderer content={msg.content.replace(/\n{3,}/g, '\n\n')} />
                       </div>
                     )}
                   </div>
@@ -269,6 +201,7 @@ export default function ChatWindow({
         setInputValue={setInputValue}
         onSendMessage={onSendMessage}
         isGenerating={isGenerating}
+        onStopGeneration={onStopGeneration}
         selectedModel={selectedModel}
         setSelectedModel={setSelectedModel}
         disabledModels={disabledModels}

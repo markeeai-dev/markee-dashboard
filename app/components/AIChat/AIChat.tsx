@@ -39,7 +39,7 @@ function generateUUID() {
   });
 }
 
-async function fetchChatCompletion(model: string, history: { role: string; content: string }[]) {
+async function fetchChatCompletion(model: string, history: { role: string; content: string }[], signal?: AbortSignal) {
   const name = model.toLowerCase();
 
   // 1. Nhóm Gemini (Gemini 3.5 Flash, 3.1 Lite...)
@@ -72,6 +72,7 @@ async function fetchChatCompletion(model: string, history: { role: string; conte
         contents,
         ...(systemInstruction ? { systemInstruction } : {}),
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -102,6 +103,7 @@ async function fetchChatCompletion(model: string, history: { role: string; conte
         model: model,
         messages: history,
       }),
+      signal,
     });
 
     if (!response.ok) {
@@ -129,6 +131,7 @@ async function fetchChatCompletion(model: string, history: { role: string; conte
       model: model,
       messages: history,
     }),
+    signal,
   });
 
   if (!response.ok) {
@@ -153,6 +156,16 @@ export default function AIChat({ profile }: AIChatProps) {
   const [inputValue, setInputValue] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const isSendingRef = useRef(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsGenerating(false);
+    isSendingRef.current = false;
+  };
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [selectedModel, setSelectedModel] = useState('openrouter/free');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -261,7 +274,7 @@ export default function AIChat({ profile }: AIChatProps) {
   // Dismiss toast automatically
   useEffect(() => {
     if (toast) {
-      const timer = setTimeout(() => setToast(null), 4000);
+      const timer = setTimeout(() => setToast(null), 3000);
       return () => clearTimeout(timer);
     }
   }, [toast]);
@@ -698,6 +711,9 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
     isSendingRef.current = true;
     setIsGenerating(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     // Snapshot and clear state immediately so UI badge disappears at once
     const localHiddenContext = hiddenContext;
     const localStagedFile = stagedFile;
@@ -814,9 +830,13 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
 
       const runFetchWithFallback = async (model: string): Promise<{ reply: string; finalModel: string }> => {
         try {
-          const reply = await fetchChatCompletion(model, history);
+          const reply = await fetchChatCompletion(model, history, abortControllerRef.current?.signal);
           return { reply, finalModel: model };
-        } catch (error) {
+        } catch (error: any) {
+          if (error?.name === 'AbortError') {
+            throw error;
+          }
+
           console.warn(`Lỗi API model ${model}:`, error);
           currentDisabled.add(model);
           setDisabledModels(new Set(currentDisabled));
@@ -826,8 +846,13 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
             throw new Error("Tất cả các model trong chuỗi dự phòng đều thất bại.");
           }
 
+          // Cập nhật model dropdown ngay lập tức khi fallback
+          setSelectedModel(nextModel);
+
+          const currentModelName = MODEL_CONFIG[model] || model;
+          const nextModelName = MODEL_CONFIG[nextModel] || nextModel;
           setToast({
-            message: `${MODEL_CONFIG[model] || model} đang quá tải. Đang tự động chuyển sang ${MODEL_CONFIG[nextModel] || nextModel}...`,
+            message: `${currentModelName} quá tải. Đang dùng ${nextModelName}`,
             type: 'warning'
           });
 
@@ -852,7 +877,11 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
 
       // 8. Update local state with assistant message
       setMessages((prev) => [...prev, { role: 'assistant', content: aiReply }]);
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        console.log('User stopped the generation.');
+        return;
+      }
       console.error('Error sending message/getting reply:', e);
       setMessages((prev) => [
         ...prev,
@@ -862,6 +891,7 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
         },
       ]);
     } finally {
+      abortControllerRef.current = null;
       isSendingRef.current = false;
       setIsGenerating(false);
     }
@@ -871,6 +901,9 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
     if (isSendingRef.current) return;
     isSendingRef.current = true;
     setIsGenerating(true);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     const localHiddenContext = hiddenContext;
     const localStagedFile = stagedFile;
@@ -963,17 +996,26 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
 
         const runFetchWithFallback = async (model: string): Promise<{ reply: string; finalModel: string }> => {
           try {
-            const reply = await fetchChatCompletion(model, history);
+            const reply = await fetchChatCompletion(model, history, abortControllerRef.current?.signal);
             return { reply, finalModel: model };
-          } catch (error) {
+          } catch (error: any) {
+            if (error?.name === 'AbortError') {
+              throw error;
+            }
+
             console.warn(`Lỗi API model ${model}:`, error);
             currentDisabled.add(model);
             setDisabledModels(new Set(currentDisabled));
             const nextModel = fallbackList.find(m => !currentDisabled.has(m));
             if (!nextModel) throw new Error("Tất cả các model đều thất bại.");
 
+            // Cập nhật model dropdown ngay lập tức khi fallback
+            setSelectedModel(nextModel);
+
+            const currentModelName = MODEL_CONFIG[model] || model;
+            const nextModelName = MODEL_CONFIG[nextModel] || nextModel;
             setToast({
-              message: `${MODEL_CONFIG[model] || model} đang quá tải. Đang tự động chuyển sang ${MODEL_CONFIG[nextModel] || nextModel}...`,
+              message: `${currentModelName} quá tải. Đang dùng ${nextModelName}`,
               type: 'warning'
             });
 
@@ -999,10 +1041,15 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
         params.set('session_id', newSessionId);
         router.replace(`${window.location.pathname}?${params.toString()}`);
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        console.log('User stopped the generation.');
+        return;
+      }
       console.error(e);
       setToast({ message: 'Lỗi khi tạo phiên trò chuyện', type: 'error' });
     } finally {
+      abortControllerRef.current = null;
       isSendingRef.current = false;
       setIsGenerating(false);
     }
@@ -1033,7 +1080,7 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
 
       {/* Thông báo Toast của AIChat */}
       {toast && (
-        <div className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-semibold shadow-lg border transition-all animate-in fade-in slide-in-from-bottom-2 duration-300 ${
+        <div className={`fixed top-20 right-6 z-50 flex items-center gap-2 rounded-xl px-4 py-3 text-xs font-semibold shadow-lg border transition-all animate-in fade-in slide-in-from-top-2 duration-300 ${
           toast.type === 'success'
             ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
             : toast.type === 'error'
@@ -1105,6 +1152,7 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
           hiddenContext={hiddenContext}
           setHiddenContext={setHiddenContext}
           isGenerating={isGenerating}
+          onStopGeneration={handleStopGeneration}
           selectedModel={selectedModel}
           setSelectedModel={setSelectedModel}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
