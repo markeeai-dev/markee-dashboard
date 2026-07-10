@@ -45,6 +45,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
+  attached_knowledge?: { id: string; title: string } | null;
 }
 
 interface ChatWindowProps {
@@ -162,7 +163,18 @@ export default function ChatWindow({
                     : 'bg-slate-50/50 border border-slate-200 text-slate-800 rounded-tl-none shadow-3xs'
                     }`}>
                     {isUser ? (
-                      renderUserContent(msg.content)
+                      <div className="space-y-2">
+                        {renderUserContent(msg.content)}
+                        {msg.attached_knowledge && (
+                          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-lg shadow-3xs max-w-full w-fit">
+                            <span>📎</span>
+                            <span className="font-semibold text-[10px] select-none text-slate-500">Đính kèm:</span>
+                            <span className="font-bold text-[10px] truncate max-w-[180px] md:max-w-[240px] text-slate-700" title={msg.attached_knowledge.title}>
+                              {msg.attached_knowledge.title}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div className="w-full min-w-0 wrap-break-word text-xs">
                         <MarkdownRenderer content={msg.content.replace(/\n{3,}/g, '\n\n')} />

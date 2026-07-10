@@ -22,6 +22,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
+  attached_knowledge?: { id: string; title: string } | null;
 }
 
 interface AIChatProps {
@@ -181,7 +182,7 @@ export default function AIChat({ profile }: AIChatProps) {
   const [pendingSessionProjectId, setPendingSessionProjectId] = useState<number | null>(null);
   const [pendingKnowledgeProjectName, setPendingKnowledgeProjectName] = useState<string | null>(null);
   const [initialMsgToSend, setInitialMsgToSend] = useState<string | null>(null);
-  const [hiddenContext, setHiddenContext] = useState<{ title: string; content: string } | null>(null);
+  const [hiddenContext, setHiddenContext] = useState<{ id?: string; title: string; content: string } | null>(null);
   const [stagedFile, setStagedFile] = useState<File | null>(null);
 
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
@@ -255,6 +256,7 @@ export default function AIChat({ profile }: AIChatProps) {
 
             // Lưu nội dung summary vào hiddenContext, ĐỂ TRỐNG thẻ textarea
             setHiddenContext({
+              id: parsedData.id || '',
               title: parsedData.title || 'Bản tóm tắt tri thức',
               content: parsedData.content
             });
@@ -470,6 +472,9 @@ export default function AIChat({ profile }: AIChatProps) {
 
   const handleSelectSession = (id: string | null) => {
     exitFolderView();
+    setHiddenContext(null); // Clear pending knowledge tag
+    setStagedFile(null); // Clear staged file
+    setPendingKnowledgeProjectName(null);
     if (!id) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('lastActiveChatId');
@@ -499,6 +504,9 @@ export default function AIChat({ profile }: AIChatProps) {
     setActiveSessionId(null);
     setMessages([]);
     setPendingSessionProjectId(null);
+    setHiddenContext(null); // Clear pending knowledge tag
+    setStagedFile(null); // Clear staged file
+    setPendingKnowledgeProjectName(null);
     setIsSidebarOpen(false);
     const params = new URLSearchParams(window.location.search);
     params.delete('folderId');
@@ -782,11 +790,16 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
         session_id: currentSessionId,
         role: 'user',
         content: dbContent,
+        attached_knowledge: hiddenContext ? { id: hiddenContext.id || '', title: hiddenContext.title } : null
       });
       if (userMsgErr) throw userMsgErr;
 
       // 3. Update local state (show display label in chat bubble)
-      const newUserMsg: Message = { role: 'user', content: dbContent };
+      const newUserMsg: Message = { 
+        role: 'user', 
+        content: dbContent,
+        attached_knowledge: hiddenContext ? { id: hiddenContext.id || '', title: hiddenContext.title } : null
+      };
       setMessages((prev) => [...prev, newUserMsg]);
 
       // 4. Update session title if it was the default title
@@ -960,10 +973,15 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
           session_id: newSessionId,
           role: 'user',
           content: dbContent,
+          attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null
         });
         if (userMsgErr) throw userMsgErr;
 
-        const newUserMsg: Message = { role: 'user', content: dbContent };
+        const newUserMsg: Message = { 
+          role: 'user', 
+          content: dbContent,
+          attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null
+        };
         setMessages([newUserMsg]);
 
         const params = new URLSearchParams(window.location.search);
