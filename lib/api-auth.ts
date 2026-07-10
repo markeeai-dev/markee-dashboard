@@ -46,7 +46,7 @@ export async function requireAdmin(supabase: SupabaseClient, email: string): Pro
     .eq("email", email)
     .single();
 
-  if (error || !data || data.role !== "admin") {
+  if (error || !data || !["admin", "super_admin"].includes(data.role)) {
     throw new AuthError("Admin access required", 403);
   }
 }

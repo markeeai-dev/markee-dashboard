@@ -132,7 +132,7 @@ export default function ChatWindow({
         </div>
       </div>
 
-      <div className="grow overflow-y-auto p-6 space-y-6 min-w-0">
+      <div className="grow overflow-y-auto p-3.5 md:p-6 space-y-4 md:space-y-6 min-w-0">
         {messages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-4">
             <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center text-markee-primary border border-red-100">
@@ -146,7 +146,7 @@ export default function ChatWindow({
             </div>
           </div>
         ) : (
-          <div className="space-y-6 w-full min-w-0">
+          <div className="space-y-4 md:space-y-6 w-full min-w-0">
             {messages.map((msg, index) => {
               const isUser = msg.role === 'user';
               return (
@@ -157,7 +157,7 @@ export default function ChatWindow({
                     </div>
                   )}
 
-                  <div className={`max-w-[75%] min-w-0 overflow-hidden rounded-2xl px-4 py-3 text-xs leading-relaxed ${isUser
+                  <div className={`max-w-[88%] md:max-w-[75%] min-w-0 overflow-hidden rounded-2xl px-3.5 py-3 text-xs leading-relaxed ${isUser
                     ? 'bg-red-50/50 border border-red-100 text-slate-800 rounded-tr-none'
                     : 'bg-slate-50/50 border border-slate-200 text-slate-800 rounded-tl-none shadow-3xs'
                     }`}>

@@ -34,9 +34,14 @@ interface AppUser {
 
 interface FileManagementProps {
   setActiveTab?: (tab: 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file') => void;
+  profile?: {
+    role: string;
+    email: string;
+    displayName: string;
+  } | null;
 }
 
-export default function FileManagement({ setActiveTab }: FileManagementProps) {
+export default function FileManagement({ setActiveTab, profile }: FileManagementProps) {
   const router = useRouter();
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
@@ -53,10 +58,20 @@ export default function FileManagement({ setActiveTab }: FileManagementProps) {
   const fetchFiles = async () => {
     setLoading(true);
     try {
-      // 1. Fetch uploaded files with joined ai_sessions according to schema
-      const { data: filesData, error: filesError } = await supabase
-        .from('uploaded_files')
-        .select('*, ai_sessions(*)')
+      // 1. Fetch uploaded files with joined ai_sessions. If 'user', filter to only their uploads
+      let query;
+      if (profile?.role === 'user') {
+        query = supabase
+          .from('uploaded_files')
+          .select('*, ai_sessions!inner(*)')
+          .eq('ai_sessions.author_id', profile.email);
+      } else {
+        query = supabase
+          .from('uploaded_files')
+          .select('*, ai_sessions(*)');
+      }
+
+      const { data: filesData, error: filesError } = await query
         .order('created_at', { ascending: false });
 
       if (filesError) throw filesError;
@@ -153,8 +168,14 @@ export default function FileManagement({ setActiveTab }: FileManagementProps) {
       {/* Header */}
       <section className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
         <div>
-          <h1 className="text-lg font-bold text-markee-text">Quản lý File & Tài nguyên</h1>
-          <p className="text-xs text-markee-muted">Tập hợp tất cả các tệp tài liệu được tải lên trong hệ thống chat.</p>
+          <h1 className="text-lg font-bold text-markee-text">
+            {profile?.role === 'user' ? 'File của tôi' : 'Quản lý File & Tài nguyên'}
+          </h1>
+          <p className="text-xs text-markee-muted">
+            {profile?.role === 'user'
+              ? 'Tập hợp các tệp tài liệu bạn đã tải lên trong hệ thống chat.'
+              : 'Tập hợp tất cả các tệp tài liệu được tải lên trong hệ thống chat.'}
+          </p>
         </div>
         <button
           onClick={fetchFiles}
@@ -206,9 +227,11 @@ export default function FileManagement({ setActiveTab }: FileManagementProps) {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
-                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-[35%]">Tên Tệp</th>
-                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-[25%]">Phiên AI / Prompt</th>
-                  <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-[20%]">Người tải lên</th>
+                  <th className={`p-4 text-xs font-bold text-slate-500 uppercase tracking-wider ${profile?.role === 'user' ? 'w-[50%]' : 'w-[35%]'}`}>Tên Tệp</th>
+                  <th className={`p-4 text-xs font-bold text-slate-500 uppercase tracking-wider ${profile?.role === 'user' ? 'w-[30%]' : 'w-[25%]'}`}>Phiên AI / Prompt</th>
+                  {profile?.role !== 'user' && (
+                    <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-[20%]">Người tải lên</th>
+                  )}
                   <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-[10%]">Dung lượng</th>
                   <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-[10%]">Ngày tải</th>
                   <th className="p-4 text-xs font-bold text-slate-500 uppercase tracking-wider w-[5%] text-center">Thao tác</th>
@@ -277,22 +300,24 @@ export default function FileManagement({ setActiveTab }: FileManagementProps) {
                       </td>
 
                       {/* Uploader */}
-                      <td className="p-4">
-                        <div className="min-w-0">
-                          {authorEmail ? (
-                            <>
-                              <span className="text-xs font-bold text-slate-800 block truncate">
-                                {matchedUser?.full_name || 'Không tên'}
-                              </span>
-                              <span className="text-[10px] text-slate-400 block font-semibold truncate mt-0.5">
-                                {authorEmail}
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-xs font-semibold text-slate-400 italic">Không có</span>
-                          )}
-                        </div>
-                      </td>
+                      {profile?.role !== 'user' && (
+                        <td className="p-4">
+                          <div className="min-w-0">
+                            {authorEmail ? (
+                              <>
+                                <span className="text-xs font-bold text-slate-800 block truncate">
+                                  {matchedUser?.full_name || 'Không tên'}
+                                </span>
+                                <span className="text-[10px] text-slate-400 block font-semibold truncate mt-0.5">
+                                  {authorEmail}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-xs font-semibold text-slate-400 italic">Không có</span>
+                            )}
+                          </div>
+                        </td>
+                      )}
 
                       {/* Size */}
                       <td className="p-4 text-xs text-slate-600 font-semibold">

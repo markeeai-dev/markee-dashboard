@@ -2627,37 +2627,41 @@ export default function RoleDashboard() {
           )}
 
           {/* ---- GROUP: Quản lý tài nguyên ---- */}
-          <div className="pt-3 pb-1">
-            <p className="px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Quản lý tài nguyên</p>
-          </div>
+          {(profile.role === 'admin' || profile.role === 'super_admin') && (
+            <>
+              <div className="pt-3 pb-1">
+                <p className="px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Quản lý tài nguyên</p>
+              </div>
 
-          <Link
-            href="?tab=quan-ly-vps"
-            scroll={false}
-            onClick={() => setActiveTab('quan-ly-vps')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === 'quan-ly-vps'
-                ? 'bg-markee-primary text-white shadow-md shadow-red-100'
-                : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
-            }`}
-          >
-            <span>🖥️</span>
-            <span>Quản lý VPS</span>
-          </Link>
+              <Link
+                href="?tab=quan-ly-vps"
+                scroll={false}
+                onClick={() => setActiveTab('quan-ly-vps')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
+                  activeTab === 'quan-ly-vps'
+                    ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                    : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+                }`}
+              >
+                <span>🖥️</span>
+                <span>Quản lý VPS</span>
+              </Link>
 
-          <Link
-            href="?tab=giam-sat-vps"
-            scroll={false}
-            onClick={() => setActiveTab('giam-sat-vps')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
-              activeTab === 'giam-sat-vps'
-                ? 'bg-markee-primary text-white shadow-md shadow-red-100'
-                : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
-            }`}
-          >
-            <span>📡</span>
-            <span>Giám sát VPS</span>
-          </Link>
+              <Link
+                href="?tab=giam-sat-vps"
+                scroll={false}
+                onClick={() => setActiveTab('giam-sat-vps')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
+                  activeTab === 'giam-sat-vps'
+                    ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+                    : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
+                }`}
+              >
+                <span>📡</span>
+                <span>Giám sát VPS</span>
+              </Link>
+            </>
+          )}
         </nav>
       </aside>
 
@@ -2733,7 +2737,7 @@ export default function RoleDashboard() {
           )}
 
           {activeTab === 'quan-ly-file' && (
-            <FileManagement setActiveTab={setActiveTab} />
+            <FileManagement setActiveTab={setActiveTab} profile={profile} />
           )}
 
           {activeTab === 'quan-ly-vps' && (
@@ -2890,8 +2894,7 @@ function UserManagement({ profile }: { profile: UserProfile }) {
           const { data: usageData } = await supabase
             .from('ai_usage_stats')
             .select('weekly_used, reset_time')
-            .eq('email', license.email)
-            .ilike('ai_tool', license.ai_tool) // BẮT BUỘC dùng ilike để bỏ qua phân biệt hoa/thường
+            .eq('license_id', license.id) // Query theo license_id
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -4057,9 +4060,9 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
     };
   }, [profile.email, refreshKey]);
 
-  const getLatestUsageStat = (tool: string) => {
+  const getLatestUsageStat = (licenseId: number) => {
     const matchingStats = usageStats.filter(
-      stat => stat.ai_tool.toLowerCase() === tool.toLowerCase()
+      stat => stat.license_id === licenseId
     );
     if (matchingStats.length === 0) return null;
     return matchingStats[0]; // Already sorted by created_at DESC in database query
@@ -4207,7 +4210,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
             const isExpiringSoon = diffDays >= 0 && diffDays <= 3;
             const showWarning = (isExpired || isExpiringSoon) && !isCanceled;
 
-            const match = getLatestUsageStat(lic.ai_tool);
+            const match = getLatestUsageStat(lic.id);
             const usageStr = match ? match.weekly_used : '0%';
             const usageNum = parseInt(usageStr.replace('%', '')) || 0;
             const resetTime = match ? match.reset_time : '';
@@ -4219,6 +4222,8 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
             if (showWarning) {
               borderClass = isExpired ? 'border-red-500 ring-1 ring-red-100' : 'border-amber-400 ring-1 ring-amber-100';
             }
+
+            const canManageLicense = profile.role === 'admin' || profile.role === 'super_admin' || profile.email === lic.email;
 
             return (
               <div
@@ -4245,7 +4250,7 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
                         </span>
                       )}
 
-                      {isPersonal && (
+                      {canManageLicense && (
                         <div className="relative">
                           <button
                             type="button"
