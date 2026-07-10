@@ -1171,7 +1171,7 @@ function UserDashboard({
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
                   placeholder="Tìm kiếm kỹ năng, danh mục hoặc người tạo..."
-                  className="w-full rounded-xl border border-markee-border bg-white py-3 pl-11 pr-4 text-sm text-markee-text outline-none transition-colors placeholder:text-markee-sub focus:border-markee-primary"
+                  className="w-full rounded-xl border border-markee-border bg-white py-3 pl-11 pr-4 text-base md:text-sm text-markee-text outline-none transition-colors placeholder:text-markee-sub focus:border-markee-primary"
                 />
               </div>
               <button
@@ -4860,7 +4860,7 @@ function KnowledgeHubDashboard({
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Tìm kiếm dự án hoặc nội dung tri thức..."
-              className="w-full pl-9 pr-4 py-2.5 text-xs border border-markee-border rounded-xl bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary placeholder:text-markee-muted shadow-2xs"
+              className="w-full pl-9 pr-4 py-2.5 text-base md:text-xs border border-markee-border rounded-xl bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary placeholder:text-markee-muted shadow-2xs"
             />
           </div>
 
@@ -4941,7 +4941,7 @@ function KnowledgeHubDashboard({
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Tìm kiếm bản tóm tắt trong dự án này..."
-              className="w-full pl-9 pr-4 py-2.5 text-xs border border-markee-border rounded-xl bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary placeholder:text-markee-muted shadow-2xs"
+              className="w-full pl-9 pr-4 py-2.5 text-base md:text-xs border border-markee-border rounded-xl bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary placeholder:text-markee-muted shadow-2xs"
             />
           </div>
 
@@ -5615,7 +5615,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
             value={projectSearch}
             onChange={(e) => setProjectSearch(e.target.value)}
             placeholder="Tìm kiếm dự án theo tên..."
-            className="w-full rounded-xl border border-markee-border bg-white py-2.5 pl-10 pr-4 text-xs text-markee-text outline-none transition-colors placeholder:text-markee-sub focus:border-markee-primary"
+            className="w-full rounded-xl border border-markee-border bg-white py-2.5 pl-10 pr-4 text-base md:text-xs text-markee-text outline-none transition-colors placeholder:text-markee-sub focus:border-markee-primary"
           />
         </div>
 
@@ -5628,7 +5628,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
               setSelectedDeptId(val);
               setSelectedTeamId(null);
             }}
-            className="w-full rounded-xl border border-markee-border bg-white px-3.5 py-2.5 text-xs font-semibold text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer"
+            className="w-full rounded-xl border border-markee-border bg-white px-3.5 py-2.5 text-base md:text-xs font-semibold text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer"
           >
             <option value="">Tất cả phòng ban</option>
             {departments.map((dept) => (
@@ -5646,7 +5646,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
               const val = e.target.value ? Number(e.target.value) : null;
               setSelectedTeamId(val);
             }}
-            className="w-full rounded-xl border border-markee-border bg-white px-3.5 py-2.5 text-xs font-semibold text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full rounded-xl border border-markee-border bg-white px-3.5 py-2.5 text-base md:text-xs font-semibold text-markee-text focus:border-markee-primary outline-none transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <option value="">Tất cả team</option>
             {teams
@@ -6462,7 +6462,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                 value={projectName}
                 onChange={(e) => setProjectName(e.target.value)}
                 placeholder="Nhập tên dự án..."
-                className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                className="w-full px-3 py-2 text-base md:text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -6513,7 +6513,7 @@ function ProjectManagement({ profile }: { profile: UserProfile }) {
                   value={editProjectName}
                   onChange={(e) => setEditProjectName(e.target.value)}
                   placeholder="Nhập tên dự án..."
-                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
+                  className="w-full px-3 py-2 text-base md:text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none focus:ring-1 focus:ring-markee-primary focus:border-markee-primary"
                   autoFocus
                 />
               </div>
