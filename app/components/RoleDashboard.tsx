@@ -2894,7 +2894,8 @@ function UserManagement({ profile }: { profile: UserProfile }) {
           const { data: usageData } = await supabase
             .from('ai_usage_stats')
             .select('weekly_used, reset_time')
-            .eq('license_id', license.id) // Query theo license_id
+            .eq('email', license.email)
+            .eq('ai_tool', license.ai_tool)
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -2908,7 +2909,7 @@ function UserManagement({ profile }: { profile: UserProfile }) {
           return {
             ...license,
             usagePercent: usageNumber,
-            weekly_used: usageData?.weekly_used || '0%',
+            weekly_used: usageData?.weekly_used || 'Chưa quét',
             reset_time: usageData?.reset_time || null
           };
         })
@@ -4060,9 +4061,9 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
     };
   }, [profile.email, refreshKey]);
 
-  const getLatestUsageStat = (licenseId: number) => {
+  const getLatestUsageStat = (email: string, aiTool: string) => {
     const matchingStats = usageStats.filter(
-      stat => stat.license_id === licenseId
+      stat => stat.email === email && stat.ai_tool === aiTool
     );
     if (matchingStats.length === 0) return null;
     return matchingStats[0]; // Already sorted by created_at DESC in database query
@@ -4210,9 +4211,9 @@ function MyAssetsView({ profile }: { profile: UserProfile }) {
             const isExpiringSoon = diffDays >= 0 && diffDays <= 3;
             const showWarning = (isExpired || isExpiringSoon) && !isCanceled;
 
-            const match = getLatestUsageStat(lic.id);
-            const usageStr = match ? match.weekly_used : '0%';
-            const usageNum = parseInt(usageStr.replace('%', '')) || 0;
+            const match = getLatestUsageStat(lic.email, lic.ai_tool);
+            const usageStr = match ? (match.weekly_used || '0%') : 'Chưa quét';
+            const usageNum = usageStr && usageStr !== 'Chưa quét' ? (parseInt(usageStr.replace('%', '')) || 0) : 0;
             const resetTime = match ? match.reset_time : '';
 
             const isPersonal = lic.plan_name.includes('(Cá nhân)');

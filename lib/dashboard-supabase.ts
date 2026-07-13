@@ -1007,7 +1007,6 @@ export interface AIUsageStat {
   ai_tool: string;
   weekly_used: string;
   reset_time: string;
-  license_id?: number | null;
 }
 
 export async function fetchAILicenses(): Promise<AILicense[]> {
