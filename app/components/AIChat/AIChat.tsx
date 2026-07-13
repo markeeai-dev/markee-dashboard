@@ -158,6 +158,7 @@ export default function AIChat({ profile }: AIChatProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const isSendingRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const prevSessionIdRef = useRef<string | null>(null);
 
   const handleStopGeneration = () => {
     if (abortControllerRef.current) {
@@ -246,6 +247,9 @@ export default function AIChat({ profile }: AIChatProps) {
         try {
           const parsedData = JSON.parse(pending);
           if (parsedData && parsedData.content) {
+            // Đặt flag để useEffect lắng nghe activeSessionId biết là đang nạp context từ Kho tri thức
+            sessionStorage.setItem('markee_loading_knowledge_flag', 'true');
+
             // Chuyển sang trạng thái "New Chat" (Pending session)
             setActiveSessionId(null);
             setMessages([]);
@@ -271,6 +275,24 @@ export default function AIChat({ profile }: AIChatProps) {
       }
     }
   }, [profile?.authUser?.id]);
+
+  // Clear pending knowledge/context when switching chat sessions
+  useEffect(() => {
+    if (prevSessionIdRef.current !== activeSessionId) {
+      const isFlagActive = typeof window !== 'undefined' && sessionStorage.getItem('markee_loading_knowledge_flag');
+      if (isFlagActive) {
+        // Nếu flag đang active, tức là đang nạp context từ Kho tri thức, ta KHÔNG clear context
+        // và chỉ xóa flag đi để lần chuyển đổi sau hoạt động bình thường
+        sessionStorage.removeItem('markee_loading_knowledge_flag');
+      } else {
+        // Chuyển đổi session bình thường, clear sạch state đính kèm để tránh leak context
+        setHiddenContext(null);
+        setStagedFile(null);
+        setPendingKnowledgeProjectName(null);
+      }
+      prevSessionIdRef.current = activeSessionId;
+    }
+  }, [activeSessionId]);
 
 
   // Dismiss toast automatically
@@ -1160,6 +1182,7 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
           skills={skills}
           stagedFile={stagedFile}
           setStagedFile={setStagedFile}
+          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         />
       ) : (
         <ChatWindow

@@ -564,9 +564,27 @@ function formatToolName(name: string): string {
 }
 
 export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promise<AdminOverviewMetrics> {
-  const periodStart = getPeriodStart(period);
+  let daysFilter = 0;
+  if (period === "7d") daysFilter = 7;
+  else if (period === "30d") daysFilter = 30;
 
-  let sessionQuery = supabase.from("ai_sessions").select("created_at, ai_tool, tokens_used, author_id").order("created_at", { ascending: true });
+  // 1. Gọi RPC get_dashboard_stats để lấy tổng số token và session tối ưu nhất
+  const { data: rpcData, error: rpcError } = await supabase.rpc("get_dashboard_stats", {
+    days_filter: daysFilter
+  });
+
+  if (rpcError) {
+    console.error("Error calling get_dashboard_stats RPC:", rpcError);
+  }
+
+  // Kết quả trả về từ RPC có dạng { total_sessions: number, total_tokens: number }
+  const stats = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+  const totalTokens = stats?.total_tokens ?? 0;
+  const totalSessions = stats?.total_sessions ?? 0;
+
+  // 2. Fetch dữ liệu biểu đồ và contributors từ ai_sessions
+  const periodStart = getPeriodStart(period);
+  let sessionQuery = supabase.from("ai_sessions").select("created_at, ai_tool, tokens_used").order("created_at", { ascending: true });
 
   if (periodStart) {
     sessionQuery = sessionQuery.gte("created_at", periodStart);
@@ -612,12 +630,11 @@ export async function fetchAdminOverviewMetrics(period: AnalyticsPeriod): Promis
 
   const contributorEmails = Array.from(contributorMap.keys());
   const authorMap = await getAuthorNameMap(contributorEmails);
-  const totalTokens = sessions.reduce((sum, session) => sum + (session.tokens_used || 0), 0);
 
   return {
     totalTokens,
     costUsd: totalTokens * 0.015,
-    totalSessions: sessions.length,
+    totalSessions,
     dailyTokens: Array.from(dailyMap.entries()).map(([date, tokens]) => ({
       date: formatChartDate(date),
       tokens,

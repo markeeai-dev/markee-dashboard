@@ -349,9 +349,6 @@ export default function ChatSidebar({
                   <span>📂</span>
                   <span>Dự án</span>
                 </div>
-                <span className="text-[10px] bg-slate-100 text-slate-500 font-bold px-1.5 py-0.5 rounded-full group-hover:bg-slate-250 transition-colors">
-                  {personalFolders.length}
-                </span>
               </Link>
             </div>
           ) : (

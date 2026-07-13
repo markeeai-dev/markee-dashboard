@@ -163,11 +163,13 @@ function StatCard({
   value,
   note,
   tone,
+  loading = false,
 }: {
   label: string;
   value: string;
   note: string;
   tone: 'blue' | 'green' | 'orange' | 'purple' | 'yellow';
+  loading?: boolean;
 }) {
   const tones = {
     blue: {
@@ -199,7 +201,11 @@ function StatCard({
     >
       <div className={`absolute left-3 top-4 bottom-4 w-1 rounded-full ${currentTone.line}`} />
       <p className="text-xs font-semibold uppercase tracking-wider text-markee-muted">{label}</p>
-      <p className="mt-2 text-2xl font-bold text-markee-text">{value}</p>
+      {loading ? (
+        <div className="mt-2.5 h-7 w-24 bg-slate-200 rounded-md animate-pulse" />
+      ) : (
+        <p className="mt-2 text-2xl font-bold text-markee-text">{value}</p>
+      )}
       <p className="mt-1 text-xs text-markee-sub">{note}</p>
     </div>
   );
@@ -2061,10 +2067,12 @@ function AdminOverview({
   metrics,
   period,
   onPeriodChange,
+  loading = false,
 }: {
   metrics: AdminOverviewMetrics;
   period: AnalyticsPeriod;
   onPeriodChange: (period: AnalyticsPeriod) => void;
+  loading?: boolean;
 }) {
   const periodOptions: { id: AnalyticsPeriod; label: string }[] = [
     { id: '7d', label: '7 ngày' },
@@ -2095,9 +2103,9 @@ function AdminOverview({
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
-        <StatCard label="Tổng token" value={formatNumber(metrics.totalTokens)} note="Dữ liệu từ extension" tone="blue" />
-        <StatCard label="Chi phí ước tính" value={formatCurrency(metrics.costUsd)} note="Token × 0.015 USD (Quy đổi)" tone="green" />
-        <StatCard label="Lượt sử dụng" value={formatNumber(metrics.totalSessions)} note="Số phiên AI được ghi nhận" tone="orange" />
+        <StatCard label="Tổng token" value={formatNumber(metrics.totalTokens)} note="Dữ liệu từ extension" tone="blue" loading={loading} />
+        <StatCard label="Chi phí ước tính" value={formatCurrency(metrics.costUsd)} note="Token × 0.015 USD (Quy đổi)" tone="green" loading={loading} />
+        <StatCard label="Lượt sử dụng" value={formatNumber(metrics.totalSessions)} note="Số phiên AI được ghi nhận" tone="orange" loading={loading} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
@@ -2282,7 +2290,7 @@ function AdminDashboard({
         </div>
       </section>
 
-      <AdminOverview metrics={metrics} period={period} onPeriodChange={setPeriod} />
+      <AdminOverview metrics={metrics} period={period} onPeriodChange={setPeriod} loading={loading} />
 
       <section className="grid gap-4 lg:grid-cols-[360px_1fr]">
         <div className="rounded-lg border border-markee-border bg-white p-4 h-[calc(100vh-200px)] overflow-y-auto">
@@ -2487,7 +2495,7 @@ export default function RoleDashboard() {
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-markee-bg text-markee-text font-sans">
       {/* Sidebar (Cột trái) */}
-      <aside className={`fixed md:relative inset-y-0 left-0 z-50 w-64 bg-white border-r border-markee-border flex flex-col transition-transform duration-300 transform ${isMainSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+      <aside className={`fixed md:relative inset-y-0 left-0 z-[100] w-64 bg-white border-r border-markee-border flex flex-col transition-transform duration-300 transform ${isMainSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         } shrink-0`}>
         {/* Logo */}
         <div className="p-5 border-b border-markee-border flex items-center gap-3">
@@ -2518,7 +2526,8 @@ export default function RoleDashboard() {
             <Link
               href="?tab=overview"
               scroll={false}
-              onClick={() => setActiveTab('overview')}
+              prefetch={false}
+              onClick={(e) => { e.stopPropagation(); setActiveTab('overview'); }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'overview'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2532,7 +2541,8 @@ export default function RoleDashboard() {
           <Link
             href="?tab=library"
             scroll={false}
-            onClick={() => setActiveTab('library')}
+            prefetch={false}
+            onClick={(e) => { e.stopPropagation(); setActiveTab('library'); }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'library'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2545,7 +2555,8 @@ export default function RoleDashboard() {
           <Link
             href="?tab=ai_chat"
             scroll={false}
-            onClick={() => setActiveTab('ai_chat')}
+            prefetch={false}
+            onClick={(e) => { e.stopPropagation(); setActiveTab('ai_chat'); }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'ai_chat'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2559,7 +2570,8 @@ export default function RoleDashboard() {
             <Link
               href="?tab=projects"
               scroll={false}
-              onClick={() => setActiveTab('projects')}
+              prefetch={false}
+              onClick={(e) => { e.stopPropagation(); setActiveTab('projects'); }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'projects'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2573,7 +2585,8 @@ export default function RoleDashboard() {
           <Link
             href="?tab=knowledge_hub"
             scroll={false}
-            onClick={() => setActiveTab('knowledge_hub')}
+            prefetch={false}
+            onClick={(e) => { e.stopPropagation(); setActiveTab('knowledge_hub'); }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'knowledge_hub'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2586,7 +2599,8 @@ export default function RoleDashboard() {
           <Link
             href="?tab=quan-ly-file"
             scroll={false}
-            onClick={() => setActiveTab('quan-ly-file')}
+            prefetch={false}
+            onClick={(e) => { e.stopPropagation(); setActiveTab('quan-ly-file'); }}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'quan-ly-file'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2600,7 +2614,8 @@ export default function RoleDashboard() {
             <Link
               href="?tab=assets"
               scroll={false}
-              onClick={() => setActiveTab('assets')}
+              prefetch={false}
+              onClick={(e) => { e.stopPropagation(); setActiveTab('assets'); }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'assets'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2615,7 +2630,8 @@ export default function RoleDashboard() {
             <Link
               href="?tab=users"
               scroll={false}
-              onClick={() => setActiveTab('users')}
+              prefetch={false}
+              onClick={(e) => { e.stopPropagation(); setActiveTab('users'); }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${activeTab === 'users'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
@@ -2636,7 +2652,8 @@ export default function RoleDashboard() {
               <Link
                 href="?tab=quan-ly-vps"
                 scroll={false}
-                onClick={() => setActiveTab('quan-ly-vps')}
+                prefetch={false}
+                onClick={(e) => { e.stopPropagation(); setActiveTab('quan-ly-vps'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'quan-ly-vps'
                     ? 'bg-markee-primary text-white shadow-md shadow-red-100'
@@ -2650,7 +2667,8 @@ export default function RoleDashboard() {
               <Link
                 href="?tab=giam-sat-vps"
                 scroll={false}
-                onClick={() => setActiveTab('giam-sat-vps')}
+                prefetch={false}
+                onClick={(e) => { e.stopPropagation(); setActiveTab('giam-sat-vps'); }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all cursor-pointer ${
                   activeTab === 'giam-sat-vps'
                     ? 'bg-markee-primary text-white shadow-md shadow-red-100'
@@ -2669,7 +2687,7 @@ export default function RoleDashboard() {
       {isMainSidebarOpen && (
         <div
           onClick={() => setIsMainSidebarOpen(false)}
-          className="fixed inset-0 bg-black/40 z-40 md:hidden animate-in fade-in duration-200"
+          className="fixed inset-0 bg-black/40 z-[90] md:hidden animate-in fade-in duration-200"
         />
       )}
 
@@ -2705,7 +2723,7 @@ export default function RoleDashboard() {
         </header>
 
         {/* Scrollable Content Container */}
-        <div className={`flex-1 ${(activeTab === 'ai_chat' || activeTab === 'chat-folders') ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
+        <div key={activeTab} className={`flex-1 ${(activeTab === 'ai_chat' || activeTab === 'chat-folders') ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
           {(activeTab === 'ai_chat' || activeTab === 'chat-folders') && (
             <AIChat profile={profile} />
           )}
@@ -4722,6 +4740,7 @@ function KnowledgeHubDashboard({
   setActiveTab: (tab: 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file') => void;
   profile: UserProfile;
 }) {
+  const router = useRouter();
   const [stats, setStats] = useState<CurationStats>({ rawSessions: 0, wipDrafts: 0, knowledgeHub: 0 });
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4993,6 +5012,14 @@ function KnowledgeHubDashboard({
                         projectId: selectedHubProject.id
                       };
                       sessionStorage.setItem('markee_pending_knowledge', JSON.stringify(payload));
+                      if (typeof window !== 'undefined') {
+                        localStorage.removeItem('lastActiveChatId');
+                      }
+                      const params = new URLSearchParams(window.location.search);
+                      params.set('tab', 'ai_chat');
+                      params.delete('session_id');
+                      params.delete('folderId');
+                      router.replace(`${window.location.pathname}?${params.toString()}`);
                       setActiveTab('ai_chat');
                     }}
                     className="bg-markee-primary hover:bg-markee-hover text-white px-3.5 py-2 rounded-xl transition-all text-xs font-bold cursor-pointer border-0 shadow-3xs flex items-center gap-1"

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Folder, Plus, Send, MessageSquare, Edit3, Calendar, BookOpen, X, Search } from 'lucide-react';
+import { Folder, Plus, Send, MessageSquare, Edit3, Calendar, BookOpen, X, Search, Menu } from 'lucide-react';
 import ChatInput from './ChatInput';
 
 interface FolderItem {
@@ -42,6 +42,7 @@ interface ProjectDetailViewProps {
   skills: { id: number; title: string; team_id: number; markdown_content: string }[];
   stagedFile?: File | null;
   setStagedFile?: (file: File | null) => void;
+  onToggleSidebar?: () => void;
 }
 
 export default function ProjectDetailView({
@@ -62,6 +63,7 @@ export default function ProjectDetailView({
   skills,
   stagedFile = null,
   setStagedFile,
+  onToggleSidebar,
 }: ProjectDetailViewProps) {
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -120,6 +122,16 @@ export default function ProjectDetailView({
       {/* Header */}
       <div className="border-b border-slate-100 px-8 py-5 flex items-center justify-between shrink-0 bg-slate-50/40">
         <div className="flex items-center gap-3">
+          {onToggleSidebar && (
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              className="md:hidden p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer mr-1"
+              title="Lịch sử chat"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          )}
           <div className="w-10 h-10 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center text-markee-primary shrink-0 shadow-3xs">
             <Folder className="w-5 h-5" />
           </div>
@@ -164,7 +176,7 @@ export default function ProjectDetailView({
       {/* Body Container */}
       <div className="flex-1 overflow-y-auto p-8 space-y-8 flex flex-col justify-between">
         {/* Quick Input Bar (Top) */}
-        <div className="w-full max-w-4xl mx-auto space-y-2 shrink-0 relative z-50">
+        <div className="w-full max-w-4xl mx-auto space-y-2 shrink-0 relative z-[40]">
           <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider px-1 text-center">Bắt đầu trò chuyện trong dự án này</h2>
           <div className="border border-slate-200 rounded-2xl bg-white shadow-sm">
             <ChatInput
