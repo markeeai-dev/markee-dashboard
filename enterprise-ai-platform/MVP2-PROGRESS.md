@@ -24,8 +24,33 @@
 
 ## Hạng mục 2 — Request Span đầy đủ
 
-Đang làm.
+**PASS — 30/30 test-harness (tăng từ 27), test cả trên đường mock lẫn traffic thật.**
+
+- Bảng mới `request_spans` (`spike/control-plane/migrations/002_request_spans.sql`) —
+  latency_ms, input/output/cached_tokens, estimated_cost_usd (bảng giá tĩnh
+  `spike/control-plane/pricing.js`, ghi rõ là ước lượng không phải billing chuẩn).
+- Endpoint nội bộ `POST /internal/v1/gateway/request-spans` — xác thực bằng
+  `CENTERAI_INTERNAL_SERVICE_SECRET` riêng (không phải employee_token, Adapter không phải
+  nhân viên), và `GET /v1/cost-summary?project_id=` cho dashboard/quản lý xem sau này.
+- **Gateway Adapter sửa thành phần nhạy cảm nhất đang chạy thật** — thêm đo `latency_ms`,
+  tap song song luồng response (đồng thời với `pipe()` đang stream về client, không chặn/đổi
+  gì luồng chính) để trích `usage` bằng regex best-effort (lấy occurrence CUỐI CÙNG của mỗi
+  field — đúng cho cả non-streaming lẫn streaming SSE tăng dần), gửi span lên Control Plane
+  async fire-and-forget SAU khi đã trả lời client xong.
+
+**Quy trình test kỹ trước khi coi là xong** (đúng yêu cầu không được phá Adapter đang chạy
+thật):
+1. Chạy lại bộ test mock gốc (`spike/test-harness/run-test.js`) — 7/7 PASS, xác nhận cô lập
+   seat + streaming vẫn đúng sau khi sửa.
+2. Deploy, gọi thật 1 request non-streaming qua Adapter công khai — xác nhận span lưu đúng
+   100% (`input_tokens=29, output_tokens=19`, cost tính đúng khớp công thức tay).
+3. Chạy lại Claude Code CLI thật qua `company-ai claude` (tool-use + streaming thật, giống
+   hệt kịch bản Bước 0/3 MVP1) — xác nhận **vẫn hoạt động đúng, không vỡ gì** — đồng thời xác
+   nhận span của request streaming cũng trích đúng usage (kể cả `cached_tokens` — thấy đúng
+   ~55.000 token cache hit thật trong dữ liệu lưu).
+4. Kiểm tra `systemctl status center-ai-adapter` sau toàn bộ test — service vẫn `active`, không
+   crash-loop.
 
 ## Hạng mục 3 — Handoff tự động sinh bằng LLM
 
-Chưa bắt đầu — phụ thuộc Hạng mục 2 xong.
+Đang làm.

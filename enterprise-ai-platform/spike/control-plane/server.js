@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { signToken, verifyToken } = require('../shared/token');
 const { query } = require('./db');
 const { id } = require('./ids');
+const { estimateCostUsd } = require('./pricing');
 
 const PORT = parseInt(process.env.PORT || '8090', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -28,10 +29,14 @@ const GATEWAY_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // đủ dài cho 1 ca làm vi
 // lộ ra domain công khai cho company-ai gọi từ máy nhân viên (Bước 2). Không phải SSO thật,
 // chỉ là rào chắn tối thiểu bắt buộc phải có trước khi public — không phải tính năng thêm.
 const PILOT_ACCESS_CODE = process.env.CENTERAI_PILOT_ACCESS_CODE;
+// MVP2 hạng mục 2 — Gateway Adapter gửi Request Span lên đây. Adapter KHÔNG phải nhân viên
+// nên không có employee_token — dùng secret nội bộ riêng, khác hẳn 2 secret ở trên, để lỡ lộ
+// 1 cái không kéo theo lộ cái khác (không tin nhau chéo giữa business token và internal call).
+const INTERNAL_SERVICE_SECRET = process.env.CENTERAI_INTERNAL_SERVICE_SECRET;
 
-if (!GATEWAY_TOKEN_SECRET || !EMPLOYEE_TOKEN_SECRET || !PILOT_ACCESS_CODE) {
+if (!GATEWAY_TOKEN_SECRET || !EMPLOYEE_TOKEN_SECRET || !PILOT_ACCESS_CODE || !INTERNAL_SERVICE_SECRET) {
   console.error(
-    '[control-plane] FATAL: thiếu CENTERAI_TOKEN_SECRET hoặc CENTERAI_EMPLOYEE_TOKEN_SECRET hoặc CENTERAI_PILOT_ACCESS_CODE trong env'
+    '[control-plane] FATAL: thiếu 1 trong các secret bắt buộc (CENTERAI_TOKEN_SECRET, CENTERAI_EMPLOYEE_TOKEN_SECRET, CENTERAI_PILOT_ACCESS_CODE, CENTERAI_INTERNAL_SERVICE_SECRET) trong env'
   );
   process.exit(1);
 }
@@ -152,6 +157,63 @@ async function handleListRecentHandoffs(req) {
      ORDER BY h.created_at DESC LIMIT 20`
   );
   return { status: 200, body: { handoffs: rows } };
+}
+
+// --- MVP2 hạng mục 2 · Request Span đầy đủ — Gateway Adapter gọi vào đây SAU khi đã trả
+// lời client xong (async, non-blocking từ phía Adapter). Ghi lỗi không bao giờ được coi là
+// lỗi nghiêm trọng phía Adapter — đây chỉ là log, mất 1 span không ảnh hưởng request AI thật.
+async function handleIngestRequestSpan(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || token !== INTERNAL_SERVICE_SECRET) throw new ApiError(401, 'invalid_internal_secret');
+
+  const body = await readJsonBody(req);
+  if (!body.gateway_request_id) throw new ApiError(400, 'missing_gateway_request_id');
+
+  const cost = estimateCostUsd(body.model, body.input_tokens, body.output_tokens);
+  await query(
+    `INSERT INTO request_spans
+       (id, gateway_request_id, work_session_id, tool_session_id, employee_id, project_id, task_id,
+        provider, model, input_tokens, output_tokens, cached_tokens, estimated_cost_usd, latency_ms,
+        status, http_status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     ON CONFLICT (gateway_request_id) DO NOTHING`,
+    [
+      id('rs'),
+      body.gateway_request_id,
+      body.work_session_id || null,
+      body.tool_session_id || null,
+      body.employee_id || null,
+      body.project_id || null,
+      body.task_id || null,
+      body.provider || null,
+      body.model || null,
+      body.input_tokens || null,
+      body.output_tokens || null,
+      body.cached_tokens || null,
+      cost,
+      body.latency_ms || null,
+      body.status || null,
+      body.http_status || null,
+    ]
+  );
+  return { status: 201, body: { ok: true } };
+}
+
+async function handleGetCostSummary(req, url) {
+  await requireEmployee(req);
+  const projectId = url.searchParams.get('project_id');
+  const { rows } = await query(
+    `SELECT employee_id, e.full_name AS employee_name, COUNT(*) AS request_count,
+            SUM(input_tokens) AS total_input_tokens, SUM(output_tokens) AS total_output_tokens,
+            SUM(estimated_cost_usd) AS total_estimated_cost_usd, AVG(latency_ms) AS avg_latency_ms
+     FROM request_spans rs LEFT JOIN employees e ON e.id = rs.employee_id
+     WHERE ($1::text IS NULL OR rs.project_id = $1)
+     GROUP BY employee_id, e.full_name
+     ORDER BY total_estimated_cost_usd DESC NULLS LAST`,
+    [projectId]
+  );
+  return { status: 200, body: { cost_by_employee: rows } };
 }
 
 // --- MVP2 · AI Timeline + AI Inbox (Q14) — "view, không phải bảng mới": union theo thời
@@ -571,6 +633,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/v1/inbox') {
       const result = await handleInbox(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'POST' && url.pathname === '/internal/v1/gateway/request-spans') {
+      const result = await handleIngestRequestSpan(req);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/cost-summary') {
+      const result = await handleGetCostSummary(req, url);
       return sendJson(res, result.status, result.body);
     }
 

@@ -7,8 +7,9 @@
 const CP = process.env.CONTROL_PLANE_URL || 'http://127.0.0.1:8090';
 const GATEWAY = process.env.GATEWAY_URL || 'https://valeron.tech';
 const ACCESS_CODE = process.env.CENTERAI_PILOT_ACCESS_CODE;
-if (!ACCESS_CODE) {
-  console.error('[test-harness] thiếu CENTERAI_PILOT_ACCESS_CODE trong env, không chạy được');
+const INTERNAL_SECRET = process.env.CENTERAI_INTERNAL_SERVICE_SECRET;
+if (!ACCESS_CODE || !INTERNAL_SECRET) {
+  console.error('[test-harness] thiếu CENTERAI_PILOT_ACCESS_CODE hoặc CENTERAI_INTERNAL_SERVICE_SECRET trong env, không chạy được');
   process.exit(1);
 }
 
@@ -227,6 +228,38 @@ async function main() {
 
   const contextNotes = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
   check('list project context-notes -> 200 (rỗng hoặc có dữ liệu đều hợp lệ)', contextNotes.status === 200 && Array.isArray(contextNotes.json.context_notes), contextNotes);
+
+  // --- MVP2 hạng mục 2: Request Span đầy đủ ---
+  const spanWrongSecret = await post(`${CP}/internal/v1/gateway/request-spans`, { gateway_request_id: 'wrong-secret-test' }, 'sai-secret-hoan-toan');
+  check('ingest request-span sai internal secret -> 401', spanWrongSecret.status === 401 && spanWrongSecret.json.error === 'invalid_internal_secret', spanWrongSecret);
+
+  const spanId = `test-harness-span-${Date.now()}`;
+  const spanOk = await post(
+    `${CP}/internal/v1/gateway/request-spans`,
+    {
+      gateway_request_id: spanId,
+      employee_id: 'emp_thanh',
+      project_id: 'proj_trungnguyen',
+      task_id: 'task_tng142',
+      provider: 'anthropic',
+      model: 'cc/claude-sonnet-5',
+      input_tokens: 1000,
+      output_tokens: 500,
+      latency_ms: 999,
+      status: 'ok',
+      http_status: 200,
+    },
+    INTERNAL_SECRET
+  );
+  check('ingest request-span đúng secret -> 201', spanOk.status === 201 && spanOk.json.ok === true, spanOk);
+
+  const costSummary = await get(`${CP}/v1/cost-summary?project_id=proj_trungnguyen`, thanhToken);
+  const thanhCost = costSummary.json.cost_by_employee?.find((r) => r.employee_id === 'emp_thanh');
+  check(
+    'cost-summary tính đúng cost span vừa ingest (1000 in + 500 out, giá claude-sonnet-5)',
+    costSummary.status === 200 && thanhCost && Number(thanhCost.total_estimated_cost_usd) >= 0.0105,
+    costSummary
+  );
 
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);

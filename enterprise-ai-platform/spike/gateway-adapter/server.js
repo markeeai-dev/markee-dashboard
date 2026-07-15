@@ -21,6 +21,10 @@ const { resolveSeat } = require('./registry');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const SECRET = process.env.CENTERAI_TOKEN_SECRET || 'spike-dev-secret-change-me';
+// MVP2 hạng mục 2 — Request Span đầy đủ. Adapter gọi Control Plane SAU khi đã trả lời
+// client xong (fire-and-forget), không phải nhân viên nên dùng secret nội bộ riêng.
+const CONTROL_PLANE_URL = process.env.CONTROL_PLANE_URL || 'http://127.0.0.1:8090';
+const INTERNAL_SERVICE_SECRET = process.env.CENTERAI_INTERNAL_SERVICE_SECRET || '';
 // Cho phép override đường dẫn log lúc deploy thật (không phải lúc nào cũng chạy
 // đúng từ thư mục spike/ có sẵn logs/ cạnh nó) — sửa lỗi thật gặp khi deploy lên
 // droplet: thư mục logs/ không tồn tại làm appendFileSync throw, làm CHẾT CẢ SERVER
@@ -39,6 +43,35 @@ function logSpan(entry) {
   console.log('[adapter]', JSON.stringify(entry));
 }
 
+// Best-effort, dùng chung cho cả non-streaming JSON lẫn streaming SSE — quét toàn bộ text
+// đã nhận, lấy occurrence CUỐI CÙNG của mỗi field (streaming gửi usage tăng dần, giá trị
+// cuối là đầy đủ nhất). Không cố JSON.parse/bracket-match nested object — rẻ và đủ đúng cho
+// "Request Span cơ bản" (mục 15), không cần chính xác tuyệt đối như billing thật.
+function extractUsageBestEffort(text) {
+  const lastNumber = (regex) => {
+    const matches = [...text.matchAll(regex)];
+    return matches.length ? parseInt(matches[matches.length - 1][1], 10) : undefined;
+  };
+  return {
+    input_tokens: lastNumber(/"input_tokens"\s*:\s*(\d+)/g),
+    output_tokens: lastNumber(/"output_tokens"\s*:\s*(\d+)/g),
+    cached_tokens: lastNumber(/"cache_read_input_tokens"\s*:\s*(\d+)/g),
+  };
+}
+
+// Fire-and-forget — KHÔNG bao giờ được ảnh hưởng request AI thật đang/đã xử lý. Gọi sau khi
+// response đã stream xong về client, lỗi chỉ log cục bộ, không throw/không retry.
+function reportRequestSpan(entry) {
+  if (!INTERNAL_SERVICE_SECRET) return; // chưa cấu hình (vd môi trường mock/test) — bỏ qua êm
+  fetch(`${CONTROL_PLANE_URL}/internal/v1/gateway/request-spans`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` },
+    body: JSON.stringify(entry),
+  }).catch((err) => {
+    console.error('[adapter] reportRequestSpan failed (non-fatal):', err.message);
+  });
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
@@ -46,6 +79,7 @@ function sendJson(res, status, body) {
 
 const server = http.createServer((req, res) => {
   const gatewayRequestId = crypto.randomUUID();
+  const requestStartedAt = Date.now();
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
@@ -165,7 +199,16 @@ const server = http.createServer((req, res) => {
       (upstreamRes) => {
         res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
         upstreamRes.pipe(res); // proxy streaming nguyên vẹn, không buffer lại toàn bộ
+
+        // Tap song song với pipe() để đọc usage sau khi xong — Readable hỗ trợ nhiều listener
+        // 'data' cùng lúc, KHÔNG ảnh hưởng luồng chính đang stream về client (đã test thật,
+        // xem MVP2-PROGRESS.md hạng mục 2 — chạy lại đúng kịch bản Claude Code CLI thật qua
+        // Adapter để xác nhận streaming/tool-use không bị phá bởi thay đổi này).
+        const tapChunks = [];
+        upstreamRes.on('data', (c) => tapChunks.push(c));
+
         upstreamRes.on('end', () => {
+          const httpStatus = upstreamRes.statusCode;
           logSpan({
             gateway_request_id: gatewayRequestId,
             employee_id,
@@ -177,8 +220,29 @@ const server = http.createServer((req, res) => {
             model: modelForLog,
             endpoint_used: seat.endpoint,
             status: 'ok',
-            http_status: upstreamRes.statusCode,
+            http_status: httpStatus,
           });
+
+          if (httpStatus >= 200 && httpStatus < 300) {
+            const tapText = Buffer.concat(tapChunks).toString('utf8');
+            const usage = extractUsageBestEffort(tapText);
+            reportRequestSpan({
+              gateway_request_id: gatewayRequestId,
+              employee_id,
+              work_session_id,
+              tool_session_id,
+              project_id,
+              task_id,
+              provider: 'anthropic',
+              model: modelForLog,
+              input_tokens: usage.input_tokens,
+              output_tokens: usage.output_tokens,
+              cached_tokens: usage.cached_tokens,
+              latency_ms: Date.now() - requestStartedAt,
+              status: 'ok',
+              http_status: httpStatus,
+            });
+          }
         });
       }
     );
