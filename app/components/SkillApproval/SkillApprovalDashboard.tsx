@@ -184,27 +184,60 @@ export default function SkillApprovalDashboard({
           <div className="space-y-2">
             {loading && <div className="text-xs text-markee-sub animate-pulse">Đang tải...</div>}
             {!loading &&
-              pendingSkills.map((skill) => (
-                <button
-                  key={skill.id}
-                  type="button"
-                  onClick={() => setSelectedSkillId(skill.id)}
-                  className={`block w-full rounded-lg border p-3 text-left transition-all ${selectedSkill?.id === skill.id
-                      ? 'border-markee-primary bg-red-50 text-markee-primary font-semibold'
-                      : 'border-markee-border bg-markee-bg text-markee-text hover:bg-white'
-                    }`}
-                >
-                  <div className="truncate text-xs font-semibold">{skill.title}</div>
-                  <div className="mt-1 text-xs text-markee-muted">
-                    {skill.category || 'Kỹ năng'} · {skill.authorName}
+              pendingSkills.map((skill) => {
+                const isExpanded = selectedSkillId === skill.id;
+                return (
+                  <div
+                    key={skill.id}
+                    onClick={() => setSelectedSkillId(isExpanded ? null : skill.id)}
+                    className={`block w-full rounded-lg border p-3 text-left transition-all cursor-pointer ${isExpanded
+                        ? 'border-markee-primary bg-red-50 text-markee-primary font-semibold'
+                        : 'border-markee-border bg-markee-bg text-markee-text hover:bg-white'
+                      }`}
+                  >
+                    <div className="truncate text-xs font-semibold">{skill.title}</div>
+                    <div className="mt-1 text-xs text-markee-muted">
+                      {skill.category || 'Kỹ năng'} · {skill.authorName}
+                    </div>
+
+                    {/* Accordion Content for Mobile */}
+                    {isExpanded && (
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="lg:hidden mt-3 pt-3 border-t border-markee-border/60 space-y-3 animate-in slide-in-from-top-2 duration-200"
+                      >
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setPendingAction('rejected'); }}
+                            disabled={actionBusy}
+                            className="rounded-lg bg-markee-primary hover:bg-markee-hover px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60 transition-colors cursor-pointer border-0 shadow-3xs"
+                          >
+                            Từ chối
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setPendingAction('approved'); }}
+                            disabled={actionBusy}
+                            className="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60 transition-colors cursor-pointer border-0 shadow-3xs"
+                          >
+                            Phê duyệt
+                          </button>
+                        </div>
+                        <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-lg border border-markee-border bg-white p-3 text-[10px] leading-5 text-markee-text font-mono font-normal">
+                          {skill.markdown_content}
+                        </pre>
+                      </div>
+                    )}
                   </div>
-                </button>
-              ))}
+                );
+              })}
             {!loading && pendingSkills.length === 0 && <div className="text-xs text-markee-sub">Không còn kỹ năng chờ duyệt.</div>}
           </div>
         </div>
 
-        <div className="rounded-lg border border-markee-border bg-white p-4 h-[calc(100vh-200px)] flex flex-col">
+        {/* Desktop Preview Panel */}
+        <div className="hidden lg:flex rounded-lg border border-markee-border bg-white p-4 h-[calc(100vh-200px)] flex-col">
           {selectedSkill ? (
             <>
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3 shrink-0">

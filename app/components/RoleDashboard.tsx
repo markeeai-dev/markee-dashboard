@@ -332,7 +332,7 @@ export default function RoleDashboard() {
 
   const setActiveTab = (tab: 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file' | 'quan-ly-vps' | 'giam-sat-vps' | 'skill_approval') => {
     _setActiveTab(tab);
-    setIsMainSidebarOpen(false);
+    setIsMobileOpen(false);
     const params = new URLSearchParams();
     params.set('tab', tab);
     router.replace(`${pathname}?${params.toString()}`);
@@ -367,7 +367,7 @@ export default function RoleDashboard() {
   }, []);
 
   const [isGuideOpen, setIsGuideOpen] = useState(false);
-  const [isMainSidebarOpen, setIsMainSidebarOpen] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   // Auto redirect user to library tab if their role is user
@@ -384,22 +384,20 @@ export default function RoleDashboard() {
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-markee-bg text-markee-text font-sans">
       {/* Sidebar (Cột trái) */}
-      <aside className={`fixed md:relative inset-y-0 left-0 z-[100] bg-white border-r border-markee-border flex flex-col transition-all duration-300 transform ${isMainSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${isCollapsed ? 'w-20' : 'w-64'} shrink-0`}>
+      <aside className={`fixed md:relative inset-y-0 left-0 z-[100] bg-white border-r border-markee-border flex flex-col transition-all duration-300 transform ${isMobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} ${isCollapsed ? 'w-72 md:w-20' : 'w-72 md:w-64'} shrink-0`}>
         {/* Logo & Toggle */}
         <div className={`p-4 border-b border-markee-border flex items-center justify-between ${isCollapsed ? 'flex-col gap-3 justify-center' : ''}`}>
           <div className="flex items-center gap-3">
             <img src="https://markeeai.com/logo.svg" alt="Markee Logo" className="w-8 h-8 shrink-0" />
-            {!isCollapsed && (
-              <div className="animate-in fade-in duration-200">
-                <div className="text-sm font-bold bg-linear-to-r from-slate-900 via-red-600 to-rose-600 bg-clip-text text-transparent">Markee AI Ops</div>
-                <div className="text-[10px] text-markee-muted uppercase tracking-wider font-semibold">Center Console</div>
-              </div>
-            )}
+            <div className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>
+              <div className="text-sm font-bold bg-linear-to-r from-slate-900 via-red-600 to-rose-600 bg-clip-text text-transparent">Markee AI Ops</div>
+              <div className="text-[10px] text-markee-muted uppercase tracking-wider font-semibold">Center Console</div>
+            </div>
           </div>
           <button
             type="button"
             onClick={() => setIsCollapsed(!isCollapsed)}
-            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer border-0 flex items-center justify-center"
+            className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors cursor-pointer border-0 items-center justify-center hidden md:flex"
             title={isCollapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"}
           >
             {isCollapsed ? <PanelLeftOpen className="w-5 h-5" /> : <PanelLeftClose className="w-5 h-5" />}
@@ -414,12 +412,10 @@ export default function RoleDashboard() {
           >
             {profile.displayName.charAt(0).toUpperCase()}
           </div>
-          {!isCollapsed && (
-            <div className="min-w-0 flex-1 animate-in fade-in duration-200">
-              <div className="text-sm font-bold text-markee-text truncate">{profile.displayName}</div>
-              <div className="text-xs text-markee-muted truncate capitalize">{roleLabel(profile.role)}</div>
-            </div>
-          )}
+          <div className={`min-w-0 flex-1 animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>
+            <div className="text-sm font-bold text-markee-text truncate">{profile.displayName}</div>
+            <div className="text-xs text-markee-muted truncate capitalize">{roleLabel(profile.role)}</div>
+          </div>
         </div>
 
         {/* Menu Items */}
@@ -430,13 +426,13 @@ export default function RoleDashboard() {
               scroll={false}
               prefetch={false}
               onClick={(e) => { e.stopPropagation(); setActiveTab('overview'); }}
-              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'overview'
+              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'overview'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
             >
               <span>📊</span>
-              {!isCollapsed && <span className="animate-in fade-in duration-200">Tổng quan</span>}
+              <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Tổng quan</span>
             </Link>
           )}
 
@@ -445,13 +441,13 @@ export default function RoleDashboard() {
             scroll={false}
             prefetch={false}
             onClick={(e) => { e.stopPropagation(); setActiveTab('ai_chat'); }}
-            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'ai_chat'
+            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'ai_chat'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
               }`}
           >
             <span>💬</span>
-            {!isCollapsed && <span className="animate-in fade-in duration-200">Trò chuyện cùng AI</span>}
+            <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Trò chuyện cùng AI</span>
           </Link>
 
           <Link
@@ -459,13 +455,13 @@ export default function RoleDashboard() {
             scroll={false}
             prefetch={false}
             onClick={(e) => { e.stopPropagation(); setActiveTab('library'); }}
-            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'library'
+            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'library'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
               }`}
           >
             <span>📚</span>
-            {!isCollapsed && <span className="animate-in fade-in duration-200">Thư viện kỹ năng</span>}
+            <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Thư viện kỹ năng</span>
           </Link>
 
           {(profile.role === 'admin' || profile.role === 'super_admin') && (
@@ -474,13 +470,13 @@ export default function RoleDashboard() {
               scroll={false}
               prefetch={false}
               onClick={(e) => { e.stopPropagation(); setActiveTab('skill_approval'); }}
-              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'skill_approval'
+              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'skill_approval'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
             >
               <span>✅</span>
-              {!isCollapsed && <span className="animate-in fade-in duration-200">Duyệt kỹ năng</span>}
+              <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Duyệt kỹ năng</span>
             </Link>
           )}
 
@@ -490,13 +486,13 @@ export default function RoleDashboard() {
               scroll={false}
               prefetch={false}
               onClick={(e) => { e.stopPropagation(); setActiveTab('projects'); }}
-              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'projects'
+              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'projects'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
             >
               <span>📁</span>
-              {!isCollapsed && <span className="animate-in fade-in duration-200">Quản Lý dự án</span>}
+              <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Quản Lý dự án</span>
             </Link>
           )}
 
@@ -505,13 +501,13 @@ export default function RoleDashboard() {
             scroll={false}
             prefetch={false}
             onClick={(e) => { e.stopPropagation(); setActiveTab('knowledge_hub'); }}
-            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'knowledge_hub'
+            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'knowledge_hub'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
               }`}
           >
             <span>🧠</span>
-            {!isCollapsed && <span className="animate-in fade-in duration-200">Kho Tri thức</span>}
+            <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Kho Tri thức</span>
           </Link>
 
           <Link
@@ -519,13 +515,13 @@ export default function RoleDashboard() {
             scroll={false}
             prefetch={false}
             onClick={(e) => { e.stopPropagation(); setActiveTab('quan-ly-file'); }}
-            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'quan-ly-file'
+            className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'quan-ly-file'
                 ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                 : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
               }`}
           >
-            <Files className={`w-4.5 h-4.5 shrink-0 ${isCollapsed ? 'mx-auto' : ''}`} />
-            {!isCollapsed && <span className="animate-in fade-in duration-200">Quản lý File</span>}
+            <Files className={`w-4.5 h-4.5 shrink-0 ${isCollapsed ? 'md:mx-auto' : ''}`} />
+            <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Quản lý File</span>
           </Link>
 
           {profile.role === 'user' && (
@@ -534,13 +530,13 @@ export default function RoleDashboard() {
               scroll={false}
               prefetch={false}
               onClick={(e) => { e.stopPropagation(); setActiveTab('assets'); }}
-              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'assets'
+              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'assets'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
             >
               <span>💳</span>
-              {!isCollapsed && <span className="animate-in fade-in duration-200">Tài khoản AI của tôi</span>}
+              <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Tài khoản AI của tôi</span>
             </Link>
           )}
 
@@ -550,13 +546,13 @@ export default function RoleDashboard() {
               scroll={false}
               prefetch={false}
               onClick={(e) => { e.stopPropagation(); setActiveTab('users'); }}
-              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'users'
+              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${activeTab === 'users'
                   ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
             >
               <span>👥</span>
-              {!isCollapsed && <span className="animate-in fade-in duration-200">Quản lý User</span>}
+              <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Quản lý User</span>
             </Link>
           )}
 
@@ -568,7 +564,12 @@ export default function RoleDashboard() {
                   <p className="px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Quản lý tài nguyên</p>
                 </div>
               ) : (
-                <div className="border-t border-slate-100 my-2 mx-4" />
+                <div className="block md:hidden pt-3 pb-1 animate-in fade-in duration-200">
+                  <p className="px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Quản lý tài nguyên</p>
+                </div>
+              )}
+              {isCollapsed && (
+                <div className="hidden md:block border-t border-slate-100 my-2 mx-4" />
               )}
 
               <Link
@@ -576,14 +577,14 @@ export default function RoleDashboard() {
                 scroll={false}
                 prefetch={false}
                 onClick={(e) => { e.stopPropagation(); setActiveTab('quan-ly-vps'); }}
-                className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${
+                className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${
                   activeTab === 'quan-ly-vps'
                     ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                     : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
               >
                 <span>🖥️</span>
-                {!isCollapsed && <span className="animate-in fade-in duration-200">Quản lý VPS</span>}
+                <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Quản lý VPS</span>
               </Link>
 
               <Link
@@ -591,26 +592,24 @@ export default function RoleDashboard() {
                 scroll={false}
                 prefetch={false}
                 onClick={(e) => { e.stopPropagation(); setActiveTab('giam-sat-vps'); }}
-                className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-center px-0 py-3' : 'gap-3 px-4 py-3'} ${
+                className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'} ${
                   activeTab === 'giam-sat-vps'
                     ? 'bg-markee-primary text-white shadow-md shadow-red-100'
                     : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
               >
                 <span>📡</span>
-                {!isCollapsed && <span className="animate-in fade-in duration-200">Giám sát VPS</span>}
+                <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Giám sát VPS</span>
               </Link>
             </>
           )}
         </nav>
-
-
       </aside>
 
       {/* Overlay cho Main Sidebar trên Mobile */}
-      {isMainSidebarOpen && (
+      {isMobileOpen && (
         <div
-          onClick={() => setIsMainSidebarOpen(false)}
+          onClick={() => setIsMobileOpen(false)}
           className="fixed inset-0 bg-black/40 z-[90] md:hidden animate-in fade-in duration-200"
         />
       )}
@@ -621,7 +620,7 @@ export default function RoleDashboard() {
         <header className="h-16 bg-white border-b border-markee-border px-6 flex items-center justify-between gap-3 shrink-0">
           <button
             type="button"
-            onClick={() => setIsMainSidebarOpen(true)}
+            onClick={() => setIsMobileOpen(true)}
             className="md:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
             title="Mở menu"
           >
