@@ -81,10 +81,16 @@ async function requireEmployee(req) {
   const { employee_id } = verified.payload;
   if (!employee_id) throw new ApiError(401, 'missing_claims');
 
-  const { rows } = await query('SELECT id, email, full_name, status FROM employees WHERE id = $1', [employee_id]);
+  const { rows } = await query('SELECT id, email, full_name, status, role FROM employees WHERE id = $1', [employee_id]);
   if (!rows.length || rows[0].status !== 'active') throw new ApiError(403, 'employee_inactive');
 
   return rows[0];
+}
+
+// Q22 — chỉ role=admin mới xem được risk-score/audit-logs/bật Full Audit Mode. Không tự động
+// xử lý ai (đúng nguyên tắc Q7/Q13), chỉ giới hạn AI XEM được — vẫn cần requireEmployee trước.
+function requireAdmin(emp) {
+  if (emp.role !== 'admin') throw new ApiError(403, 'admin_required');
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +104,7 @@ async function handleLogin(req) {
     throw new ApiError(401, 'invalid_access_code');
   }
 
-  const { rows } = await query('SELECT id, email, full_name, status FROM employees WHERE email = $1', [body.email]);
+  const { rows } = await query('SELECT id, email, full_name, status, role FROM employees WHERE email = $1', [body.email]);
   if (!rows.length) throw new ApiError(404, 'employee_not_found');
   const emp = rows[0];
   if (emp.status !== 'active') throw new ApiError(403, 'employee_inactive');
@@ -106,7 +112,7 @@ async function handleLogin(req) {
   const expires_at = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 ngày, tiện cho pilot
   const employee_token = signToken({ employee_id: emp.id, email: emp.email, expires_at }, EMPLOYEE_TOKEN_SECRET);
 
-  return { status: 200, body: { employee_id: emp.id, full_name: emp.full_name, employee_token, expires_at } };
+  return { status: 200, body: { employee_id: emp.id, full_name: emp.full_name, role: emp.role, employee_token, expires_at } };
 }
 
 async function handleListProjects(req) {
@@ -218,6 +224,100 @@ async function handleGetCostSummary(req, url) {
     [projectId]
   );
   return { status: 200, body: { cost_by_employee: rows } };
+}
+
+// --- MVP3 khởi động · Governance (Q13: Secret Scan + PII Detection) + 2-mode Audit (Q22) ---
+
+const SEVERITY_SCORE = { low: 1, med: 3, high: 5 };
+
+async function writeAuditLog(actorId, action, targetType, targetId, metadata) {
+  await query(
+    `INSERT INTO audit_logs (id, actor_id, action, target_type, target_id, metadata) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [id('al'), actorId, action, targetType || null, targetId || null, JSON.stringify(metadata || {})]
+  );
+}
+
+// Gateway Adapter gọi vào đây khi phát hiện secret/PII — cùng kiểu xác thực nội bộ với
+// /internal/v1/gateway/request-spans (INTERNAL_SERVICE_SECRET, không phải employee_token vì
+// Adapter không phải nhân viên).
+async function handleIngestFlag(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || token !== INTERNAL_SERVICE_SECRET) throw new ApiError(401, 'invalid_internal_secret');
+
+  const body = await readJsonBody(req);
+  if (!body.type || !body.severity) throw new ApiError(400, 'missing_type_or_severity');
+
+  const flagId = id('fl');
+  const score = SEVERITY_SCORE[body.severity] || 1;
+  await query(
+    `INSERT INTO flags (id, employee_id, work_session_id, type, severity, score, detail)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [flagId, body.employee_id || null, body.work_session_id || null, body.type, body.severity, score, JSON.stringify(body.detail || {})]
+  );
+  // actor_id = null — hành động này do hệ thống (Adapter) tự phát hiện, không phải nhân viên
+  // chủ động làm — audit_logs vẫn ghi lại để có dấu vết, đúng "mọi lần chặn/cảnh báo ghi audit_logs".
+  await writeAuditLog(null, `governance_${body.type}`, 'flag', flagId, {
+    employee_id: body.employee_id,
+    severity: body.severity,
+    blocked: body.blocked === true,
+  });
+
+  return { status: 201, body: { flag_id: flagId } };
+}
+
+async function handleGetRiskScore(req, url) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const scope = url.searchParams.get('scope') === 'project' ? 'project' : 'employee';
+
+  if (scope === 'employee') {
+    const { rows } = await query(
+      `SELECT f.employee_id, e.full_name, SUM(f.score) AS risk_score, COUNT(*) AS flag_count,
+              COUNT(*) FILTER (WHERE f.type = 'secret_detected') AS secret_count,
+              COUNT(*) FILTER (WHERE f.type = 'pii_detected') AS pii_count
+       FROM flags f LEFT JOIN employees e ON e.id = f.employee_id
+       GROUP BY f.employee_id, e.full_name ORDER BY risk_score DESC`
+    );
+    return { status: 200, body: { scope: 'employee', risk_scores: rows } };
+  }
+
+  const { rows } = await query(
+    `SELECT ws.project_id, SUM(f.score) AS risk_score, COUNT(*) AS flag_count
+     FROM flags f JOIN work_sessions ws ON ws.id = f.work_session_id
+     GROUP BY ws.project_id ORDER BY risk_score DESC`
+  );
+  return { status: 200, body: { scope: 'project', risk_scores: rows } };
+}
+
+async function handleGrantFullAuditMode(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const body = await readJsonBody(req);
+  if (!body.scope || !body.scope_id || !body.reason) throw new ApiError(400, 'missing_fields');
+  if (!['employee', 'project'].includes(body.scope)) throw new ApiError(400, 'invalid_scope');
+  const durationHours = Number(body.duration_hours) > 0 ? Number(body.duration_hours) : 4;
+
+  const grantId = id('fag');
+  const expiresAt = new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
+  await query(
+    `INSERT INTO full_audit_grants (id, scope, scope_id, reason, granted_by, expires_at) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [grantId, body.scope, body.scope_id, body.reason, emp.id, expiresAt]
+  );
+  await writeAuditLog(emp.id, 'full_audit_mode_granted', body.scope, body.scope_id, { reason: body.reason, expires_at: expiresAt });
+
+  return { status: 201, body: { grant_id: grantId, expires_at: expiresAt } };
+}
+
+async function handleListAuditLogs(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query(
+    `SELECT al.id, al.action, al.target_type, al.target_id, al.metadata, al.created_at, e.full_name AS actor_name
+     FROM audit_logs al LEFT JOIN employees e ON e.id = al.actor_id
+     ORDER BY al.created_at DESC LIMIT 100`
+  );
+  return { status: 200, body: { audit_logs: rows } };
 }
 
 // --- MVP2 · AI Timeline + AI Inbox (Q14) — "view, không phải bảng mới": union theo thời
@@ -780,6 +880,8 @@ async function handleContextRender(req, url) {
 
 const routes = [
   { method: 'POST', pattern: /^\/v1\/auth\/login$/, handler: (req) => handleLogin(req) },
+  { method: 'POST', pattern: /^\/v1\/governance\/full-audit-mode$/, handler: (req) => handleGrantFullAuditMode(req) },
+  { method: 'GET', pattern: /^\/v1\/audit-logs$/, handler: (req) => handleListAuditLogs(req) },
   { method: 'GET', pattern: /^\/v1\/projects$/, handler: (req) => handleListProjects(req) },
   {
     method: 'GET',
@@ -875,6 +977,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/v1/cost-summary') {
       const result = await handleGetCostSummary(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'POST' && url.pathname === '/internal/v1/governance/flags') {
+      const result = await handleIngestFlag(req);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/governance/risk-score') {
+      const result = await handleGetRiskScore(req, url);
       return sendJson(res, result.status, result.body);
     }
 

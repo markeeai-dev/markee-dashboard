@@ -52,10 +52,12 @@ async function main() {
 
   const thanhLogin = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local', access_code: ACCESS_CODE });
   check('login Thanh (đúng access_code) -> 200 + employee_token', thanhLogin.status === 200 && !!thanhLogin.json.employee_token, thanhLogin);
+  check('login Thanh trả đúng role=admin (MVP3 seed)', thanhLogin.json.role === 'admin', thanhLogin);
   const thanhToken = thanhLogin.json.employee_token;
 
   const hoangLogin = await post(`${CP}/v1/auth/login`, { email: 'hoang@company.local', access_code: ACCESS_CODE });
   check('login Hoang (đúng access_code) -> 200 + employee_token', hoangLogin.status === 200 && !!hoangLogin.json.employee_token, hoangLogin);
+  check('login Hoang trả đúng role=member (mặc định)', hoangLogin.json.role === 'member', hoangLogin);
   const hoangToken = hoangLogin.json.employee_token;
 
   const unknownLogin = await post(`${CP}/v1/auth/login`, { email: 'nobody@company.local', access_code: ACCESS_CODE });
@@ -320,6 +322,57 @@ async function main() {
     'cost-summary tính đúng cost span vừa ingest (1000 in + 500 out, giá claude-sonnet-5)',
     costSummary.status === 200 && thanhCost && Number(thanhCost.total_estimated_cost_usd) >= 0.0105,
     costSummary
+  );
+
+  // --- MVP3 khởi động: Governance (Q13) + 2-mode Audit (Q22) ---
+  const flagWrongSecret = await post(`${CP}/internal/v1/governance/flags`, { type: 'secret_detected', severity: 'high' }, 'sai-secret-hoan-toan');
+  check('ingest flag sai internal secret -> 401', flagWrongSecret.status === 401, flagWrongSecret);
+
+  const flagOk = await post(
+    `${CP}/internal/v1/governance/flags`,
+    { employee_id: 'emp_thanh', type: 'secret_detected', severity: 'high', detail: { pattern: 'aws_access_key' }, blocked: true },
+    INTERNAL_SECRET
+  );
+  check('ingest flag đúng secret -> 201', flagOk.status === 201 && !!flagOk.json.flag_id, flagOk);
+
+  const flagPiiOk = await post(
+    `${CP}/internal/v1/governance/flags`,
+    { employee_id: 'emp_thanh', type: 'pii_detected', severity: 'med', detail: { pattern: 'vn_national_id' }, blocked: false },
+    INTERNAL_SECRET
+  );
+  check('ingest flag PII (cảnh báo, không chặn) -> 201', flagPiiOk.status === 201, flagPiiOk);
+
+  const riskScoreAsMember = await get(`${CP}/v1/governance/risk-score`, hoangToken);
+  check('Hoàng (member) xem risk-score -> 403 admin_required', riskScoreAsMember.status === 403 && riskScoreAsMember.json.error === 'admin_required', riskScoreAsMember);
+
+  const riskScoreAsAdmin = await get(`${CP}/v1/governance/risk-score`, thanhToken);
+  const thanhRisk = riskScoreAsAdmin.json.risk_scores?.find((r) => r.employee_id === 'emp_thanh');
+  check(
+    'Thanh (admin) xem risk-score -> 200, đúng tổng điểm (high=5 + med=3 = 8)',
+    riskScoreAsAdmin.status === 200 && thanhRisk && Number(thanhRisk.risk_score) >= 8,
+    riskScoreAsAdmin
+  );
+
+  const grantAsMember = await post(`${CP}/v1/governance/full-audit-mode`, { scope: 'employee', scope_id: 'emp_hoang', reason: 'test' }, hoangToken);
+  check('Hoàng (member) bật Full Audit Mode -> 403', grantAsMember.status === 403, grantAsMember);
+
+  const grantAsAdmin = await post(
+    `${CP}/v1/governance/full-audit-mode`,
+    { scope: 'employee', scope_id: 'emp_hoang', reason: 'điều tra rò rỉ secret nghi vấn', duration_hours: 2 },
+    thanhToken
+  );
+  check('Thanh (admin) bật Full Audit Mode có lý do -> 201', grantAsAdmin.status === 201 && !!grantAsAdmin.json.grant_id, grantAsAdmin);
+
+  const auditLogsAsMember = await get(`${CP}/v1/audit-logs`, hoangToken);
+  check('Hoàng (member) xem audit-logs -> 403', auditLogsAsMember.status === 403, auditLogsAsMember);
+
+  const auditLogsAsAdmin = await get(`${CP}/v1/audit-logs`, thanhToken);
+  check(
+    'Thanh (admin) xem audit-logs -> 200, có đủ log secret_detected + full_audit_mode_granted vừa tạo',
+    auditLogsAsAdmin.status === 200 &&
+      auditLogsAsAdmin.json.audit_logs.some((a) => a.action === 'governance_secret_detected') &&
+      auditLogsAsAdmin.json.audit_logs.some((a) => a.action === 'full_audit_mode_granted'),
+    auditLogsAsAdmin
   );
 
   console.log(`\n${passed} PASS / ${failed} FAIL`);
