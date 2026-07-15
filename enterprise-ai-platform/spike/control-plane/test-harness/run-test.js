@@ -71,6 +71,51 @@ async function main() {
   const noAuthProjects = await get(`${CP}/v1/projects`);
   check('list projects không token -> 401', noAuthProjects.status === 401, noAuthProjects);
 
+  // --- MVP2 hạng mục 4: Task claim/lease (Q20) ---
+  const claimThanh = await post(`${CP}/v1/tasks/task_tng142/claim`, {}, thanhToken);
+  check('Thanh claim task_tng142 -> 200, exclusive', claimThanh.status === 200 && claimThanh.json.claimed_by_employee_id === 'emp_thanh', claimThanh);
+
+  const claimHoangBlocked = await post(`${CP}/v1/tasks/task_tng142/claim`, {}, hoangToken);
+  check(
+    'Hoàng claim khi Thanh đang giữ lease -> 409, kèm đúng thông tin ai đang giữ',
+    claimHoangBlocked.status === 409 && claimHoangBlocked.json.claimed_by_employee_id === 'emp_thanh' && claimHoangBlocked.json.claimed_by_name === 'Thanh',
+    claimHoangBlocked
+  );
+
+  const getClaimStatus = await get(`${CP}/v1/tasks/task_tng142/claim`, hoangToken);
+  check('Hoàng xem được claim hiện tại (không bị chặn xem, chỉ chặn claim)', getClaimStatus.status === 200 && getClaimStatus.json.claimed_by_employee_id === 'emp_thanh', getClaimStatus);
+
+  const releaseByHoang = await post(`${CP}/v1/tasks/task_tng142/release`, {}, hoangToken);
+  check('Hoàng release claim của Thanh -> 403 not_claim_owner', releaseByHoang.status === 403, releaseByHoang);
+
+  const releaseByThanh = await post(`${CP}/v1/tasks/task_tng142/release`, {}, thanhToken);
+  check('Thanh tự release claim của mình -> 200', releaseByThanh.status === 200 && releaseByThanh.json.released === true, releaseByThanh);
+
+  const claimHoangAfterRelease = await post(`${CP}/v1/tasks/task_tng142/claim`, {}, hoangToken);
+  check('Sau khi Thanh release, Hoàng claim thành công', claimHoangAfterRelease.status === 200 && claimHoangAfterRelease.json.claimed_by_employee_id === 'emp_hoang', claimHoangAfterRelease);
+  await post(`${CP}/v1/tasks/task_tng142/release`, {}, hoangToken); // dọn lại cho phần test còn lại không bị ảnh hưởng
+
+  // --- Overlap-check: 2 người cùng sửa 1 file trong 2 Work Session active khác nhau ---
+  const wsOverlapThanh = await post(`${CP}/v1/work-sessions`, { task_id: 'task_tng142' }, thanhToken);
+  const tsOverlapThanh = await post(`${CP}/v1/work-sessions/${wsOverlapThanh.json.work_session_id}/tool-sessions`, { tool: 'claude_code', machineId: 'overlap-test' }, thanhToken);
+  await post(`${CP}/v1/tool-sessions/${tsOverlapThanh.json.tool_session_id}/checkpoints`, { trigger: 'manual', files_changed: ['shared-file.ts'] }, thanhToken);
+
+  const wsOverlapHoang = await post(`${CP}/v1/work-sessions`, { task_id: 'task_tng142' }, hoangToken);
+  const tsOverlapHoang = await post(`${CP}/v1/work-sessions/${wsOverlapHoang.json.work_session_id}/tool-sessions`, { tool: 'claude_code', machineId: 'overlap-test' }, hoangToken);
+  await post(`${CP}/v1/tool-sessions/${tsOverlapHoang.json.tool_session_id}/checkpoints`, { trigger: 'manual', files_changed: ['shared-file.ts'] }, hoangToken);
+
+  const overlapCheck = await get(`${CP}/v1/tasks/task_tng142/overlap-check`, thanhToken);
+  check(
+    'overlap-check phát hiện đúng shared-file.ts bị 2 người cùng sửa',
+    overlapCheck.status === 200 &&
+      overlapCheck.json.overlaps.some((o) => o.file === 'shared-file.ts' && o.employees.length === 2),
+    overlapCheck
+  );
+
+  // dọn 2 Work Session vừa tạo để không ảnh hưởng các test resume phía dưới
+  await post(`${CP}/v1/work-sessions/${wsOverlapThanh.json.work_session_id}/end`, {}, thanhToken);
+  await post(`${CP}/v1/work-sessions/${wsOverlapHoang.json.work_session_id}/end`, {}, hoangToken);
+
   // --- Work Session: tạo mới + resume ---
   // Không assert cứng resumed:false ở lần gọi đầu — DB thật (Postgres, không phải mock)
   // có thể còn Work Session active từ lần chạy test-harness trước (đây là hành vi ĐÚNG

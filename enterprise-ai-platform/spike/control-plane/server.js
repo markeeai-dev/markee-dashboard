@@ -24,6 +24,10 @@ const EMPLOYEE_TOKEN_SECRET = process.env.CENTERAI_EMPLOYEE_TOKEN_SECRET;
 const GATEWAY_BASE_URL = process.env.GATEWAY_BASE_URL || 'https://valeron.tech';
 const IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6h (Q18/Q24.5 — không dùng ranh giới "cùng ngày")
 const GATEWAY_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // đủ dài cho 1 ca làm việc
+// MVP2 hạng mục 4 — Task claim/lease (Q20). Lease tự gia hạn mỗi khi người giữ claim tạo
+// checkpoint (còn hoạt động), tự hết hạn nếu không — KHÔNG có job nền dọn định kỳ, chỉ cần
+// so sánh lease_until với now() mỗi lần đọc là đủ, đơn giản hơn và không cần thêm tiến trình.
+const LEASE_DURATION_MS = 4 * 60 * 60 * 1000; // 4h — 1 ca làm việc, ngắn hơn Work Session idle timeout
 // Mã pilot chia sẻ ngoài băng thông (Slack/nói trực tiếp) cho Thanh/Hoàng — CHỈ để chặn
 // việc "biết email công ty là mint được token thật của người khác" một khi Control Plane
 // lộ ra domain công khai cho company-ai gọi từ máy nhân viên (Bước 2). Không phải SSO thật,
@@ -301,10 +305,19 @@ async function handleListProjectContext(req, params) {
 async function handleListTasks(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
-    'SELECT id, project_id, title, status, assignee_employee_id FROM tasks WHERE project_id = $1 ORDER BY created_at',
+    `SELECT t.id, t.project_id, t.title, t.status, t.assignee_employee_id,
+            t.claim_mode, t.claimed_by_employee_id, t.lease_until, e.full_name AS claimed_by_name
+     FROM tasks t LEFT JOIN employees e ON e.id = t.claimed_by_employee_id
+     WHERE t.project_id = $1 ORDER BY t.created_at`,
     [params.projectId]
   );
-  return { status: 200, body: { tasks: rows } };
+  // Ẩn claim đã hết hạn (đọc ra là coi như chưa claim) — không cần job dọn định kỳ.
+  const now = Date.now();
+  const tasks = rows.map((t) => {
+    const active = t.claimed_by_employee_id && t.lease_until && new Date(t.lease_until).getTime() > now;
+    return { ...t, claimed_by_employee_id: active ? t.claimed_by_employee_id : null, claimed_by_name: active ? t.claimed_by_name : null, lease_until: active ? t.lease_until : null };
+  });
+  return { status: 200, body: { tasks } };
 }
 
 async function findEmployeeSeat(employeeId) {
@@ -362,6 +375,112 @@ async function handleCreateWorkSession(req) {
   return { status: 201, body: { work_session_id: wsId, resumed: false, seat_id: seat.seat_id } };
 }
 
+// --- MVP2 hạng mục 4 · Task claim/lease đầy đủ (Q20) — thay cảnh báo mềm 1 dòng của POC.
+// exclusive: 1 người sở hữu, lease có hạn, tự gia hạn khi còn hoạt động (renew ở
+// handleCreateCheckpoint bên dưới), KHÔNG khoá cứng người khác — chỉ trả về 409 kèm đúng
+// thông tin ai đang giữ để CLI cảnh báo rõ, quyết định vẫn ở người dùng (đúng tinh thần Q20:
+// "vẫn xem được, xin tham gia được, hoặc chờ lease hết hạn").
+// shared: nhiều người cùng lúc được, claim chỉ mang tính thông tin, không có "chủ" duy nhất.
+
+async function loadTaskForClaim(taskId) {
+  const { rows } = await query(
+    `SELECT t.id, t.claim_mode, t.claimed_by_employee_id, t.lease_until, e.full_name AS claimed_by_name
+     FROM tasks t LEFT JOIN employees e ON e.id = t.claimed_by_employee_id
+     WHERE t.id = $1`,
+    [taskId]
+  );
+  if (!rows.length) throw new ApiError(404, 'task_not_found');
+  return rows[0];
+}
+
+function claimIsActive(task) {
+  return !!(task.claimed_by_employee_id && task.lease_until && new Date(task.lease_until).getTime() > Date.now());
+}
+
+async function handleGetTaskClaim(req, params) {
+  await requireEmployee(req);
+  const task = await loadTaskForClaim(params.id);
+  return {
+    status: 200,
+    body: {
+      claim_mode: task.claim_mode,
+      claimed_by_employee_id: claimIsActive(task) ? task.claimed_by_employee_id : null,
+      claimed_by_name: claimIsActive(task) ? task.claimed_by_name : null,
+      lease_until: claimIsActive(task) ? task.lease_until : null,
+    },
+  };
+}
+
+async function handleClaimTask(req, params) {
+  const emp = await requireEmployee(req);
+  const task = await loadTaskForClaim(params.id);
+
+  if (task.claim_mode === 'shared') {
+    return { status: 200, body: { claim_mode: 'shared', claimed: true } };
+  }
+
+  if (claimIsActive(task) && task.claimed_by_employee_id !== emp.id) {
+    throw new ApiError(409, 'task_already_claimed', {
+      claimed_by_employee_id: task.claimed_by_employee_id,
+      claimed_by_name: task.claimed_by_name,
+      lease_until: task.lease_until,
+    });
+  }
+
+  const leaseUntil = new Date(Date.now() + LEASE_DURATION_MS).toISOString();
+  await query(`UPDATE tasks SET claimed_by_employee_id = $1, lease_until = $2 WHERE id = $3`, [
+    emp.id,
+    leaseUntil,
+    task.id,
+  ]);
+  return { status: 200, body: { claim_mode: 'exclusive', claimed_by_employee_id: emp.id, lease_until: leaseUntil } };
+}
+
+async function handleReleaseTaskClaim(req, params) {
+  const emp = await requireEmployee(req);
+  const task = await loadTaskForClaim(params.id);
+  if (task.claimed_by_employee_id && task.claimed_by_employee_id !== emp.id) {
+    throw new ApiError(403, 'not_claim_owner');
+  }
+  await query(`UPDATE tasks SET claimed_by_employee_id = NULL, lease_until = NULL WHERE id = $1`, [task.id]);
+  return { status: 200, body: { released: true } };
+}
+
+// Phát hiện va chạm file (Q20) — quét checkpoint GẦN NHẤT của mỗi Work Session đang active
+// trên task, so file đang sửa giữa các nhân viên KHÁC nhau. Chỉ cảnh báo, không chặn gì.
+async function handleOverlapCheck(req, params) {
+  await requireEmployee(req);
+  const { rows } = await query(
+    `SELECT ws.id AS work_session_id, ws.employee_id, e.full_name, cp.files_changed, cp.created_at
+     FROM work_sessions ws
+       JOIN employees e ON e.id = ws.employee_id
+       JOIN tool_sessions ts ON ts.work_session_id = ws.id
+       JOIN checkpoints cp ON cp.tool_session_id = ts.id
+     WHERE ws.task_id = $1 AND ws.status = 'active'
+     ORDER BY cp.created_at ASC`,
+    [params.id]
+  );
+
+  const latestByWorkSession = new Map();
+  for (const r of rows) latestByWorkSession.set(r.work_session_id, r); // ASC -> giá trị cuối = mới nhất
+
+  const fileToEmployees = new Map();
+  for (const r of latestByWorkSession.values()) {
+    for (const f of r.files_changed || []) {
+      if (!fileToEmployees.has(f)) fileToEmployees.set(f, new Map());
+      fileToEmployees.get(f).set(r.employee_id, r.full_name);
+    }
+  }
+
+  const overlaps = [];
+  for (const [file, employeesMap] of fileToEmployees) {
+    if (employeesMap.size > 1) {
+      overlaps.push({ file, employees: [...employeesMap.entries()].map(([employee_id, full_name]) => ({ employee_id, full_name })) });
+    }
+  }
+  return { status: 200, body: { overlaps } };
+}
+
 async function loadOwnedWorkSession(workSessionId, employeeId) {
   const { rows } = await query('SELECT * FROM work_sessions WHERE id = $1', [workSessionId]);
   if (!rows.length) throw new ApiError(404, 'work_session_not_found');
@@ -374,6 +493,15 @@ async function handleEndWorkSession(req, params) {
   const ws = await loadOwnedWorkSession(params.id, emp.id);
   if (ws.status === 'closed') return { status: 200, body: { work_session_id: ws.id, status: 'closed' } };
   await query(`UPDATE work_sessions SET status = 'closed', ended_at = now() WHERE id = $1`, [ws.id]);
+
+  // `company-ai end` = chủ động xong việc — nhả claim exclusive nếu đúng người này đang giữ,
+  // để người khác không phải chờ hết lease 4h mới nhận task được (Q20: không khoá cứng).
+  await query(
+    `UPDATE tasks SET claimed_by_employee_id = NULL, lease_until = NULL
+     WHERE id = $1 AND claimed_by_employee_id = $2`,
+    [ws.task_id, emp.id]
+  );
+
   return { status: 200, body: { work_session_id: ws.id, status: 'closed' } };
 }
 
@@ -417,7 +545,7 @@ async function handleCreateToolSession(req, params) {
 
 async function loadOwnedToolSession(toolSessionId, employeeId) {
   const { rows } = await query(
-    `SELECT ts.*, ws.employee_id AS ws_employee_id FROM tool_sessions ts
+    `SELECT ts.*, ws.employee_id AS ws_employee_id, ws.task_id AS ws_task_id FROM tool_sessions ts
      JOIN work_sessions ws ON ws.id = ts.work_session_id WHERE ts.id = $1`,
     [toolSessionId]
   );
@@ -450,6 +578,16 @@ async function handleCreateCheckpoint(req, params) {
       body.git_branch || null,
     ]
   );
+
+  // Gia hạn lease claim (Q20) nếu người tạo checkpoint này đang là chủ claim exclusive của
+  // task — "tự nhả nếu idle" hoạt động tự nhiên: không hoạt động thì không ai gia hạn, lease
+  // cứ thế hết hạn theo đúng mốc đã đặt, không cần job nền dọn dẹp riêng.
+  await query(
+    `UPDATE tasks SET lease_until = $1
+     WHERE id = $2 AND claimed_by_employee_id = $3 AND claim_mode = 'exclusive'`,
+    [new Date(Date.now() + LEASE_DURATION_MS).toISOString(), ts.ws_task_id, emp.id]
+  );
+
   return { status: 201, body: { checkpoint_id: cpId } };
 }
 
@@ -660,6 +798,10 @@ const routes = [
     handler: (req) => handleListActiveWorkSessions(req),
   },
   { method: 'GET', pattern: /^\/v1\/handoffs$/, handler: (req) => handleListRecentHandoffs(req) },
+  { method: 'GET', pattern: /^\/v1\/tasks\/([^/]+)\/claim$/, handler: (req, m) => handleGetTaskClaim(req, { id: m[1] }) },
+  { method: 'POST', pattern: /^\/v1\/tasks\/([^/]+)\/claim$/, handler: (req, m) => handleClaimTask(req, { id: m[1] }) },
+  { method: 'POST', pattern: /^\/v1\/tasks\/([^/]+)\/release$/, handler: (req, m) => handleReleaseTaskClaim(req, { id: m[1] }) },
+  { method: 'GET', pattern: /^\/v1\/tasks\/([^/]+)\/overlap-check$/, handler: (req, m) => handleOverlapCheck(req, { id: m[1] }) },
   { method: 'POST', pattern: /^\/v1\/work-sessions$/, handler: (req) => handleCreateWorkSession(req) },
   {
     method: 'POST',

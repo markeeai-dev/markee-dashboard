@@ -15,7 +15,7 @@ const {
 const { ControlPlaneClient } = require('../api');
 const git = require('../git');
 const render = require('../render');
-const { ask } = require('../prompt');
+const { ask, askYesNo } = require('../prompt');
 
 // Phát hiện thật ở Bước 0 (MVP0-SPIKE.md): Claude Code CLI mặc định gửi alias model rút
 // gọn mà 9Router không hiểu (404) — company-ai BẮT BUỘC tự truyền đúng id 9Router.
@@ -58,6 +58,25 @@ async function run(args, tool) {
   const task = await pickTask(client, projectYaml.project_id, args.task);
   console.log(`\nProject: ${projectYaml.project_id}\nTask: [${task.id}] ${task.title}\n`);
 
+  // Task claim/lease (Q20, MVP2 hạng mục 4) — KHÔNG khoá cứng, chỉ cảnh báo rõ ràng ai đang
+  // giữ, quyết định cuối vẫn ở người dùng. --yes bỏ qua hỏi (automation), người dùng thật ở
+  // TTY vẫn được hỏi đầy đủ.
+  try {
+    await client.claimTask(task.id);
+  } catch (err) {
+    if (err.status === 409) {
+      const until = err.body.lease_until ? new Date(err.body.lease_until).toLocaleString('vi-VN') : '?';
+      console.log(`⚠ Task ${task.id} đang được ${err.body.claimed_by_name} giữ (lease đến ${until}).`);
+      const proceed = args.yes === true || (await askYesNo('Vẫn muốn tiếp tục làm task này? (có thể trùng việc với người đó)', false));
+      if (!proceed) {
+        console.log('Đã dừng — không mở Claude Code.');
+        return;
+      }
+    } else {
+      throw err;
+    }
+  }
+
   const wsResult = await client.createWorkSession(task.id);
   console.log(
     wsResult.resumed
@@ -94,6 +113,18 @@ async function run(args, tool) {
     started_head_commit: startedHeadCommit,
     branch,
   });
+
+  // Phát hiện va chạm file (Q20) — chỉ cảnh báo, không chặn (đúng dữ liệu từ checkpoint gần
+  // nhất của các Work Session active khác trên cùng task, không phải lock cứng theo file).
+  try {
+    const { overlaps } = await client.overlapCheck(task.id);
+    if (overlaps.length) {
+      console.log('⚠ Có thể trùng vùng sửa (file đang được nhiều người sửa trong session active khác):');
+      for (const o of overlaps) console.log(`  - ${o.file}: ${o.employees.map((e) => e.full_name).join(', ')}`);
+    }
+  } catch {
+    // overlap-check chỉ là cảnh báo phụ — lỗi ở đây không được chặn company-ai claude
+  }
 
   const model = args.model ? (args.model.startsWith('cc/') ? args.model : `cc/${args.model}`) : DEFAULT_MODEL;
   const binName = tool === 'codex' ? 'codex' : 'claude';

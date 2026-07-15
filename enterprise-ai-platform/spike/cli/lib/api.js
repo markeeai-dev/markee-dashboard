@@ -86,6 +86,15 @@ class ControlPlaneClient {
       git_diff_stat: gitDiffStat,
     });
   }
+  claimTask(taskId) {
+    return this._req('POST', `/v1/tasks/${encodeURIComponent(taskId)}/claim`);
+  }
+  getTaskClaim(taskId) {
+    return this._req('GET', `/v1/tasks/${encodeURIComponent(taskId)}/claim`);
+  }
+  overlapCheck(taskId) {
+    return this._req('GET', `/v1/tasks/${encodeURIComponent(taskId)}/overlap-check`);
+  }
 }
 
 module.exports = { ControlPlaneClient, ControlPlaneError };

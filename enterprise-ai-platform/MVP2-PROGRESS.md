@@ -1,8 +1,9 @@
 # MVP2 — Tiến độ thực thi
 
-> Kế hoạch tham chiếu `ai-operations-center-design.md` mục 14, phạm vi đợt này đã chốt trong
+> Kế hoạch tham chiếu `ai-operations-center-design.md` mục 14, phạm vi đợt 1 đã chốt trong
 > plan: 3 hạng mục ưu tiên cao nhất tài liệu tự nêu (AI Timeline/Inbox, Request Span đầy đủ,
-> Handoff sinh bằng LLM). Nhật ký PASS/FAIL thật, không phải kế hoạch.
+> Handoff sinh bằng LLM) + Hạng mục 4 (Task claim/lease) làm nốt phần MVP2 còn lại theo yêu
+> cầu tiếp theo. Nhật ký PASS/FAIL thật, không phải kế hoạch.
 
 ## Hạng mục 1 — AI Timeline + AI Inbox (Q14)
 
@@ -72,9 +73,39 @@ riêng đường `--no-ai` (fallback hoạt động đúng, không gọi AI). Ho
 nhất qua `company-ai claude` như bình thường — downstream không phân biệt handoff AI-soạn hay
 git-diff thuần, dùng chung 1 luồng.
 
-## MVP2 (đợt 1) — Kết luận
+## Hạng mục 4 — Task claim/lease đầy đủ (Q20)
 
-**PASS toàn bộ 3 hạng mục**, đúng đúng phạm vi đã chốt trong plan, không lấn sang việc cố tình
-hoãn (vector search, browser extension, connector Codex, task claim/lease đầy đủ). Test-harness
-tăng từ 25 (cuối MVP1) lên **32/32 PASS**, toàn bộ đều test bằng traffic thật, không mock,
-2 hạng mục sau cùng còn xác nhận qua CLI thật với Claude Code CLI thật.
+**PASS — 39/39 test-harness (tăng từ 32), test thật qua CLI đầy đủ (2 danh tính thật, không mock).**
+
+Thay cảnh báo mềm 1 dòng của POC bằng đúng thiết kế Q20:
+- **Exclusive** (mặc định): 1 người claim task, lease 4h — **tự gia hạn mỗi khi người đó tạo
+  checkpoint** (còn hoạt động thì không lo hết hạn giữa chừng), **tự hết hạn nếu idle** (không
+  cần job nền dọn — chỉ so `lease_until` với `now()` mỗi lần đọc). `company-ai end` tự nhả
+  claim ngay khi người giữ chủ động xong việc, không bắt người sau chờ hết 4h.
+- **Shared**: nhiều người claim cùng lúc được, chỉ mang tính thông tin — không có logic nào
+  thêm ngoài field `claim_mode` trên task.
+- **Không khoá cứng** (đúng tinh thần Q20 "vẫn xem được, xin tham gia được") — API trả 409 kèm
+  đầy đủ thông tin ai đang giữ/đến khi nào, CLI hiện cảnh báo rõ và hỏi xác nhận trước khi tiếp
+  tục (`--yes` bỏ qua hỏi cho automation), KHÔNG chặn cứng việc mở Claude Code.
+- **Phát hiện va chạm file**: endpoint mới quét checkpoint gần nhất của mọi Work Session đang
+  active trên 1 task, báo file nào đang bị ≥2 người khác nhau cùng sửa — chỉ cảnh báo.
+- `company-ai claude` gọi claim + overlap-check tự động trước khi mở tool; `company-ai status`
+  hiện cả 2 thông tin này on-demand giữa phiên. Dashboard (Projects & Tasks) thêm cột hiện
+  badge ai đang giữ claim + đến khi nào.
+
+**Test thật qua CLI**: Thanh claim + làm task (không cảnh báo vì chưa ai giữ) → Hoàng thử vào
+đúng task đó, `company-ai claude` hiện đúng cảnh báo "Task task_tng142 đang được Thanh giữ
+(lease đến ...)", `--yes` cho phép tiếp tục (không bị chặn) → `company-ai status` xác nhận hiện
+đúng thông tin claim thời gian thực.
+
+## MVP2 — Kết luận
+
+**PASS toàn bộ 4 hạng mục** (AI Timeline/Inbox, Request Span đầy đủ, Handoff sinh bằng LLM,
+Task claim/lease đầy đủ). Chỉ còn cố tình hoãn: vector search, browser extension, connector
+Codex/GPT thật (thiếu account) — đúng lý do tài liệu tự nêu, không phải bỏ sót. Test-harness
+tăng từ 25 (cuối MVP1) lên **39/39 PASS**, toàn bộ test bằng traffic thật, không mock, 3/4
+hạng mục còn xác nhận qua CLI thật với Claude Code CLI thật (không chỉ test API).
+
+→ **MVP2 hoàn thành, chuyển sang MVP3** — governance/audit/policy cơ bản, giữ nguyên phạm vi
+sản phẩm chung cho team dev tại nhiều loại doanh nghiệp khác nhau, không thiết kế riêng cho
+1 ngành cụ thể.

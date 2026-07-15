@@ -176,11 +176,14 @@ async function renderProjects(root) {
   root.innerHTML = projects.map((p, i) => `
     <div class="panel">
       <h2>${esc(p.name)} <span class="pill ok">${esc(p.status)}</span></h2>
-      <table><thead><tr><th>Task ID</th><th>Tiêu đề</th><th>Trạng thái</th><th>Người phụ trách</th></tr></thead>
+      <table><thead><tr><th>Task ID</th><th>Tiêu đề</th><th>Trạng thái</th><th>Người phụ trách</th><th>Claim (Q20)</th></tr></thead>
       <tbody>${taskLists[i].tasks.map((t) => `
         <tr><td><code>${esc(t.id)}</code></td><td>${esc(t.title)}</td>
         <td><span class="pill ${t.status === 'closed' ? 'ok' : 'warn'}">${esc(t.status)}</span></td>
-        <td>${esc(t.assignee_employee_id || '—')}</td></tr>`).join('') || `<tr><td colspan="4" class="empty">Chưa có task</td></tr>`}
+        <td>${esc(t.assignee_employee_id || '—')}</td>
+        <td>${t.claimed_by_employee_id
+            ? `<span class="pill warn">${esc(t.claimed_by_name)} đến ${new Date(t.lease_until).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>`
+            : `<span class="empty">${t.claim_mode === 'shared' ? 'shared' : 'chưa ai giữ'}</span>`}</td></tr>`).join('') || `<tr><td colspan="5" class="empty">Chưa có task</td></tr>`}
       </tbody></table>
     </div>`).join('') || '<div class="panel empty">Chưa có project nào.</div>';
 }
