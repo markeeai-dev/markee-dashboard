@@ -36,12 +36,45 @@ tự động theo seat state machine, workflow duyệt gán/thu hồi seat, `/v1
 
 ## Bước 2 — CLI wrapper `company-ai`
 
-**Đang làm.**
+**PASS.** `spike/cli/` — `login/init/claude/codex/status/checkpoint/end` đúng theo Q24.2.
+Gọi Control Plane thật qua `cp.valeron.tech`, mở Claude Code thật qua `spawn` (không mock).
 
-## Bước 3 — Test kịch bản POC đầy đủ (mục 15)
+3 bug thật tìm thấy và sửa khi test bằng traffic thật (chi tiết `spike/cli/README.md`):
+Windows npm shim `.cmd` gây `ENOENT`; `shell:true` + args mảng vỡ quoting (`git commit -A`
+bị hiểu sai) — sửa bằng `cross-spawn`; nhiều `readline.Interface` liên tiếp trên stdin đã
+pipe làm treo câu hỏi thứ 2 trở đi (chỉ ảnh hưởng automation/pipe, không ảnh hưởng TTY thật)
+— sửa bằng dùng chung 1 interface suốt vòng đời lệnh, thêm cờ `--yes`/`--open-issues` cho
+automation.
 
-Chưa bắt đầu — phụ thuộc Bước 2.
+Cũng vá 1 lỗ hổng thật trước khi public hoá Control Plane: `/v1/auth/login` ban đầu chỉ cần
+email, không xác thực gì — bất kỳ ai biết email công ty đều mint được token thật (kể cả
+gateway_token cấp quyền AI thật) của người khác. Đã thêm `access_code` bắt buộc (chia sẻ
+ngoài băng thông, không phải SSO thật — đủ cho pilot vài người, phải nâng cấp thật trước khi
+scale). Control Plane cũng đã public hoá qua `https://cp.valeron.tech` (nginx + Let's Encrypt,
+cùng pattern với Adapter/dashboard) để CLI gọi được từ máy nhân viên thật.
+
+## Bước 3 — Test kịch bản POC đầy đủ (mục 15) — bằng chứng giá trị thật
+
+**PASS — chạy bằng hạ tầng thật, 2 seat Claude thật, không có bước nào giả lập.**
+
+1. `company-ai login` (Thanh) → `init` → `claude` — Claude Code thật đọc `facebook.service.ts`,
+   thêm hàm `pagination()`, tự chạy `git commit` thật (qua Bash tool của chính Claude Code) —
+   xác nhận bằng `git log` thật: commit `1b0d346 Add pagination stub`.
+2. `company-ai end --open-issues "BA yeu cau filter theo thoi gian"` → publish handoff thật,
+   đóng Work Session.
+3. `company-ai login` (Hoàng, seat khác hẳn — `seat_claude_hoang`) → `claude` cùng task → yêu
+   cầu Claude Code (dưới quyền Hoàng) tóm tắt lại context — **Claude trả lời đúng 100%**: nhắc
+   đúng commit `1b0d346 Add pagination stub` của Thanh và đúng open issue "filter theo thời
+   gian" — dữ liệu này đến hoàn toàn qua Control Plane -> `.center-ai/generated/checkpoint.md`
+   -> marker `CLAUDE.md` -> Claude Code tự đọc, không có bước chuyển giao thủ công nào giữa
+   Thanh và Hoàng.
+
+→ **Đây là bằng chứng trực tiếp cho luận điểm sản phẩm cốt lõi** (mục 15: "người tiếp quản
+task hiểu toàn bộ tiến độ trong vài phút thay vì phải hỏi lại đồng nghiệp") — chạy thật, không
+phải mô tả lý thuyết.
 
 ## Bước 4 — Dashboard tối giản
 
-Chưa bắt đầu — không chặn đường, chỉ làm nếu còn dư sau Bước 3.
+Chưa làm — không chặn đường (kịch bản POC ở Bước 3 không cần dashboard, đúng như mục 15 đã
+ghi). Cân nhắc làm tiếp nếu còn thời gian, ưu tiên thấp hơn việc hoàn thiện phần còn thiếu ở
+Bước 2 (test `codex`, checkpoint theo git hook).
