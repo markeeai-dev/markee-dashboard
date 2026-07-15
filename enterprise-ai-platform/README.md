@@ -6,7 +6,7 @@ Nền tảng quản trị seat AI hợp lệ, project continuity và company mem
 
 **Kiến trúc đã khoá (v17).** `9router` đã xác nhận là package thật (npm/Docker `decolua/9router`) — đã cài, chạy, gọi API thật để lấy thông tin chính xác thay vì suy đoán (chi tiết Q9). Phát hiện quan trọng: round-robin/fallback-free là tính năng quảng cáo thật của 9Router — container-per-seat + đúng 1 connection/instance là bắt buộc, không phải tuỳ chọn an toàn.
 
-**Spike đã bắt đầu code** — thư mục `spike/` có Gateway Adapter thật (đúng logic Q9: xác thực token, route theo `seat_id`, không sửa body, ghi Request Span) đã tự test bằng mock router: **7/7 tiêu chí Nhóm A + streaming PASS** (chi tiết `MVP0-SPIKE.md` mục 6). **Còn lại**: cắm vào 9Router thật + Claude Team account thật để test Nhóm B (tool-use/caching/OAuth refresh thật) — đây là việc chưa làm được vì môi trường hiện tại không có 9Router/account thật. Xem `spike/README.md` để chạy lại và biết chính xác bước tiếp theo.
+**Spike đã chạy thật, không còn chỉ mock.** Hạ tầng thật đã dựng trên droplet riêng (2 container `decolua/9router` cô lập, Gateway Adapter dưới systemd, nginx+HTTPS, domain `valeron.tech`), 2 tài khoản Claude thật đã kết nối. Test end-to-end qua đúng đường công khai `https://valeron.tech/v1/messages` bằng token nghiệp vụ ký thật: **routing đúng seat, cô lập seat, chặn seat lệch (403), chặn thiếu token (401) — tất cả PASS với traffic thật** (chi tiết `MVP0-SPIKE.md` mục 6, phần "bản thật"). **Còn lại**: cài Claude Code CLI thật trỏ vào Adapter để test nốt Nhóm B (streaming/tool-use/caching/OAuth refresh thật qua CLI, không phải curl thuần). Xem `spike/README.md` để chạy lại và biết chính xác bước tiếp theo.
 
 ## Đọc theo thứ tự này
 

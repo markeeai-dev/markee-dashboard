@@ -21,11 +21,21 @@ const { resolveSeat } = require('./registry');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const SECRET = process.env.CENTERAI_TOKEN_SECRET || 'spike-dev-secret-change-me';
-const LOG_PATH = path.join(__dirname, '..', 'logs', 'request-spans.jsonl');
+// Cho phép override đường dẫn log lúc deploy thật (không phải lúc nào cũng chạy
+// đúng từ thư mục spike/ có sẵn logs/ cạnh nó) — sửa lỗi thật gặp khi deploy lên
+// droplet: thư mục logs/ không tồn tại làm appendFileSync throw, làm CHẾT CẢ SERVER
+// (bug nghiêm trọng — lỗi ghi log không bao giờ được phép làm sập service chính).
+const LOG_PATH = process.env.LOG_PATH || path.join(__dirname, '..', 'logs', 'request-spans.jsonl');
+fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
 
 function logSpan(entry) {
   const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + '\n';
-  fs.appendFileSync(LOG_PATH, line);
+  try {
+    fs.appendFileSync(LOG_PATH, line);
+  } catch (err) {
+    // Không bao giờ để lỗi ghi log làm sập request đang xử lý hay cả service.
+    console.error('[adapter] logSpan write failed (non-fatal):', err.message);
+  }
   console.log('[adapter]', JSON.stringify(entry));
 }
 
@@ -189,6 +199,10 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`[adapter] Gateway Adapter listening on :${PORT}`);
+// Mặc định chỉ bind 127.0.0.1 — Adapter không nên tự lộ ra internet, nginx/reverse
+// proxy mới là cửa duy nhất (defense in depth, không chỉ dựa vào firewall).
+// Set HOST=0.0.0.0 tường minh nếu môi trường nào đó thực sự cần khác (không khuyến nghị).
+const HOST = process.env.HOST || '127.0.0.1';
+server.listen(PORT, HOST, () => {
+  console.log(`[adapter] Gateway Adapter listening on ${HOST}:${PORT}`);
 });

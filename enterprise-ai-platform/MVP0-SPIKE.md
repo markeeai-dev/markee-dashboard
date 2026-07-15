@@ -102,7 +102,32 @@ Code nằm ở `spike/` (`gateway-adapter/`, `mock-router/`, `shared/`, `scripts
 - Model alias thật, error format thật từ Anthropic/OpenAI
 - Agent loop dài thật, huỷ request giữa chừng thật
 
-→ **Kết luận tạm thời**: phần logic Adapter (routing theo `seat_id`, cô lập seat, xác thực token, revoke tức thời, streaming proxy) đã xác nhận đúng bằng mock. Phần quyết định PASS/FAIL thật của toàn bộ spike (câu hỏi ở mục 1) **vẫn phải chờ 9Router thật + 2 Claude Team/Max account thật** để test Nhóm B đầy đủ — đây là việc tiếp theo, không phải đã xong.
+→ **Kết luận tạm thời (đã lỗi thời — xem bản thật ngay dưới đây)**: phần logic Adapter (routing theo `seat_id`, cô lập seat, xác thực token, revoke tức thời, streaming proxy) đã xác nhận đúng bằng mock.
+
+### Đã chạy — bản thật (9Router thật + 2 Claude account thật, qua Gateway Adapter công khai)
+
+Hạ tầng thật đã dựng: 2 container `decolua/9router:latest` cô lập (`router-thanh` port 29128, `router-hoang` port 29129, volume OAuth riêng), Gateway Adapter chạy dưới systemd, nginx + Let's Encrypt (`valeron.tech` → Adapter, `router-thanh.valeron.tech`/`router-hoang.valeron.tech` → 2 dashboard), 2 tài khoản Claude thật đã kết nối qua dashboard 9Router (xác nhận qua `/v1/models` trả đúng model ID thật: `cc/claude-sonnet-5`...). `registry.json` trên server đã điền `api_key` thật do 9Router phát hành cho từng seat, `status: healthy`.
+
+Test thật gửi trực tiếp qua **đường công khai `https://valeron.tech/v1/messages`** (không bypass Adapter), dùng token nghiệp vụ Center AI ký thật bằng đúng secret đã deploy (`CENTERAI_TOKEN_SECRET` trên droplet), model `cc/claude-sonnet-5`:
+
+| # | Test | Kết quả |
+|---|---|---|
+| 1 | Token Thanh (`seat_claude_thanh`) → Adapter công khai → nhận đúng phản hồi thật từ Claude account Thanh ("PONG-THANH-E2E") | ✅ PASS |
+| 2 | Token Hoàng (`seat_claude_hoang`) → Adapter công khai → nhận đúng phản hồi thật từ Claude account Hoàng ("PONG-HOANG-E2E") | ✅ PASS |
+| 3 | Token lệch (`employee_id=emp_hoang` + `seat_id=seat_claude_thanh`) → bị từ chối `403 seat_not_assigned_to_employee` | ✅ PASS |
+| 4 | Request không có token → bị từ chối `401 missing_token` | ✅ PASS |
+
+→ **Đây là bằng chứng thật đầu tiên (không phải mock) rằng toàn bộ đường đi Center AI token → Gateway Adapter → 9Router thật → Claude account thật hoạt động đúng, kể cả cô lập seat và chặn seat lệch, chạy qua đúng domain công khai HTTPS.** Câu hỏi ở mục 1 coi như đã có câu trả lời sơ bộ tích cực cho phần Nhóm A + phần cơ bản của Nhóm B (request/response non-streaming qua provider thật).
+
+**Vẫn chưa test được (cần Claude Code CLI thật chạy qua Adapter, chưa làm trong phiên này):**
+- Streaming SSE thật (test streaming trước đó chỉ là mock)
+- Tool-use blocks thật (agent loop thật của Claude Code, không phải JSON giả lập)
+- Prompt caching headers thật
+- OAuth refresh thật khi kết nối hết hạn giữa chừng
+- `/compact` thật qua Adapter
+- Agent loop dài thật, huỷ request giữa chừng thật
+
+→ **Kết luận**: phần lõi (routing đúng seat, cô lập, xác thực, chặn lệch seat) đã **PASS bằng traffic thật qua hạ tầng thật**, không còn là mock. Phần còn lại của Nhóm B cần cài Claude Code CLI thật và trỏ vào Adapter để hoàn tất — đây là việc tiếp theo.
 
 ### Nếu PASS toàn bộ
 
