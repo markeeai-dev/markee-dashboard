@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { Search, Download, FileText, Image as ImageIcon, RefreshCw, AlertCircle, Eye } from 'lucide-react';
-import FilePreviewModal from './FilePreviewModal';
+import FilePreviewModal from './Shared/FilePreviewModal';
 
 interface AISession {
   id: number;

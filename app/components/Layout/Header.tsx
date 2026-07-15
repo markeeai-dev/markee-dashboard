@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { BookOpen } from 'lucide-react';
-import UserGuideModal from './UserGuideModal';
+import UserGuideModal from '../Shared/UserGuideModal';
 
 interface HeaderProps {
   onPeriodChange: (period: string) => void;
