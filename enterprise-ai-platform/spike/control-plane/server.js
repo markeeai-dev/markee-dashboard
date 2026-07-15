@@ -154,6 +154,77 @@ async function handleListRecentHandoffs(req) {
   return { status: 200, body: { handoffs: rows } };
 }
 
+// --- MVP2 · AI Timeline + AI Inbox (Q14) — "view, không phải bảng mới": union theo thời
+// gian trên các bảng MVP1 đã có, không tạo bảng mới, đúng như tài liệu yêu cầu.
+
+async function handleTimeline(req, url) {
+  await requireEmployee(req);
+  const projectId = url.searchParams.get('project_id');
+  if (!projectId) throw new ApiError(400, 'missing_project_id');
+
+  const { rows } = await query(
+    `SELECT 'work_session_started' AS event_type, ws.started_at AS occurred_at,
+            e.full_name AS employee_name, ws.task_id, t.title AS task_title, NULL AS detail
+     FROM work_sessions ws JOIN employees e ON e.id = ws.employee_id JOIN tasks t ON t.id = ws.task_id
+     WHERE ws.project_id = $1
+     UNION ALL
+     SELECT 'work_session_ended', ws.ended_at, e.full_name, ws.task_id, t.title, NULL
+     FROM work_sessions ws JOIN employees e ON e.id = ws.employee_id JOIN tasks t ON t.id = ws.task_id
+     WHERE ws.project_id = $1 AND ws.ended_at IS NOT NULL
+     UNION ALL
+     SELECT 'checkpoint', cp.created_at, e.full_name, ws.task_id, t.title, cp.trigger
+     FROM checkpoints cp
+       JOIN tool_sessions ts ON ts.id = cp.tool_session_id
+       JOIN work_sessions ws ON ws.id = ts.work_session_id
+       JOIN employees e ON e.id = ws.employee_id
+       JOIN tasks t ON t.id = ws.task_id
+     WHERE ws.project_id = $1
+     UNION ALL
+     SELECT 'handoff', h.created_at, e.full_name, h.task_id, t.title, h.summary
+     FROM handoffs h JOIN employees e ON e.id = h.from_employee_id JOIN tasks t ON t.id = h.task_id
+     WHERE t.project_id = $1
+     ORDER BY occurred_at DESC LIMIT 100`,
+    [projectId]
+  );
+  return { status: 200, body: { events: rows } };
+}
+
+async function handleInbox(req, url) {
+  const emp = await requireEmployee(req);
+  const employeeId = url.searchParams.get('employee_id') || emp.id;
+
+  const assignedRes = await query(
+    `SELECT t.id, t.title, t.status, p.name AS project_name
+     FROM tasks t JOIN projects p ON p.id = t.project_id
+     WHERE t.assignee_employee_id = $1 AND t.status IN ('open', 'in_progress')
+     ORDER BY t.created_at`,
+    [employeeId]
+  );
+
+  // Cần tiếp quản: handoff mới nhất của 1 task mà CHƯA có Work Session nào (của ai cũng
+  // được — pilot nhỏ, to_employee_id thường không set) mở SAU thời điểm handoff đó.
+  const pickupRes = await query(
+    `SELECT DISTINCT ON (h.task_id) h.task_id, t.title AS task_title, p.name AS project_name,
+            h.summary, h.created_at AS handoff_created_at, e.full_name AS from_employee_name
+     FROM handoffs h
+       JOIN tasks t ON t.id = h.task_id
+       JOIN projects p ON p.id = t.project_id
+       JOIN employees e ON e.id = h.from_employee_id
+     WHERE (h.to_employee_id IS NULL OR h.to_employee_id = $1)
+       AND h.from_employee_id != $1
+       AND NOT EXISTS (
+         SELECT 1 FROM work_sessions ws2 WHERE ws2.task_id = h.task_id AND ws2.started_at > h.created_at
+       )
+     ORDER BY h.task_id, h.created_at DESC`,
+    [employeeId]
+  );
+
+  return {
+    status: 200,
+    body: { assigned_open_tasks: assignedRes.rows, handoffs_to_pick_up: pickupRes.rows },
+  };
+}
+
 async function handleListProjectContext(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
@@ -492,6 +563,14 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/v1/context/render') {
       const result = await handleContextRender(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/timeline') {
+      const result = await handleTimeline(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/inbox') {
+      const result = await handleInbox(req, url);
       return sendJson(res, result.status, result.body);
     }
 

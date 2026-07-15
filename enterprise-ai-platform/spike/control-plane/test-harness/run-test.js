@@ -158,6 +158,24 @@ async function main() {
   );
   check('publish handoff -> 201', handoff.status === 201 && !!handoff.json.handoff_id, handoff);
 
+  // --- AI Inbox (MVP2 · Q14): Hoàng phải thấy task_tng142 "cần tiếp quản" ngay sau khi
+  // Thanh publish handoff, TRƯỚC KHI có ai mở Work Session mới cho task đó ---
+  const inboxHoang = await get(`${CP}/v1/inbox?employee_id=emp_hoang`, hoangToken);
+  check(
+    'inbox Hoàng thấy task_tng142 cần tiếp quản (handoff mới của Thanh, chưa ai pick up)',
+    inboxHoang.status === 200 && inboxHoang.json.handoffs_to_pick_up.some((h) => h.task_id === 'task_tng142'),
+    inboxHoang
+  );
+
+  const timeline = await get(`${CP}/v1/timeline?project_id=proj_trungnguyen`, thanhToken);
+  check(
+    'timeline project có đủ event handoff + checkpoint vừa tạo',
+    timeline.status === 200 &&
+      timeline.json.events.some((e) => e.event_type === 'handoff' && e.task_id === 'task_tng142') &&
+      timeline.json.events.some((e) => e.event_type === 'checkpoint' && e.task_id === 'task_tng142'),
+    timeline
+  );
+
   const endWs = await post(`${CP}/v1/work-sessions/${wsId}/end`, {}, thanhToken);
   check('đóng Work Session -> status closed', endWs.status === 200 && endWs.json.status === 'closed', endWs);
 

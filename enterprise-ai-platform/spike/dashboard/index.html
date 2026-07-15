@@ -65,6 +65,8 @@
 <script>
 const TABS = [
   { id: 'home', label: 'Trang chủ', render: renderHome },
+  { id: 'inbox', label: 'Inbox', render: renderInbox },
+  { id: 'timeline', label: 'Timeline', render: renderTimeline },
   { id: 'projects', label: 'Projects & Tasks', render: renderProjects },
   { id: 'sessions', label: 'Active Sessions', render: renderSessions },
   { id: 'handoffs', label: 'Handoffs', render: renderHandoffs },
@@ -132,7 +134,7 @@ function fmtDate(iso) { return new Date(iso).toLocaleString('vi-VN'); }
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 async function renderHome(root) {
-  const [sessions, handoffs] = await Promise.all([api('/v1/work-sessions'), api('/v1/handoffs')]);
+  const [sessions, inbox] = await Promise.all([api('/v1/work-sessions'), api(`/v1/inbox?employee_id=${encodeURIComponent(state.who.employee_id)}`)]);
   let contextNotes = [];
   try {
     const projects = await api('/v1/projects');
@@ -151,12 +153,12 @@ async function renderHome(root) {
           </div>`).join('') : '<div class="empty">Không có ai đang làm.</div>'}
       </div>
       <div class="panel">
-        <h2>Cần tiếp quản</h2>
-        ${handoffs.handoffs.length ? handoffs.handoffs.slice(0, 5).map((h) => `
+        <h2>Cần tiếp quản (của tôi)</h2>
+        ${inbox.handoffs_to_pick_up.length ? inbox.handoffs_to_pick_up.map((h) => `
           <div style="margin-bottom:8px;">
-            <b>${esc(h.task_id)}</b> — handoff mới từ ${esc(h.from_employee_name)}
-            <div class="empty">${fmtDate(h.created_at)}, ${esc(h.project_name)}</div>
-          </div>`).join('') : '<div class="empty">Chưa có handoff nào.</div>'}
+            <b>${esc(h.task_id)}</b> — handoff mới từ ${esc(h.from_employee_name)}, chưa ai tiếp quản
+            <div class="empty">${fmtDate(h.handoff_created_at)}, ${esc(h.project_name)}</div>
+          </div>`).join('') : '<div class="empty">Không có gì cần tiếp quản.</div>'}
       </div>
       <div class="panel">
         <h2>Context mới</h2>
@@ -206,6 +208,52 @@ async function renderHandoffs(root) {
         <div class="empty">Bước tiếp theo: ${(h.next_steps || []).map(esc).join(', ') || '(không có)'}</div>
         <div class="empty">Vấn đề mở: ${(h.open_issues || []).map(esc).join(', ') || '(không có)'}</div>
       </div>`).join('') : '<div class="empty">Chưa có handoff nào.</div>'}
+    </div>`;
+}
+
+async function renderInbox(root) {
+  const inbox = await api(`/v1/inbox?employee_id=${encodeURIComponent(state.who.employee_id)}`);
+  root.innerHTML = `
+    <div class="panel">
+      <h2>Task đang giao cho tôi</h2>
+      ${inbox.assigned_open_tasks.length ? `<table><thead><tr><th>Task</th><th>Project</th><th>Trạng thái</th></tr></thead>
+      <tbody>${inbox.assigned_open_tasks.map((t) => `
+        <tr><td><code>${esc(t.id)}</code> — ${esc(t.title)}</td><td>${esc(t.project_name)}</td>
+        <td><span class="pill warn">${esc(t.status)}</span></td></tr>`).join('')}</tbody></table>` :
+      '<div class="empty">Không có task nào đang giao trực tiếp cho bạn.</div>'}
+    </div>
+    <div class="panel">
+      <h2>Cần tiếp quản — có bàn giao mới chưa ai làm tiếp</h2>
+      ${inbox.handoffs_to_pick_up.length ? inbox.handoffs_to_pick_up.map((h) => `
+        <div class="panel" style="background:#12151c;">
+          <div><b>${esc(h.task_id)}</b> — ${esc(h.task_title)} <span class="empty">(${esc(h.project_name)})</span></div>
+          <div class="empty">Bàn giao từ ${esc(h.from_employee_name)} — ${fmtDate(h.handoff_created_at)}</div>
+          <div style="white-space:pre-wrap; margin:8px 0; font-size:13px;">${esc(h.summary)}</div>
+        </div>`).join('') : '<div class="empty">Không có gì cần tiếp quản.</div>'}
+    </div>`;
+}
+
+async function renderTimeline(root) {
+  const { projects } = await api('/v1/projects');
+  if (!projects.length) { root.innerHTML = '<div class="panel empty">Chưa có project nào.</div>'; return; }
+  if (!state.timelineProjectId || !projects.some((p) => p.id === state.timelineProjectId)) {
+    state.timelineProjectId = projects[0].id;
+  }
+  const selectHtml = `<select id="timelineProject" onchange="state.timelineProjectId=this.value; switchTab('timeline')" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-bottom:12px;">
+    ${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === state.timelineProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+  </select>`;
+  const { events } = await api(`/v1/timeline?project_id=${encodeURIComponent(state.timelineProjectId)}`);
+  const icons = { work_session_started: '▶', work_session_ended: '⏹', checkpoint: '●', handoff: '↦' };
+  root.innerHTML = `<div class="panel">${selectHtml}<h2>Timeline</h2>
+    ${events.length ? events.map((e) => `
+      <div style="display:flex; gap:10px; padding:6px 0; border-bottom:1px solid var(--border);">
+        <div style="width:18px; color:var(--accent);">${icons[e.event_type] || '•'}</div>
+        <div>
+          <div><b>${esc(e.employee_name)}</b> — ${esc(e.event_type)} — <code>${esc(e.task_id)}</code> ${esc(e.task_title)}</div>
+          ${e.detail ? `<div class="empty">${esc(e.detail)}</div>` : ''}
+          <div class="empty">${fmtDate(e.occurred_at)}</div>
+        </div>
+      </div>`).join('') : '<div class="empty">Chưa có sự kiện nào.</div>'}
     </div>`;
 }
 
