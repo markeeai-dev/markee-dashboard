@@ -461,6 +461,93 @@ async function handleEndToolSession(req, params) {
   return { status: 200, body: { tool_session_id: ts.id, status: 'closed' } };
 }
 
+// --- MVP2 hạng mục 3 · Handoff tự động sinh bằng LLM (mục 14) ---
+// Chỉ VIẾT giúp bản tóm tắt — người dùng vẫn xem lại/sửa/xác nhận trước khi publish (CLI
+// không tự động publish draft này). Nếu lỗi/timeout, CLI tự fallback về draft git-diff thuần
+// của MVP1 — endpoint này KHÔNG BAO GIỜ là điều kiện bắt buộc để `company-ai end` chạy được.
+function buildDraftHandoffPrompt({ taskTitle, checkpoints, gitLog, gitDiffStat }) {
+  const data = {
+    task: taskTitle,
+    checkpoints: checkpoints.map((c) => ({
+      trigger: c.trigger,
+      completed: c.completed,
+      remaining: c.remaining,
+      files_changed: c.files_changed,
+      git_commit: c.git_commit,
+    })),
+    git_log: gitLog || null,
+    git_diff_stat: gitDiffStat || null,
+  };
+  return [
+    'Bạn viết bản bàn giao công việc (handoff) ngắn gọn cho lập trình viên tiếp theo, dựa',
+    'CHÍNH XÁC vào dữ liệu JSON dưới đây — KHÔNG bịa thêm việc/chi tiết không có trong dữ liệu.',
+    'Nếu dữ liệu ít/trống, cứ viết ngắn, đừng suy diễn. Trả lời bằng tiếng Việt, dạng gạch đầu',
+    'dòng ngắn gọn, có 2 phần rõ ràng: "Đã làm" và "Còn lại / cần chú ý". KHÔNG thêm lời chào,',
+    'không thêm ghi chú ngoài 2 phần đó.',
+    '',
+    'Dữ liệu:',
+    JSON.stringify(data, null, 2),
+  ].join('\n');
+}
+
+async function handleDraftHandoff(req, params) {
+  const emp = await requireEmployee(req);
+  const ws = await loadOwnedWorkSession(params.id, emp.id);
+  if (!ws.seat_id) throw new ApiError(409, 'work_session_missing_seat');
+  const body = await readJsonBody(req);
+
+  const [cpRes, taskRes] = await Promise.all([
+    query(
+      `SELECT cp.trigger, cp.completed, cp.remaining, cp.files_changed, cp.git_commit
+       FROM checkpoints cp JOIN tool_sessions ts ON ts.id = cp.tool_session_id
+       WHERE ts.work_session_id = $1 ORDER BY cp.created_at ASC`,
+      [ws.id]
+    ),
+    query('SELECT title FROM tasks WHERE id = $1', [ws.task_id]),
+  ]);
+
+  // Token ngắn hạn (5 phút) chỉ để gọi 1 lần cho việc soạn draft — không phải token Tool
+  // Session thật, không dùng cho request AI nghiệp vụ khác.
+  const expires_at = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const draftToken = signToken(
+    {
+      employee_id: emp.id,
+      seat_id: ws.seat_id,
+      provider: 'anthropic',
+      tool: 'handoff_draft',
+      work_session_id: ws.id,
+      expires_at,
+    },
+    GATEWAY_TOKEN_SECRET
+  );
+
+  const prompt = buildDraftHandoffPrompt({
+    taskTitle: taskRes.rows[0]?.title,
+    checkpoints: cpRes.rows,
+    gitLog: body.git_log,
+    gitDiffStat: body.git_diff_stat,
+  });
+
+  let draftText;
+  try {
+    const llmRes = await fetch(`${GATEWAY_BASE_URL}/v1/messages`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${draftToken}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+      signal: AbortSignal.timeout(20000),
+      body: JSON.stringify({ model: 'cc/claude-sonnet-5', max_tokens: 500, messages: [{ role: 'user', content: prompt }] }),
+    });
+    const text = await llmRes.text();
+    const parsed = JSON.parse(text.split('data: [DONE]')[0].trim());
+    if (!llmRes.ok || !Array.isArray(parsed.content)) throw new Error(`llm_call_failed_http_${llmRes.status}`);
+    draftText = parsed.content.map((c) => c.text || '').join('\n').trim();
+    if (!draftText) throw new Error('llm_empty_response');
+  } catch (err) {
+    throw new ApiError(502, 'draft_generation_failed', { detail: String(err && err.message) });
+  }
+
+  return { status: 200, body: { draft_summary: draftText } };
+}
+
 async function handleCreateHandoff(req) {
   const emp = await requireEmployee(req);
   const body = await readJsonBody(req);
@@ -588,6 +675,11 @@ const routes = [
     method: 'GET',
     pattern: /^\/v1\/work-sessions\/([^/]+)\/checkpoints$/,
     handler: (req, m) => handleListWorkSessionCheckpoints(req, { id: m[1] }),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/work-sessions\/([^/]+)\/draft-handoff$/,
+    handler: (req, m) => handleDraftHandoff(req, { id: m[1] }),
   },
   {
     method: 'POST',

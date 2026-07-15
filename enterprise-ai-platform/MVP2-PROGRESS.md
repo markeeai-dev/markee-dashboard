@@ -53,4 +53,28 @@ thật):
 
 ## Hạng mục 3 — Handoff tự động sinh bằng LLM
 
-Đang làm.
+**PASS — 32/32 test-harness (tăng từ 30), test thật qua CLI đầy đủ (không mock).**
+
+- Control Plane thêm `POST /v1/work-sessions/:id/draft-handoff` — đọc checkpoints thật +
+  git log/diff CLI gửi kèm, tự mint 1 token gateway ngắn hạn (5 phút, chỉ đủ 1 lần gọi, khác
+  hẳn token Tool Session thật) cho đúng seat của nhân viên, gọi thật qua Gateway Adapter công
+  khai (model `cc/claude-sonnet-5`) với prompt yêu cầu **bám sát đúng dữ liệu đưa vào, không
+  bịa thêm việc không có** — trả về text draft tiếng Việt, 2 phần "Đã làm"/"Còn lại".
+- CLI (`company-ai end`) gọi endpoint này trước, dùng draft AI làm gợi ý nếu thành công (người
+  dùng vẫn xem lại/publish như cũ, KHÔNG tự động publish) — lỗi/timeout thì fallback êm về
+  draft git-diff thuần của MVP1, không chặn lệnh. Thêm cờ `--no-ai` để chủ động bỏ qua AI.
+
+**Test thật qua CLI đầy đủ**: Claude Code tạo commit thật ("Add time filter stub per BA
+feedback") → `company-ai end` gọi AI thật → draft sinh ra **bám sát chính xác** commit hash
+và nội dung thật, đồng thời trung thực báo "chưa rõ đã implement đầy đủ logic hay chưa — cần
+kiểm tra lại" thay vì bịa thêm chi tiết không có — đúng yêu cầu "không bịa" trong prompt. Test
+riêng đường `--no-ai` (fallback hoạt động đúng, không gọi AI). Hoàng đọc lại đúng handoff mới
+nhất qua `company-ai claude` như bình thường — downstream không phân biệt handoff AI-soạn hay
+git-diff thuần, dùng chung 1 luồng.
+
+## MVP2 (đợt 1) — Kết luận
+
+**PASS toàn bộ 3 hạng mục**, đúng đúng phạm vi đã chốt trong plan, không lấn sang việc cố tình
+hoãn (vector search, browser extension, connector Codex, task claim/lease đầy đủ). Test-harness
+tăng từ 25 (cuối MVP1) lên **32/32 PASS**, toàn bộ đều test bằng traffic thật, không mock,
+2 hạng mục sau cùng còn xác nhận qua CLI thật với Claude Code CLI thật.

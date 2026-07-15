@@ -80,6 +80,12 @@ class ControlPlaneClient {
   contextRender(taskId) {
     return this._req('GET', `/v1/context/render?task_id=${encodeURIComponent(taskId)}`);
   }
+  draftHandoff(workSessionId, { gitLog, gitDiffStat }) {
+    return this._req('POST', `/v1/work-sessions/${encodeURIComponent(workSessionId)}/draft-handoff`, {
+      git_log: gitLog,
+      git_diff_stat: gitDiffStat,
+    });
+  }
 }
 
 module.exports = { ControlPlaneClient, ControlPlaneError };

@@ -145,6 +145,22 @@ async function main() {
   const endTs = await post(`${CP}/v1/tool-sessions/${tsId}/end`, {}, thanhToken);
   check('đóng Tool Session -> status closed', endTs.status === 200 && endTs.json.status === 'closed', endTs);
 
+  // --- MVP2 hạng mục 3: Handoff sinh bằng LLM — gọi AI thật, không assert đúng từng chữ
+  // (output không xác định), chỉ assert có trả về text thật, hợp lý về độ dài ---
+  const draftHandoff = await post(
+    `${CP}/v1/work-sessions/${wsId}/draft-handoff`,
+    { git_log: 'abc123 fix retry logic', git_diff_stat: 'facebook.service.ts | 10 ++++' },
+    thanhToken
+  );
+  check(
+    'draft-handoff gọi AI thật trả về text hợp lý (>20 ký tự)',
+    draftHandoff.status === 200 && typeof draftHandoff.json.draft_summary === 'string' && draftHandoff.json.draft_summary.length > 20,
+    draftHandoff
+  );
+
+  const draftHandoffWrongOwner = await post(`${CP}/v1/work-sessions/${wsId}/draft-handoff`, {}, hoangToken);
+  check('draft-handoff Hoàng gọi vào Work Session của Thanh -> 403 not_owner', draftHandoffWrongOwner.status === 403, draftHandoffWrongOwner);
+
   // --- Handoff (mục 15 Bước 3-4) ---
   const handoff = await post(
     `${CP}/v1/handoffs`,

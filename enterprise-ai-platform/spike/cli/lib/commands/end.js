@@ -57,7 +57,22 @@ async function run(args = {}) {
 
   const draft = buildDraft({ checkpoints, gitLog, gitDiffStat, filesChanged });
 
-  console.log('\n--- Handoff draft ---');
+  // MVP2 hạng mục 3: thử để AI viết summary tốt hơn (dựa đúng dữ liệu đưa vào, không bịa) —
+  // KHÔNG BAO GIỜ chặn `company-ai end` nếu lỗi/timeout, fallback êm về draft git-diff thuần
+  // ở trên (đúng nguyên tắc resilience đã áp dụng xuyên suốt CLI này).
+  if (args['no-ai'] !== true) {
+    try {
+      const aiDraft = await client.draftHandoff(session.work_session_id, { gitLog, gitDiffStat });
+      if (aiDraft && aiDraft.draft_summary) {
+        draft.summary = aiDraft.draft_summary;
+        draft.ai_generated = true;
+      }
+    } catch (err) {
+      console.log(`(Không lấy được draft AI — dùng bản tổng hợp git-diff thuần. Lý do: ${err.message})`);
+    }
+  }
+
+  console.log('\n--- Handoff draft' + (draft.ai_generated ? ' (AI soạn, xem lại kỹ trước khi publish)' : ' (git-diff thuần)') + ' ---');
   console.log(draft.summary);
   console.log('\nBước tiếp theo:', draft.next_steps.length ? draft.next_steps.join(', ') : '(không có)');
   console.log('File thay đổi:', draft.files_changed.length ? draft.files_changed.join(', ') : '(không có)');
