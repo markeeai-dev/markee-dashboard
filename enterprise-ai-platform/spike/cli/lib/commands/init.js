@@ -1,6 +1,7 @@
 'use strict';
 const { findGitRoot, readProjectYaml, writeProjectYaml } = require('../config');
 const { ensureClaudeMdMarker } = require('../render');
+const { installPostCommitHook } = require('../githook');
 const { ask, askYesNo } = require('../prompt');
 
 async function run(args) {
@@ -25,6 +26,19 @@ async function run(args) {
   if (wantMarker) {
     const { changed } = ensureClaudeMdMarker(gitRoot);
     console.log(changed ? 'Đã thêm marker vào CLAUDE.md.' : 'CLAUDE.md đã có marker từ trước, không đổi gì.');
+  }
+
+  const wantHook = autoYes || (await askYesNo('Cài git hook tự động checkpoint mỗi lần commit?', true));
+  if (wantHook) {
+    const hookResult = installPostCommitHook(gitRoot);
+    const messages = {
+      installed: 'Đã cài git hook post-commit — mỗi lần commit sẽ tự tạo checkpoint (khi có Tool Session đang mở).',
+      already_installed: 'Git hook post-commit đã cài từ trước, không đổi gì.',
+      skipped_foreign_hook:
+        'CẢNH BÁO: đã có hook post-commit khác không phải của Center AI — KHÔNG ghi đè. Tự thêm dòng `company-ai checkpoint --trigger git_commit --quiet` vào hook hiện có nếu muốn.',
+      no_hooks_dir: 'Không tìm thấy .git/hooks — bỏ qua cài hook.',
+    };
+    console.log(messages[hookResult]);
   }
 }
 

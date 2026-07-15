@@ -90,3 +90,30 @@ lẫn request thật đều đúng bằng curl mô phỏng header `Origin`.
 **Giới hạn đã biết**: chưa test bằng trình duyệt thật (môi trường này không có công cụ
 browser) — chỉ xác nhận được ở tầng HTTP/CORS/dữ liệu, không xác nhận được rendering/UX thật.
 Nên tự mở `https://ops.valeron.tech` kiểm tra 1 lần trước khi coi Bước 4 là xong hẳn.
+
+## Bước 5 — Checkpoint tự động theo git commit (hoàn thiện Bước 2)
+
+**PASS.** `company-ai init` giờ cài `.git/hooks/post-commit` (không ghi đè hook có sẵn của
+dev) — mỗi lần `git commit` (kể cả Claude Code tự chạy qua Bash tool) tự tạo checkpoint
+`trigger=git_commit`, im lặng bỏ qua nếu không có Tool Session nào đang mở, không bao giờ
+chặn/làm lỗi commit thật. **Đã test thật**: cho Claude Code tự sửa file + `git commit` trong 1
+Tool Session đang mở, xác nhận qua API đúng 3 checkpoint theo thứ tự
+(`tool_close` → `git_commit` gắn đúng hash commit → `tool_close` của tool session kế tiếp).
+
+## MVP1 — Kết luận
+
+**PASS toàn bộ 5 bước.** Kịch bản chứng minh giá trị cốt lõi (mục 15) chạy đúng bằng hạ tầng
+thật, 2 seat Claude thật, CLI thật, Control Plane thật, dashboard thật — không có bước nào mô
+phỏng/giả lập. Sẵn sàng cho Thanh/Hoàng dùng pilot thật.
+
+**Việc còn lại KHÔNG phải thiếu sót MVP1** (đã làm rõ phạm vi, xem `spike/cli/README.md`):
+- `company-ai codex` — theo đúng `ai-operations-center-design.md` mục 15, hỗ trợ nhiều
+  connector/provider vốn dĩ là phạm vi **MVP2** ("Connector đa nền tảng ... POC chỉ 1 tool
+  Claude Code"). Cần 1 account Codex/OpenAI thật kết nối qua 9Router mới test được — chưa có
+  ở pilot này.
+- Vòng đời seat tự động (state machine tạo/huỷ container), workflow duyệt gán/thu hồi seat —
+  theo đúng thiết kế mục 14, đây là việc của MVP2/3, không phải MVP1 ("Seat registry chỉ cần
+  đủ để gắn employee_id vào Work Session — không cần state machine đầy đủ ở bước này").
+- Kiểm tra dashboard bằng trình duyệt thật (môi trường build không có công cụ browser).
+- Nâng bảo mật (Cloudflare Access cho 2 dashboard 9Router, SSO thật thay mã pilot dùng chung)
+  — hoãn có chủ đích theo quyết định trước đó, làm khi ra khỏi giai đoạn pilot.
