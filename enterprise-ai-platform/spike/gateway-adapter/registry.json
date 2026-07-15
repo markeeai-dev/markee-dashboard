@@ -1,0 +1,12 @@
+{
+  "seat_claude_thanh": {
+    "employee_id": "emp_thanh",
+    "endpoint": "http://localhost:20128",
+    "status": "healthy"
+  },
+  "seat_claude_hoang": {
+    "employee_id": "emp_hoang",
+    "endpoint": "http://localhost:20129",
+    "status": "healthy"
+  }
+}

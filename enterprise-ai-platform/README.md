@@ -1,0 +1,63 @@
+# Center AI — Enterprise AI Platform
+
+Nền tảng quản trị seat AI hợp lệ, project continuity và company memory cho doanh nghiệp. 3 người: đọc file này trước, theo đúng thứ tự bên dưới.
+
+## Trạng thái hiện tại
+
+**Kiến trúc đã khoá (v16).** Không còn review ý tưởng, không còn mâu thuẫn nội bộ đã biết.
+
+**Spike đã bắt đầu code** — thư mục `spike/` có Gateway Adapter thật (đúng logic Q9: xác thực token, route theo `seat_id`, không sửa body, ghi Request Span) đã tự test bằng mock router: **7/7 tiêu chí Nhóm A + streaming PASS** (chi tiết `MVP0-SPIKE.md` mục 6). **Còn lại**: cắm vào 9Router thật + Claude Team account thật để test Nhóm B (tool-use/caching/OAuth refresh thật) — đây là việc chưa làm được vì môi trường hiện tại không có 9Router/account thật. Xem `spike/README.md` để chạy lại và biết chính xác bước tiếp theo.
+
+## Đọc theo thứ tự này
+
+1. **`MVP0-SPIKE.md`** — làm cái này trước tiên, trước khi đọc hết tài liệu kiến trúc. Đây là việc cần làm ngay hôm nay. Có checklist chuẩn bị, cách chạy, và tiêu chí PASS/FAIL rõ ràng.
+2. **`TEAM-SPLIT.md`** — ai làm phần gì (Track A: CLI wrapper, Track B: Gateway Adapter, Track C: Control Plane), phụ thuộc ra sao, việc gì làm song song được với spike ngay bây giờ, việc gì phải chờ.
+3. **`ai-operations-center-design.md`** — tài liệu kiến trúc đầy đủ (~1300 dòng, đã qua 15 vòng chốt). Không cần đọc hết ngay — dùng làm tham chiếu khi cần chi tiết. Nếu chỉ đọc 2 mục: **Q9** (4 thành phần, cơ chế Gateway Adapter, container-per-seat) và **Q24** (toàn bộ luồng vận hành cuối cùng, 10 phần).
+
+## Tóm tắt kiến trúc trong 1 phút
+
+**4 lớp, không phải 3:**
+
+```
+Máy nhân viên: CLI wrapper mỏng (company-ai) + VS Code/Claude Code/Codex bản gốc
+        ↓ token nghiệp vụ ngắn hạn (ký, không phải env var thô)
+Center AI Gateway Adapter (server, BẮT BUỘC)
+   - xác thực token (KHÔNG tin `CENTER_AI_*` env var, chỉ tin claim trong token đã ký)
+   - resolve employee/project/task/session + kiểm tra seat_id (1 người có thể nhiều seat)
+   - tra Seat Runtime Registry theo seat_id để route đúng instance
+   - mặc định KHÔNG sửa nội dung request (Metadata enforcement) — chỉ verify qua token/header
+        ↓ credential nội bộ
+9Router Runtime Fleet (server, NHIỀU instance — 1 seat = 1 container riêng, cô lập vật lý)
+        ↓
+Claude / OpenAI / provider
+
+                    ⬉ Center AI Control Plane quản lý song song
+                      (session/context/assignment/vòng đời container, nhận telemetry)
+```
+
+Nhân viên vẫn dùng VS Code, Claude Code, Codex bản gốc — không app riêng, không fork IDE, không sửa config cá nhân vĩnh viễn (chạy process-scoped, `claude` gõ tay vẫn dùng song song bình thường). 1 seat AI = 1 nhân viên, cố định, **không rotate, không round-robin, không fallback chéo seat** — đây là nguyên tắc sản phẩm quan trọng nhất.
+
+**Context:** nội dung lớn (kiến trúc, requirement, checkpoint) luôn ở local, CLI ghi vào `.center-ai/generated/*.md` trước khi mở tool — không phải thứ "nhét" ở tầng gateway mỗi request. Gateway Adapter chỉ verify version qua `context_bundle_id`/hash trong token, không đọc/sửa nội dung.
+
+**Moat thật của sản phẩm không phải seat management** — là Project Continuity: người tiếp quản task hiểu toàn bộ tiến độ trong vài phút thay vì phải hỏi lại đồng nghiệp.
+
+## Việc đầu tiên phải làm
+
+Không mở database, không code CLI, không code dashboard trước. Làm `MVP0-SPIKE.md` trước — nó quyết định nhánh Gateway Adapter + 9Router có đi tiếp đúng thiết kế hay phải rẽ sang Lane B (nhân viên tự login seat). Sau khi có kết luận PASS/FAIL, quay lại `TEAM-SPLIT.md` để chia việc MVP 1 theo 3 track.
+
+## 5 quy tắc không được phá khi code
+
+1. **Không round-robin/fallback account giữa nhân viên** — 1 seat = 1 người, cô lập bằng container riêng (không tin vào cấu hình). Vi phạm nguyên tắc này là bug nghiêm trọng nhất có thể có.
+2. **Gateway Adapter mặc định không sửa nội dung request** — chỉ xác thực qua token/header. Chỉ bật chế độ sửa body khi có policy bắt buộc thật sự cần model nhìn thấy, không phải mặc định.
+3. **`/compact` không tạo Tool Session mới**, chỉ tạo Checkpoint. Thoát tool không đóng Work Session, không tạo handoff — chỉ `company-ai end` mới làm việc đó.
+4. **Liên kết Git dùng snapshot tự động** (CLI tự chụp HEAD/branch/commit range) — không bắt dev nhớ gõ trailer.
+5. **Không dùng token/prompt count làm KPI** — luôn ghép với outcome (`cost_per_accepted_outcome`, không phải token thô).
+6. **API domain không có từ "agent"** — CLI wrapper không phải service riêng, chỉ là client gọi vào resource (`/v1/work-sessions`, `/v1/tool-sessions/{id}/checkpoints`...), không dùng `/v1/agent/*`.
+
+## Quy tắc làm việc chung
+
+- Không thêm ý tưởng/tính năng mới vào `ai-operations-center-design.md` nữa — tài liệu đã khoá sau nhiều vòng review. Nếu phát sinh vấn đề thiết kế thật sự trong lúc code, thảo luận trực tiếp giữa 3 người, ghi quyết định vào changelog ở đầu file đó, không tự ý đổi hướng.
+- Ưu tiên tuyệt đối: **PASS/FAIL của spike**, sau đó mới tới tính năng.
+- Cả 3 file (`README.md`, `MVP0-SPIKE.md`, `TEAM-SPLIT.md`) phải luôn khớp với `ai-operations-center-design.md` — nếu sửa kiến trúc, sửa cả 4 file cùng lúc, không để lệch.
+- **Sau khi làm xong bất kỳ phần việc nào (1 file, 1 tính năng, 1 lần chạy test...), luôn báo cáo rõ 2 việc: đã làm gì xong, còn lại gì chưa làm** — dù là tự làm một mình hay báo cáo cho 2 người còn lại. Không im lặng chuyển sang việc tiếp theo mà không chốt trạng thái việc vừa xong.
+- Cập nhật `PROGRESS.md` (nếu có) hoặc phần "Trạng thái hiện tại" ở đầu file liên quan mỗi khi trạng thái đổi — trạng thái ghi trong tài liệu phải luôn khớp thực tế, không để ai đọc nhầm việc đã xong thành chưa làm hoặc ngược lại.
