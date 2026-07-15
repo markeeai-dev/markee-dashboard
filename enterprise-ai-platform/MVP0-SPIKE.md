@@ -9,30 +9,41 @@
 
 Không trả lời được câu này thì mọi thiết kế Work Session / Context / Handoff ở tài liệu chính vẫn đúng, nhưng **Claude Code CLI phải chuyển sang Lane B** (nhân viên tự login seat, không qua gateway) — khác hẳn UX/luồng đã mô tả ở Q24. Vì vậy phải biết trước khi build tiếp.
 
+**Đã xác nhận `9router` là package thật (`npm install -g 9router`, Docker `decolua/9router`) — xem Q9 phần "Đã xác nhận thật" trong tài liệu chính để biết toàn bộ chi tiết API/port/auth đã kiểm chứng.** Quan trọng nhất: README chính thức xác nhận "Multi-account round-robin" và "Auto fallback sang FREE provider" là **tính năng quảng cáo**, không phải rủi ro giả định — container-per-seat + đúng 1 connection/instance là **bắt buộc**, không phải tuỳ chọn an toàn.
+
 ## 2. Luồng cần dựng (tối giản, không phải sản phẩm)
 
 **Cách dựng: container-per-seat, không phải 1 9Router gom nhiều account.** Đây là chiến lược cô lập cho **POC/MVP1**, không phải kiến trúc scale vĩnh viễn (ở quy mô 500-1.000 seat sẽ cần tối ưu lại — xem Q9) — nhưng là cách nhanh và chắc nhất để loại bỏ rủi ro round-robin/fallback chéo seat ngay từ đầu, cô lập vật lý bằng container/OAuth-volume/port riêng, không phụ thuộc cấu hình bên trong 9Router:
 
 ```
 Server AI Gateway
-├── 9Router instance Thanh (volume OAuth riêng) → router-thanh:20128
-└── 9Router instance Hoàng (volume OAuth riêng) → router-hoang:20128
+├── 9Router instance Thanh (volume OAuth riêng, port 29128 → 20128) → đúng 1 connection: Claude seat Thanh
+└── 9Router instance Hoàng (volume OAuth riêng, port 29129 → 20128) → đúng 1 connection: Claude seat Hoàng
 
-Thanh (script giả lập token) → Gateway Adapter (mỏng) → router-thanh:20128 → Claude
-Hoàng (script giả lập token) → Gateway Adapter (mỏng) → router-hoang:20128 → Claude
+Thanh (token nghiệp vụ) → Gateway Adapter → API key riêng của instance Thanh → 9Router Thanh → Claude
+Hoàng (token nghiệp vụ) → Gateway Adapter → API key riêng của instance Hoàng → 9Router Hoàng → Claude
+```
+
+Lệnh dựng container đã test thật (Docker, xem mục "Đã xác nhận thật" ở Q9):
+
+```bash
+docker run -d --name router-thanh -p 29128:20128 \
+  -v /srv/9router/thanh:/app/data -e DATA_DIR=/app/data decolua/9router:latest
+docker run -d --name router-hoang -p 29129:20128 \
+  -v /srv/9router/hoang:/app/data -e DATA_DIR=/app/data decolua/9router:latest
 ```
 
 Không có CLI wrapper thật, không có Control Plane thật, không có database schema đầy đủ. Chỉ cần đủ để chứng minh routing đúng.
 
 ## 3. Thành phần cần chuẩn bị
 
-- [ ] 2 container/instance 9Router riêng biệt, mỗi cái 1 volume OAuth riêng, 1 internal port riêng (`router-thanh:20128`, `router-hoang:20128`).
-- [ ] 2 provider connection thật hoặc sandbox — gắn đúng vào từng instance tương ứng. Nếu 9Router hỗ trợ OAuth/subscription connection, dùng đúng loại đó (không dùng tạm API key rồi kết luận PASS — phải test đúng loại kết nối sẽ dùng thật, vì đây chính là điều cần verify).
-- [ ] **Xác nhận riêng**: 9Router có chạy sạch ở chế độ nhiều instance độc lập không (không có state/singleton nào bị chia sẻ ngầm giữa các instance, ví dụ file lock hay cache toàn cục) — đọc docs/source thật, không giả định.
-- [ ] Gateway Adapter cực mỏng, **mặc định Metadata enforcement — không sửa body** (Q9): nhận 1 token giả lập chứa `employee_id` + `seat_id` (JSON, không cần ký thật ở bước này) → route theo `seat_id` (không phải `employee_id` — 1 người có thể nhiều seat) sang đúng internal endpoint qua Seat Runtime Registry (`{"seat_claude_thanh": "http://router-thanh:20128", "seat_claude_hoang": "http://router-hoang:20128"}`) → forward request nguyên vẹn → trả response về, log lại instance nào đã dùng. Không cần code chế độ Prompt enforcement (parse/sửa body) trong spike này — để dành MVP sau nếu thật sự cần.
-- [ ] Script tạo 2 token giả lập: `{"employee_id": "thanh", "seat_id": "seat_claude_thanh", "provider": "anthropic", "tool": "claude_code"}` và tương tự cho Hoàng.
-- [ ] 2 Claude Code process (hoặc 2 script gửi request liên tục) chạy đồng thời, mỗi cái mang token của đúng người.
-- [ ] Chỗ ghi log đơn giản (file/console đủ dùng) — mỗi request ghi: `employee_id`, instance/connection thực tế đã dùng, model, status, thời điểm.
+- [x] ~~Xác nhận 9Router có native hỗ trợ OAuth/subscription~~ — **đã xác nhận có** (`/api/oauth/[provider]/[action]`), xem Q9.
+- [ ] 2 container 9Router riêng biệt như lệnh Docker ở trên — mỗi container mở dashboard 1 lần đầu (`http://<host>:29128`) để đặt admin password và connect **đúng 1** provider connection (Claude Team/Max thật) — **không thấy cách bootstrap password qua API thuần, phải qua UI lần đầu, không đoán mò/brute-force**.
+- [ ] **Bắt buộc kiểm tra sau khi connect provider**: vào `Providers`/`Combos` trong dashboard, xác nhận **không có** combo/fallback chain nào được tạo, và **không** connect thêm provider "free" nào (Kiro AI, OpenCode Free...) — đây là bước thủ công quan trọng nhất, làm sai bước này là vô hiệu hoá toàn bộ lý do dùng container-per-seat.
+- [ ] Tạo 1 API key trong dashboard mỗi instance (`Keys` → tạo mới) — đây là giá trị điền vào `registry.json` field `api_key` (**không phải** token nghiệp vụ Center AI — hai thứ khác nhau, xem code `spike/gateway-adapter/server.js`).
+- [ ] Gateway Adapter (đã có code, `spike/gateway-adapter/`) — chỉnh `registry.json`: đổi `endpoint` từ mock sang `http://<host>:29128`/`29129`, điền `api_key` thật vừa tạo.
+- [ ] 2 Claude Code process chạy thật (không phải mock) — cấu hình `ANTHROPIC_BASE_URL` trỏ Gateway Adapter, `ANTHROPIC_AUTH_TOKEN` là token nghiệp vụ Center AI (script `scripts/generate-tokens.js` đã có).
+- [ ] Log Request Span (đã có, `spike/logs/request-spans.jsonl`) — có thể đối chiếu thêm với `/api/usage/request-logs` thật của từng instance 9Router (Q9) để xác nhận khớp.
 
 ## 4. Cách chạy
 

@@ -2,11 +2,13 @@
   "seat_claude_thanh": {
     "employee_id": "emp_thanh",
     "endpoint": "http://localhost:20128",
+    "api_key": "mock-9router-issued-key-thanh",
     "status": "healthy"
   },
   "seat_claude_hoang": {
     "employee_id": "emp_hoang",
     "endpoint": "http://localhost:20129",
+    "api_key": "mock-9router-issued-key-hoang",
     "status": "healthy"
   }
 }

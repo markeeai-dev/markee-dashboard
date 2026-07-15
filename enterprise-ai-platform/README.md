@@ -4,7 +4,7 @@ Nền tảng quản trị seat AI hợp lệ, project continuity và company mem
 
 ## Trạng thái hiện tại
 
-**Kiến trúc đã khoá (v16).** Không còn review ý tưởng, không còn mâu thuẫn nội bộ đã biết.
+**Kiến trúc đã khoá (v17).** `9router` đã xác nhận là package thật (npm/Docker `decolua/9router`) — đã cài, chạy, gọi API thật để lấy thông tin chính xác thay vì suy đoán (chi tiết Q9). Phát hiện quan trọng: round-robin/fallback-free là tính năng quảng cáo thật của 9Router — container-per-seat + đúng 1 connection/instance là bắt buộc, không phải tuỳ chọn an toàn.
 
 **Spike đã bắt đầu code** — thư mục `spike/` có Gateway Adapter thật (đúng logic Q9: xác thực token, route theo `seat_id`, không sửa body, ghi Request Span) đã tự test bằng mock router: **7/7 tiêu chí Nhóm A + streaming PASS** (chi tiết `MVP0-SPIKE.md` mục 6). **Còn lại**: cắm vào 9Router thật + Claude Team account thật để test Nhóm B (tool-use/caching/OAuth refresh thật) — đây là việc chưa làm được vì môi trường hiện tại không có 9Router/account thật. Xem `spike/README.md` để chạy lại và biết chính xác bước tiếp theo.
 

@@ -127,7 +127,19 @@ const server = http.createServer((req, res) => {
       // không parse được cũng không sao — vẫn forward nguyên bytes gốc
     }
 
+    // Sửa lỗi thật phát hiện khi test với 9Router thật (bản Docker decolua/9router):
+    // /v1/messages trả 401 "API key required for remote API access" nếu forward
+    // nguyên authorization header của Center AI token — 9Router không hiểu token đó,
+    // nó cần đúng API key MÀ NÓ TỰ PHÁT HÀNH cho seat/connection đó (tạo qua dashboard
+    // 9Router, lưu vào registry.json field `api_key`). Đây chính là bước
+    // "đổi sang credential mà 9Router thực sự hiểu" đã mô tả ở Q9 — trước đây
+    // code spike quên làm bước đổi này, chỉ forward nguyên header cũ.
     const target = new URL(seat.endpoint + req.url);
+    const upstreamHeaders = { ...req.headers };
+    delete upstreamHeaders.authorization; // bỏ token nghiệp vụ Center AI, KHÔNG cho lọt lên 9Router
+    if (seat.api_key) {
+      upstreamHeaders.authorization = `Bearer ${seat.api_key}`;
+    }
     const upstreamReq = http.request(
       {
         hostname: target.hostname,
@@ -135,7 +147,7 @@ const server = http.createServer((req, res) => {
         path: target.pathname + target.search,
         method: req.method,
         headers: {
-          ...req.headers,
+          ...upstreamHeaders,
           host: target.host,
           'content-length': Buffer.byteLength(rawBody),
         },
