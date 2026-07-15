@@ -75,6 +75,18 @@ phải mô tả lý thuyết.
 
 ## Bước 4 — Dashboard tối giản
 
-Chưa làm — không chặn đường (kịch bản POC ở Bước 3 không cần dashboard, đúng như mục 15 đã
-ghi). Cân nhắc làm tiếp nếu còn thời gian, ưu tiên thấp hơn việc hoàn thiện phần còn thiếu ở
-Bước 2 (test `codex`, checkpoint theo git hook).
+**PASS.** `spike/dashboard/index.html` — 1 file HTML/JS thuần, không framework, đúng 5 màn +
+trang chủ theo Q24.10 (Projects & Tasks, Active Sessions, Handoffs, Project Memory, Seats &
+Employees). Deploy thật tại `https://ops.valeron.tech` (nginx + Certbot, tách biệt hoàn toàn
+với app Next.js/Supabase hiện tại).
+
+Thêm 4 endpoint đọc tổng hợp vào Control Plane để phục vụ dashboard (`GET /v1/employees`,
+`GET /v1/work-sessions` không kèm id — list active across mọi người, `GET /v1/handoffs` không
+kèm task_id — list gần đây across mọi task, `GET /v1/projects/:id/context-notes`) — test-harness
+tăng từ 21 lên **25/25 PASS**. Bật CORS ở Control Plane (`Access-Control-Allow-Origin: *`) vì
+dashboard gọi từ domain khác (`ops.valeron.tech` → `cp.valeron.tech`) — đã xác nhận cả preflight
+lẫn request thật đều đúng bằng curl mô phỏng header `Origin`.
+
+**Giới hạn đã biết**: chưa test bằng trình duyệt thật (môi trường này không có công cụ
+browser) — chỉ xác nhận được ở tầng HTTP/CORS/dữ liệu, không xác nhận được rendering/UX thật.
+Nên tự mở `https://ops.valeron.tech` kiểm tra 1 lần trước khi coi Bước 4 là xong hẳn.

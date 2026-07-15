@@ -23,9 +23,16 @@ const EMPLOYEE_TOKEN_SECRET = process.env.CENTERAI_EMPLOYEE_TOKEN_SECRET;
 const GATEWAY_BASE_URL = process.env.GATEWAY_BASE_URL || 'https://valeron.tech';
 const IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6h (Q18/Q24.5 — không dùng ranh giới "cùng ngày")
 const GATEWAY_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // đủ dài cho 1 ca làm việc
+// Mã pilot chia sẻ ngoài băng thông (Slack/nói trực tiếp) cho Thanh/Hoàng — CHỈ để chặn
+// việc "biết email công ty là mint được token thật của người khác" một khi Control Plane
+// lộ ra domain công khai cho company-ai gọi từ máy nhân viên (Bước 2). Không phải SSO thật,
+// chỉ là rào chắn tối thiểu bắt buộc phải có trước khi public — không phải tính năng thêm.
+const PILOT_ACCESS_CODE = process.env.CENTERAI_PILOT_ACCESS_CODE;
 
-if (!GATEWAY_TOKEN_SECRET || !EMPLOYEE_TOKEN_SECRET) {
-  console.error('[control-plane] FATAL: thiếu CENTERAI_TOKEN_SECRET hoặc CENTERAI_EMPLOYEE_TOKEN_SECRET trong env');
+if (!GATEWAY_TOKEN_SECRET || !EMPLOYEE_TOKEN_SECRET || !PILOT_ACCESS_CODE) {
+  console.error(
+    '[control-plane] FATAL: thiếu CENTERAI_TOKEN_SECRET hoặc CENTERAI_EMPLOYEE_TOKEN_SECRET hoặc CENTERAI_PILOT_ACCESS_CODE trong env'
+  );
   process.exit(1);
 }
 
@@ -78,6 +85,9 @@ async function requireEmployee(req) {
 async function handleLogin(req) {
   const body = await readJsonBody(req);
   if (!body.email) throw new ApiError(400, 'missing_email');
+  if (!body.access_code || body.access_code !== PILOT_ACCESS_CODE) {
+    throw new ApiError(401, 'invalid_access_code');
+  }
 
   const { rows } = await query('SELECT id, email, full_name, status FROM employees WHERE email = $1', [body.email]);
   if (!rows.length) throw new ApiError(404, 'employee_not_found');
@@ -94,6 +104,65 @@ async function handleListProjects(req) {
   await requireEmployee(req);
   const { rows } = await query('SELECT id, name, status FROM projects WHERE status = $1 ORDER BY name', ['active']);
   return { status: 200, body: { projects: rows } };
+}
+
+// --- Đọc tổng hợp cho Dashboard tối giản (Q24.10 — 5 màn: Projects & Tasks, Active
+// Sessions, Handoffs, Project Memory, Seats & Employees). Đọc across-employee (không giới
+// hạn theo requireEmployee().id) vì đây là view vận hành chung, không phải dữ liệu cá nhân —
+// vẫn yêu cầu đăng nhập hợp lệ (requireEmployee), chỉ không lọc theo employee đó.
+
+async function handleListEmployees(req) {
+  await requireEmployee(req);
+  const { rows } = await query(
+    `SELECT e.id, e.email, e.full_name, e.status, srr.seat_id, srr.status AS seat_status
+     FROM employees e LEFT JOIN seat_runtime_registry srr ON srr.employee_id = e.id
+     ORDER BY e.full_name`
+  );
+  return { status: 200, body: { employees: rows } };
+}
+
+async function handleListActiveWorkSessions(req) {
+  await requireEmployee(req);
+  const { rows } = await query(
+    `SELECT ws.id, ws.started_at, e.full_name AS employee_name, t.id AS task_id, t.title AS task_title,
+            p.name AS project_name,
+            GREATEST(
+              ws.started_at,
+              COALESCE((SELECT MAX(ts.started_at) FROM tool_sessions ts WHERE ts.work_session_id = ws.id), ws.started_at)
+            ) AS last_activity_at
+     FROM work_sessions ws
+     JOIN employees e ON e.id = ws.employee_id
+     JOIN tasks t ON t.id = ws.task_id
+     JOIN projects p ON p.id = ws.project_id
+     WHERE ws.status = 'active'
+     ORDER BY last_activity_at DESC`
+  );
+  return { status: 200, body: { work_sessions: rows } };
+}
+
+async function handleListRecentHandoffs(req) {
+  await requireEmployee(req);
+  const { rows } = await query(
+    `SELECT h.id, h.task_id, t.title AS task_title, p.name AS project_name,
+            e.full_name AS from_employee_name, h.summary, h.open_issues, h.next_steps, h.created_at
+     FROM handoffs h
+     JOIN employees e ON e.id = h.from_employee_id
+     JOIN tasks t ON t.id = h.task_id
+     JOIN projects p ON p.id = t.project_id
+     ORDER BY h.created_at DESC LIMIT 20`
+  );
+  return { status: 200, body: { handoffs: rows } };
+}
+
+async function handleListProjectContext(req, params) {
+  await requireEmployee(req);
+  const { rows } = await query(
+    `SELECT pc.id, pc.task_id, pc.type, pc.content, pc.created_at, e.full_name AS created_by_name
+     FROM project_context pc JOIN employees e ON e.id = pc.created_by
+     WHERE pc.project_id = $1 ORDER BY pc.created_at DESC LIMIT 50`,
+    [params.projectId]
+  );
+  return { status: 200, body: { context_notes: rows } };
 }
 
 async function handleListTasks(req, params) {
@@ -286,6 +355,21 @@ async function handleCreateHandoff(req) {
   return { status: 201, body: { handoff_id: hId } };
 }
 
+async function handleListWorkSessionCheckpoints(req, params) {
+  const emp = await requireEmployee(req);
+  const ws = await loadOwnedWorkSession(params.id, emp.id);
+  const { rows } = await query(
+    `SELECT cp.id, cp.tool_session_id, cp.trigger, cp.completed, cp.remaining, cp.files_changed,
+            cp.git_commit, cp.git_branch, cp.created_at
+     FROM checkpoints cp
+     JOIN tool_sessions ts ON ts.id = cp.tool_session_id
+     WHERE ts.work_session_id = $1
+     ORDER BY cp.created_at ASC`,
+    [ws.id]
+  );
+  return { status: 200, body: { checkpoints: rows } };
+}
+
 async function handleGetLatestHandoff(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
@@ -344,6 +428,18 @@ const routes = [
     pattern: /^\/v1\/projects\/([^/]+)\/tasks$/,
     handler: (req, m) => handleListTasks(req, { projectId: m[1] }),
   },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/projects\/([^/]+)\/context-notes$/,
+    handler: (req, m) => handleListProjectContext(req, { projectId: m[1] }),
+  },
+  { method: 'GET', pattern: /^\/v1\/employees$/, handler: (req) => handleListEmployees(req) },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/work-sessions$/,
+    handler: (req) => handleListActiveWorkSessions(req),
+  },
+  { method: 'GET', pattern: /^\/v1\/handoffs$/, handler: (req) => handleListRecentHandoffs(req) },
   { method: 'POST', pattern: /^\/v1\/work-sessions$/, handler: (req) => handleCreateWorkSession(req) },
   {
     method: 'POST',
@@ -354,6 +450,11 @@ const routes = [
     method: 'POST',
     pattern: /^\/v1\/work-sessions\/([^/]+)\/tool-sessions$/,
     handler: (req, m) => handleCreateToolSession(req, { id: m[1] }),
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/work-sessions\/([^/]+)\/checkpoints$/,
+    handler: (req, m) => handleListWorkSessionCheckpoints(req, { id: m[1] }),
   },
   {
     method: 'POST',
@@ -375,6 +476,17 @@ const routes = [
 
 const server = http.createServer(async (req, res) => {
   const requestId = crypto.randomUUID();
+  // CORS — dashboard tối giản (Bước 4) chạy ở domain khác (ops.valeron.tech) gọi thẳng
+  // Control Plane từ trình duyệt. Cho phép mọi origin đọc (GET, có Authorization) — dữ liệu
+  // vẫn đòi hỏi employee_token hợp lệ, CORS chỉ nới same-origin policy của trình duyệt,
+  // không thay thế xác thực.
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    return res.end();
+  }
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 

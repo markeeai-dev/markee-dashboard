@@ -6,6 +6,11 @@
 
 const CP = process.env.CONTROL_PLANE_URL || 'http://127.0.0.1:8090';
 const GATEWAY = process.env.GATEWAY_URL || 'https://valeron.tech';
+const ACCESS_CODE = process.env.CENTERAI_PILOT_ACCESS_CODE;
+if (!ACCESS_CODE) {
+  console.error('[test-harness] thiếu CENTERAI_PILOT_ACCESS_CODE trong env, không chạy được');
+  process.exit(1);
+}
 
 let passed = 0;
 let failed = 0;
@@ -38,15 +43,21 @@ async function get(url, token) {
 
 async function main() {
   // --- Login ---
-  const thanhLogin = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local' });
-  check('login Thanh -> 200 + employee_token', thanhLogin.status === 200 && !!thanhLogin.json.employee_token, thanhLogin);
+  const wrongCode = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local', access_code: 'sai-ma' });
+  check('login sai access_code -> 401', wrongCode.status === 401 && wrongCode.json.error === 'invalid_access_code', wrongCode);
+
+  const noCode = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local' });
+  check('login thiếu access_code -> 401', noCode.status === 401, noCode);
+
+  const thanhLogin = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local', access_code: ACCESS_CODE });
+  check('login Thanh (đúng access_code) -> 200 + employee_token', thanhLogin.status === 200 && !!thanhLogin.json.employee_token, thanhLogin);
   const thanhToken = thanhLogin.json.employee_token;
 
-  const hoangLogin = await post(`${CP}/v1/auth/login`, { email: 'hoang@company.local' });
-  check('login Hoang -> 200 + employee_token', hoangLogin.status === 200 && !!hoangLogin.json.employee_token, hoangLogin);
+  const hoangLogin = await post(`${CP}/v1/auth/login`, { email: 'hoang@company.local', access_code: ACCESS_CODE });
+  check('login Hoang (đúng access_code) -> 200 + employee_token', hoangLogin.status === 200 && !!hoangLogin.json.employee_token, hoangLogin);
   const hoangToken = hoangLogin.json.employee_token;
 
-  const unknownLogin = await post(`${CP}/v1/auth/login`, { email: 'nobody@company.local' });
+  const unknownLogin = await post(`${CP}/v1/auth/login`, { email: 'nobody@company.local', access_code: ACCESS_CODE });
   check('login email không tồn tại -> 404', unknownLogin.status === 404, unknownLogin);
 
   // --- Projects / Tasks ---
@@ -123,6 +134,13 @@ async function main() {
   );
   check('tạo checkpoint -> 201', cp1.status === 201 && !!cp1.json.checkpoint_id, cp1);
 
+  const cpList = await get(`${CP}/v1/work-sessions/${wsId}/checkpoints`, thanhToken);
+  check(
+    'đọc lại checkpoints của Work Session (cho company-ai end tổng hợp handoff)',
+    cpList.status === 200 && cpList.json.checkpoints.some((c) => c.id === cp1.json.checkpoint_id),
+    cpList
+  );
+
   const endTs = await post(`${CP}/v1/tool-sessions/${tsId}/end`, {}, thanhToken);
   check('đóng Tool Session -> status closed', endTs.status === 200 && endTs.json.status === 'closed', endTs);
 
@@ -162,6 +180,35 @@ async function main() {
   const wsThanh2 = await post(`${CP}/v1/work-sessions`, { task_id: 'task_tng142' }, thanhToken);
   const crossAccess = await post(`${CP}/v1/work-sessions/${wsThanh2.json.work_session_id}/end`, {}, hoangToken);
   check('Hoàng thao tác Work Session của Thanh -> 403 not_owner', crossAccess.status === 403 && crossAccess.json.error === 'not_owner', crossAccess);
+
+  // --- Endpoint đọc tổng hợp cho Dashboard (Bước 4) ---
+  const employees = await get(`${CP}/v1/employees`, thanhToken);
+  check(
+    'list employees có cả Thanh/Hoàng kèm đúng seat',
+    employees.status === 200 &&
+      employees.json.employees.some((e) => e.id === 'emp_thanh' && e.seat_id === 'seat_claude_thanh') &&
+      employees.json.employees.some((e) => e.id === 'emp_hoang' && e.seat_id === 'seat_claude_hoang'),
+    employees
+  );
+
+  const recentHandoffs = await get(`${CP}/v1/handoffs`, hoangToken);
+  check(
+    'list handoffs gần nhất (across task) có handoff vừa publish',
+    recentHandoffs.status === 200 && recentHandoffs.json.handoffs.some((h) => h.id === handoff.json.handoff_id),
+    recentHandoffs
+  );
+
+  const wsThanh3 = await post(`${CP}/v1/work-sessions`, { task_id: 'task_tng142' }, thanhToken);
+  const activeSessions = await get(`${CP}/v1/work-sessions`, hoangToken);
+  check(
+    'list active work sessions thấy đúng session vừa mở',
+    activeSessions.status === 200 && activeSessions.json.work_sessions.some((w) => w.id === wsThanh3.json.work_session_id),
+    activeSessions
+  );
+  await post(`${CP}/v1/work-sessions/${wsThanh3.json.work_session_id}/end`, {}, thanhToken);
+
+  const contextNotes = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
+  check('list project context-notes -> 200 (rỗng hoặc có dữ liệu đều hợp lệ)', contextNotes.status === 200 && Array.isArray(contextNotes.json.context_notes), contextNotes);
 
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);
