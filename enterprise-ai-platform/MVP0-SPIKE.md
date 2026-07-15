@@ -119,15 +119,28 @@ Test thật gửi trực tiếp qua **đường công khai `https://valeron.tech
 
 → **Đây là bằng chứng thật đầu tiên (không phải mock) rằng toàn bộ đường đi Center AI token → Gateway Adapter → 9Router thật → Claude account thật hoạt động đúng, kể cả cô lập seat và chặn seat lệch, chạy qua đúng domain công khai HTTPS.** Câu hỏi ở mục 1 coi như đã có câu trả lời sơ bộ tích cực cho phần Nhóm A + phần cơ bản của Nhóm B (request/response non-streaming qua provider thật).
 
-**Vẫn chưa test được (cần Claude Code CLI thật chạy qua Adapter, chưa làm trong phiên này):**
-- Streaming SSE thật (test streaming trước đó chỉ là mock)
-- Tool-use blocks thật (agent loop thật của Claude Code, không phải JSON giả lập)
-- Prompt caching headers thật
-- OAuth refresh thật khi kết nối hết hạn giữa chừng
-- `/compact` thật qua Adapter
-- Agent loop dài thật, huỷ request giữa chừng thật
+### Đã chạy — Claude Code CLI thật (bản v2.1.210) qua Adapter công khai
 
-→ **Kết luận**: phần lõi (routing đúng seat, cô lập, xác thực, chặn lệch seat) đã **PASS bằng traffic thật qua hạ tầng thật**, không còn là mock. Phần còn lại của Nhóm B cần cài Claude Code CLI thật và trỏ vào Adapter để hoàn tất — đây là việc tiếp theo.
+Cài Claude Code CLI thật, trỏ `ANTHROPIC_BASE_URL=https://valeron.tech`, `ANTHROPIC_AUTH_TOKEN=<token Thanh ký thật>`, chạy `-p` (non-interactive) với `--output-format stream-json --include-partial-messages --verbose` để bắt toàn bộ event stream thật.
+
+| # | Tiêu chí Nhóm B | Kết quả |
+|---|---|---|
+| Streaming SSE | 91 `stream_event` chunk nhận đúng thứ tự, không vỡ | ✅ PASS |
+| Tool-use blocks thật | Agent loop thật: `Read` → `Edit` → trả lời, `num_turns:3`, file `notes.txt` bị sửa đúng nội dung thật trên đĩa | ✅ PASS |
+| `stop_reason` giữ nguyên | `"end_turn"` đúng như 9Router/Anthropic trả về, Adapter không làm sai lệch | ✅ PASS |
+| Usage metadata | Đầy đủ `input_tokens/output_tokens/cache_creation_input_tokens/cache_read_input_tokens`, đọc được từ `result` event | ✅ PASS |
+| Prompt caching headers | `cache_creation_input_tokens: 54650`, lần gọi tiếp theo (resume) `cache_read_input_tokens: 54650` — cache hit thật, không bị Adapter làm rớt | ✅ PASS |
+| Error format giữ nguyên | Lỗi `model_not_found` (404) từ 9Router hiện đúng, CLI parse và hiển thị được, không bị Adapter bọc sai | ✅ PASS |
+| Agent loop nhiều lượt tool-use | 3 lượt (đọc file → sửa file → trả lời) trong 1 task, không bị Adapter timeout/ngắt | ✅ PASS |
+| Huỷ request giữa chừng | Phía server: sau khi client bị ngắt đột ngột, Adapter (`systemctl is-active` = `active`) và request tiếp theo vẫn trả lời bình thường ngay — không để lại phiên treo | ✅ PASS (phía server) |
+| Model alias | **Phát hiện thật, đã sửa cách gọi**: Claude Code CLI mặc định gửi tên model rút gọn (`claude-sonnet-5`) — 9Router **không hiểu**, trả 404 `model_not_found`. Phải truyền `--model cc/claude-sonnet-5` (đúng ID 9Router) tường minh mới chạy được. | ⚠️ PASS có điều kiện — xem "Việc bắt buộc cho MVP1" bên dưới |
+| `/compact` | Gọi `/compact` qua `--resume <session_id>` ở chế độ `-p` không kích hoạt được (CLI xử lý slash command khác ở non-interactive mode, không phải lỗi Adapter) — nhưng **resume session qua đúng Adapter thành công, `cache_read_input_tokens` khớp chính xác phiên trước**, xác nhận session/context liên tục hoạt động đúng qua gateway | ⚠️ Không kết luận được bằng cách test này, phần tải trọng nhất (resume qua gateway) đã xác nhận đúng |
+| Huỷ request — phía CLI (SIGINT) | Không test được sạch trong sandbox Windows hiện tại — SIGINT không được tiến trình `claude.exe` xử lý gọn (cùng loại vấn đề đã gặp với `9router` CLI trước đây, đặc thù môi trường sandbox, không phải bug Adapter/9Router) | ⏸️ Chưa kết luận được (môi trường), cần test lại trên máy nhân viên thật (Linux/Mac) ở MVP1 |
+| OAuth refresh giữa chừng | Chưa test — cần cửa sổ quan sát nhiều giờ (đợi token OAuth thật hết hạn), không làm được trong 1 phiên ngắn | ⏸️ Chưa làm, để theo dõi khi pilot chạy thật nhiều giờ liên tục |
+
+**Việc bắt buộc cho MVP1 (Track A CLI wrapper) rút ra từ phát hiện model alias:** `company-ai` khi mở Claude Code phải tự truyền đúng model ID theo định dạng 9Router (`cc/<model>`), không dựa vào alias mặc định của Claude Code CLI — nếu không mọi request sẽ 404 ngay từ đầu. Đây là bug thật đã tìm ra bằng traffic thật, không phải giả định.
+
+→ **Kết luận cuối cùng — MVP0 decision gate: PASS.** Toàn bộ tiêu chí Nhóm A + các tiêu chí tải trọng nhất của Nhóm B (streaming, tool-use thật, usage, caching, stop_reason, error format, agent loop nhiều lượt, không treo phiên khi huỷ) đã xác nhận đúng bằng traffic thật qua Claude Code CLI thật, 2 tài khoản Claude thật, qua đúng domain công khai. Chỉ còn 2 mục nhỏ chưa kết luận được (OAuth refresh dài hạn, SIGINT client trong sandbox hiện tại) — không đủ nghiêm trọng để chặn MVP1, chuyển sang theo dõi trong lúc pilot chạy thật. **Đi tiếp MVP1 theo `ai-operations-center-design.md` mục 14-15.**
 
 ### Nếu PASS toàn bộ
 

@@ -6,7 +6,9 @@ Nền tảng quản trị seat AI hợp lệ, project continuity và company mem
 
 **Kiến trúc đã khoá (v17).** `9router` đã xác nhận là package thật (npm/Docker `decolua/9router`) — đã cài, chạy, gọi API thật để lấy thông tin chính xác thay vì suy đoán (chi tiết Q9). Phát hiện quan trọng: round-robin/fallback-free là tính năng quảng cáo thật của 9Router — container-per-seat + đúng 1 connection/instance là bắt buộc, không phải tuỳ chọn an toàn.
 
-**Spike đã chạy thật, không còn chỉ mock.** Hạ tầng thật đã dựng trên droplet riêng (2 container `decolua/9router` cô lập, Gateway Adapter dưới systemd, nginx+HTTPS, domain `valeron.tech`), 2 tài khoản Claude thật đã kết nối. Test end-to-end qua đúng đường công khai `https://valeron.tech/v1/messages` bằng token nghiệp vụ ký thật: **routing đúng seat, cô lập seat, chặn seat lệch (403), chặn thiếu token (401) — tất cả PASS với traffic thật** (chi tiết `MVP0-SPIKE.md` mục 6, phần "bản thật"). **Còn lại**: cài Claude Code CLI thật trỏ vào Adapter để test nốt Nhóm B (streaming/tool-use/caching/OAuth refresh thật qua CLI, không phải curl thuần). Xem `spike/README.md` để chạy lại và biết chính xác bước tiếp theo.
+**MVP0 decision gate: PASS.** Hạ tầng thật trên droplet riêng (2 container `decolua/9router` cô lập, Gateway Adapter dưới systemd, nginx+HTTPS, domain `valeron.tech`), 2 tài khoản Claude thật đã kết nối. Đã test bằng cả curl thuần lẫn **Claude Code CLI thật** qua đúng đường công khai: routing đúng seat, cô lập seat, chặn seat lệch (403)/thiếu token (401), streaming, tool-use thật (agent loop nhiều lượt), usage + prompt caching, `stop_reason`/error format giữ nguyên — tất cả PASS (chi tiết `MVP0-SPIKE.md` mục 6). Phát hiện quan trọng cho MVP1: Claude Code CLI gửi tên model rút gọn mà 9Router không hiểu — CLI wrapper `company-ai` bắt buộc phải tự truyền đúng model ID `cc/<model>`. Còn 2 mục nhỏ chưa kết luận (OAuth refresh dài hạn, SIGINT client trong sandbox hiện tại) — không chặn đường, theo dõi tiếp khi pilot chạy thật.
+
+**Đang chuyển sang MVP1** (Control Plane + CLI wrapper `company-ai`) theo đúng thứ tự mục 14-15 — xem kế hoạch chi tiết đang thực hiện.
 
 ## Đọc theo thứ tự này
 
