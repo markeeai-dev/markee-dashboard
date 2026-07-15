@@ -375,6 +375,16 @@ async function main() {
     auditLogsAsAdmin
   );
 
+  const flagsAsMember = await get(`${CP}/v1/flags`, hoangToken);
+  check('Hoàng (member) xem flags -> 403', flagsAsMember.status === 403, flagsAsMember);
+
+  const flagsAsAdmin = await get(`${CP}/v1/flags`, thanhToken);
+  check(
+    'Thanh (admin) xem flags -> 200, có flag secret_detected vừa ingest',
+    flagsAsAdmin.status === 200 && flagsAsAdmin.json.flags.some((f) => f.id === flagOk.json.flag_id),
+    flagsAsAdmin
+  );
+
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);
 }

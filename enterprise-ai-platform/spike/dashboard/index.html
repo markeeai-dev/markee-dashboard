@@ -72,6 +72,7 @@ const TABS = [
   { id: 'handoffs', label: 'Handoffs', render: renderHandoffs },
   { id: 'memory', label: 'Project Memory', render: renderMemory },
   { id: 'seats', label: 'Seats & Employees', render: renderSeats },
+  { id: 'governance', label: 'Governance', render: renderGovernance, adminOnly: true },
 ];
 let state = { cpUrl: '', token: '', who: null, active: 'home' };
 
@@ -101,6 +102,16 @@ async function api(path) {
   if (res.status >= 400) throw new Error(json.error || `http_${res.status}`);
   return json;
 }
+async function apiPost(path, body) {
+  const res = await fetch(state.cpUrl.replace(/\/$/, '') + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+    body: JSON.stringify(body || {}),
+  });
+  const json = await safeJson(res);
+  if (res.status >= 400) throw new Error(json.error || `http_${res.status}`);
+  return json;
+}
 
 async function doLogin() {
   const cpUrl = document.getElementById('cpUrl').value.trim();
@@ -116,7 +127,7 @@ async function doLogin() {
     });
     const json = await safeJson(res);
     if (res.status >= 400) throw new Error(json.error || `http_${res.status}`);
-    state = { cpUrl, token: json.employee_token, who: { full_name: json.full_name, employee_id: json.employee_id }, active: 'home' };
+    state = { cpUrl, token: json.employee_token, who: { full_name: json.full_name, employee_id: json.employee_id, role: json.role }, active: 'home' };
     saveSession();
     boot();
   } catch (e) {
@@ -286,8 +297,88 @@ async function renderSeats(root) {
     </tbody></table></div>`;
 }
 
+// Governance (Q13/Q22) — chỉ admin thấy tab này (đã lọc ở renderTabs). Risk Score KHÔNG tự
+// động xử lý ai — chỉ hiển thị để quản lý tự xem xét, đúng nguyên tắc "không tự động kết luận".
+async function renderGovernance(root) {
+  const [riskScore, flagsRes, auditRes] = await Promise.all([
+    api('/v1/governance/risk-score'),
+    api('/v1/flags'),
+    api('/v1/audit-logs'),
+  ]);
+
+  root.innerHTML = `
+    <div class="panel">
+      <h2>Risk Score theo nhân viên</h2>
+      <div class="empty" style="margin-bottom:10px;">Chỉ để tham khảo — không tự động xử lý ai, quản lý tự xem xét.</div>
+      <table><thead><tr><th>Nhân viên</th><th>Điểm</th><th>Số lần bị flag</th><th>Secret</th><th>PII</th></tr></thead>
+      <tbody>${riskScore.risk_scores.length ? riskScore.risk_scores.map((r) => `
+        <tr><td>${esc(r.full_name || r.employee_id)}</td>
+        <td><span class="pill ${Number(r.risk_score) >= 8 ? 'danger' : Number(r.risk_score) >= 3 ? 'warn' : 'ok'}">${esc(r.risk_score)}</span></td>
+        <td>${esc(r.flag_count)}</td><td>${esc(r.secret_count)}</td><td>${esc(r.pii_count)}</td></tr>`).join('') :
+        '<tr><td colspan="5" class="empty">Chưa có flag nào.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Bật Full Audit Mode (Q22)</h2>
+      <div class="empty" style="margin-bottom:10px;">Bắt buộc có lý do + thời hạn, ghi vào audit_logs — không xem tự do như đọc tin nhắn nhân viên.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Scope</label><br/>
+          <select id="faScope" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            <option value="employee">employee</option><option value="project">project</option>
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Scope ID</label><br/>
+          <input id="faScopeId" placeholder="emp_thanh" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Số giờ</label><br/>
+          <input id="faHours" type="number" value="4" style="width:70px;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div style="flex:1;min-width:200px;"><label style="font-size:12px;color:var(--muted);">Lý do (bắt buộc)</label><br/>
+          <input id="faReason" placeholder="Điều tra rò rỉ secret nghi vấn" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <button class="btn" onclick="grantFullAuditMode()">Bật</button>
+      </div>
+      <div id="faResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Flags gần đây</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Loại</th><th>Mức</th><th>Chi tiết</th><th>Lúc</th></tr></thead>
+      <tbody>${flagsRes.flags.length ? flagsRes.flags.map((f) => `
+        <tr><td>${esc(f.full_name || f.employee_id || '—')}</td>
+        <td><span class="pill ${f.type === 'secret_detected' ? 'danger' : 'warn'}">${esc(f.type)}</span></td>
+        <td>${esc(f.severity)}</td><td class="empty">${esc(JSON.stringify(f.detail))}</td>
+        <td>${fmtDate(f.detected_at)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">Chưa có flag nào.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Audit Logs (append-only)</h2>
+      <table><thead><tr><th>Actor</th><th>Action</th><th>Target</th><th>Lúc</th></tr></thead>
+      <tbody>${auditRes.audit_logs.length ? auditRes.audit_logs.map((a) => `
+        <tr><td>${esc(a.actor_name || 'hệ thống')}</td><td>${esc(a.action)}</td>
+        <td>${a.target_type ? `${esc(a.target_type)}:${esc(a.target_id)}` : '—'}</td>
+        <td>${fmtDate(a.created_at)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">Chưa có log nào.</td></tr>'}
+      </tbody></table>
+    </div>`;
+}
+
+async function grantFullAuditMode() {
+  const resultEl = document.getElementById('faResult');
+  const scope = document.getElementById('faScope').value;
+  const scope_id = document.getElementById('faScopeId').value.trim();
+  const duration_hours = Number(document.getElementById('faHours').value) || 4;
+  const reason = document.getElementById('faReason').value.trim();
+  if (!scope_id || !reason) { resultEl.textContent = 'Cần nhập Scope ID và Lý do.'; return; }
+  try {
+    const res = await apiPost('/v1/governance/full-audit-mode', { scope, scope_id, reason, duration_hours });
+    resultEl.textContent = `Đã bật — hết hạn lúc ${fmtDate(res.expires_at)}.`;
+    switchTab('governance');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
 function renderTabs() {
-  document.getElementById('tabs').innerHTML = TABS.map((t) =>
+  const visible = TABS.filter((t) => !t.adminOnly || state.who.role === 'admin');
+  document.getElementById('tabs').innerHTML = visible.map((t) =>
     `<button class="${state.active === t.id ? 'active' : ''}" onclick="switchTab('${t.id}')">${t.label}</button>`
   ).join('');
 }

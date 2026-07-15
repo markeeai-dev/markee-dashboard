@@ -23,12 +23,41 @@ const SECRET_PATTERNS = [
 
 // CCCD Việt Nam: 12 số liền (không dùng \b vì số điện thoại/mã khác cũng có thể trùng độ dài —
 // chấp nhận rủi ro báo nhầm ở mức PII, đúng tinh thần "cảnh báo không chặn" ở đợt này).
-// Hộ chiếu VN: 1 chữ cái + 7 số. Số thẻ ngân hàng: 13-19 số, có thể có khoảng trắng/gạch ngang.
+// Hộ chiếu VN: 1 chữ cái + 7 số.
 const PII_PATTERNS = [
   { type: 'vn_national_id', severity: 'med', re: /\b\d{12}\b/g },
   { type: 'vn_passport', severity: 'med', re: /\b[A-Z]\d{7}\b/g },
-  { type: 'card_number', severity: 'med', re: /\b(?:\d[ -]?){13,19}\b/g },
 ];
+
+// Số thẻ ngân hàng: PHẢI qua Luhn checksum, không chỉ đếm số chữ số — phát hiện thật khi test
+// bằng traffic CLI thật (Bước 4d): pattern "13-19 số liền" thô báo nhầm hàng loạt vào timestamp
+// (vd Unix ms 13 số) và ID khác vốn dĩ rất phổ biến trong payload JSON thật. Luhn loại gần hết
+// các trường hợp báo nhầm này vì số ngẫu nhiên/tuần tự hiếm khi tình cờ qua được checksum.
+function luhnValid(digits) {
+  let sum = 0;
+  let shouldDouble = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (shouldDouble) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+    shouldDouble = !shouldDouble;
+  }
+  return sum % 10 === 0;
+}
+
+function scanForCardNumber(text) {
+  const candidates = text.match(/\b(?:\d[ -]?){13,19}\b/g) || [];
+  for (const c of candidates) {
+    const digits = c.replace(/[ -]/g, '');
+    if (digits.length >= 13 && digits.length <= 19 && luhnValid(digits)) {
+      return [{ type: 'card_number', severity: 'med' }];
+    }
+  }
+  return [];
+}
 
 function scan(text, patterns) {
   if (!text) return [];
@@ -45,7 +74,8 @@ function scanForSecrets(text) {
 }
 
 function scanForPii(text) {
-  return scan(text, PII_PATTERNS);
+  if (!text) return [];
+  return [...scan(text, PII_PATTERNS), ...scanForCardNumber(text)];
 }
 
 module.exports = { scanForSecrets, scanForPii };

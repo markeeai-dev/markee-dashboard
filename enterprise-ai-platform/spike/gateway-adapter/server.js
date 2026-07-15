@@ -18,6 +18,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { verifyToken } = require('../shared/token');
 const { resolveSeat } = require('./registry');
+const { scanForSecrets, scanForPii } = require('../shared/governance-scan');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const SECRET = process.env.CENTERAI_TOKEN_SECRET || 'spike-dev-secret-change-me';
@@ -69,6 +70,20 @@ function reportRequestSpan(entry) {
     body: JSON.stringify(entry),
   }).catch((err) => {
     console.error('[adapter] reportRequestSpan failed (non-fatal):', err.message);
+  });
+}
+
+// MVP3 khởi động · Q13 — cùng kiểu fire-and-forget với reportRequestSpan. CHỈ gửi type/severity,
+// KHÔNG BAO GIỜ gửi giá trị match thật (chuỗi secret/PII thật) lên Control Plane hay ghi vào
+// log cục bộ — mục đích là phát hiện rò rỉ, không phải tạo thêm 1 nơi lưu chính thứ đang chặn.
+function reportFlag(entry) {
+  if (!INTERNAL_SERVICE_SECRET) return;
+  fetch(`${CONTROL_PLANE_URL}/internal/v1/governance/flags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` },
+    body: JSON.stringify(entry),
+  }).catch((err) => {
+    console.error('[adapter] reportFlag failed (non-fatal):', err.message);
   });
 }
 
@@ -169,6 +184,54 @@ const server = http.createServer((req, res) => {
       modelForLog = peek.model;
     } catch {
       // không parse được cũng không sao — vẫn forward nguyên bytes gốc
+    }
+
+    // MVP3 khởi động · Q13 — Secret Scan (chặn cứng) + PII Detection (chỉ cảnh báo, đợt này
+    // chưa chặn — xem lý do trong plan). Quét TOÀN BỘ rawBody (không chỉ field `content`) vì
+    // secret có thể nằm ở bất kỳ đâu trong payload (system prompt, tool_result...). Đây vẫn là
+    // Metadata enforcement — chỉ ĐỌC để quyết định pass/block, KHÔNG sửa nội dung gửi đi.
+    const bodyText = rawBody.toString('utf8');
+    const secretMatches = scanForSecrets(bodyText);
+    if (secretMatches.length) {
+      logSpan({
+        gateway_request_id: gatewayRequestId,
+        employee_id,
+        seat_id,
+        status: 'rejected',
+        reason: 'secret_detected',
+        secret_types: secretMatches.map((m) => m.type), // chỉ loại pattern, KHÔNG log giá trị match thật
+        flagged: true,
+      });
+      for (const m of secretMatches) {
+        reportFlag({
+          employee_id,
+          work_session_id,
+          type: 'secret_detected',
+          severity: m.severity,
+          detail: { pattern: m.type },
+          blocked: true,
+        });
+      }
+      return sendJson(res, 403, {
+        error: 'secret_detected',
+        detail: 'Nội dung có chứa thứ giống secret/API key thật (' + secretMatches.map((m) => m.type).join(', ') + ') — bị chặn, không gửi lên provider AI. Xoá secret khỏi nội dung rồi thử lại.',
+        gateway_request_id: gatewayRequestId,
+      });
+    }
+
+    const piiMatches = scanForPii(bodyText);
+    if (piiMatches.length) {
+      // Chỉ cảnh báo, KHÔNG chặn — request vẫn forward bình thường bên dưới.
+      for (const m of piiMatches) {
+        reportFlag({
+          employee_id,
+          work_session_id,
+          type: 'pii_detected',
+          severity: m.severity,
+          detail: { pattern: m.type },
+          blocked: false,
+        });
+      }
     }
 
     // Sửa lỗi thật phát hiện khi test với 9Router thật (bản Docker decolua/9router):

@@ -320,6 +320,17 @@ async function handleListAuditLogs(req) {
   return { status: 200, body: { audit_logs: rows } };
 }
 
+async function handleListFlags(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query(
+    `SELECT f.id, f.employee_id, e.full_name, f.type, f.severity, f.score, f.detail, f.status, f.detected_at
+     FROM flags f LEFT JOIN employees e ON e.id = f.employee_id
+     ORDER BY f.detected_at DESC LIMIT 50`
+  );
+  return { status: 200, body: { flags: rows } };
+}
+
 // --- MVP2 · AI Timeline + AI Inbox (Q14) — "view, không phải bảng mới": union theo thời
 // gian trên các bảng MVP1 đã có, không tạo bảng mới, đúng như tài liệu yêu cầu.
 
@@ -882,6 +893,7 @@ const routes = [
   { method: 'POST', pattern: /^\/v1\/auth\/login$/, handler: (req) => handleLogin(req) },
   { method: 'POST', pattern: /^\/v1\/governance\/full-audit-mode$/, handler: (req) => handleGrantFullAuditMode(req) },
   { method: 'GET', pattern: /^\/v1\/audit-logs$/, handler: (req) => handleListAuditLogs(req) },
+  { method: 'GET', pattern: /^\/v1\/flags$/, handler: (req) => handleListFlags(req) },
   { method: 'GET', pattern: /^\/v1\/projects$/, handler: (req) => handleListProjects(req) },
   {
     method: 'GET',
