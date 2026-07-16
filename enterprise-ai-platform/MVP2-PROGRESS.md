@@ -98,13 +98,46 @@ Thay cảnh báo mềm 1 dòng của POC bằng đúng thiết kế Q20:
 (lease đến ...)", `--yes` cho phép tiếp tục (không bị chặn) → `company-ai status` xác nhận hiện
 đúng thông tin claim thời gian thực.
 
+## Hạng mục 5 — Hoàn thiện Task Management nội bộ (thêm sau, sau khi MVP3 Đợt 5 xong)
+
+> Người dùng hỏi có nên tích hợp Jira/Linear không — chọn KHÔNG (công ty chỉ 2-3 người, tích hợp
+> tool ngoài tạo 2 nguồn trạng thái phải đồng bộ, phức tạp hơn cần thiết; để dành đúng lúc khách
+> hàng thật yêu cầu tool cụ thể). Thay vào đó hoàn thiện luồng nội bộ đã có cho công ty dùng ngay.
+
+**Gap thật phát hiện lúc rà soát** (không phải bỏ sót từ đầu — MVP1-3 luôn tập trung
+session/context/governance): hệ thống từ đầu dự án **chưa từng có cách tạo task mới hay đổi
+trạng thái task** qua CLI/dashboard — `task_tng142` là task duy nhất, tạo tay qua `seed.js`.
+Không ai từng đóng được task qua sản phẩm thật — đây chính là lý do KPI Efficiency (MVP3 Đợt 3)
+luôn hiện `closed_task_count = 0` suốt toàn bộ session.
+
+**PASS — 149/149 test-harness (tăng từ 138).** Không mở rộng schema — chỉ dùng đúng cột đã có
+trong `tasks` (mục 11): `title, status, assignee_employee_id, closed_at`.
+
+- `POST /v1/projects/:id/tasks` (mọi nhân viên, giống `context/ingest`) — tạo task, validate
+  `assignee_employee_id` phải là nhân viên có thật nếu truyền.
+- `POST /v1/tasks/:id/update` (mọi nhân viên) — sửa title/status/assignee. `status` đổi thành
+  `closed` → tự set `closed_at = now()`; đổi khỏi `closed` → set lại `NULL` (nhất quán 2 chiều).
+- Sửa `handleListTasks` JOIN thêm `assignee_name` (trước đó dashboard in thẳng ID thô).
+- CLI: `company-ai task add` / `company-ai task update <task_id>` (file mới
+  `lib/commands/task.js`, cùng pattern `context.js`).
+- Dashboard: form "+ Task mới" mỗi project panel, dropdown đổi trạng thái/người phụ trách ngay
+  trên bảng (đổi là submit luôn, không cần nút riêng).
+
+**Test thật đầu-cuối**: tạo 1 task mới qua CLI (`task add`) → dùng ngay trong `company-ai claude`
+thật (`--task <task vừa tạo>`, tool-use + streaming bình thường) → đóng qua `task update --status
+closed` → xác nhận qua API đọc lại đúng `status=closed` → gọi `GET /v1/kpi` xác nhận **lần đầu
+tiên trong toàn bộ dự án `closed_task_count` khác 0 qua dữ liệu sản phẩm thật** (Thanh:
+`closed_task_count=1`, `avg_cost_per_closed_task="0.0025"`, `avg_tokens_per_closed_task="743"` —
+số thật từ chính request vừa chạy, không phải số giả).
+
 ## MVP2 — Kết luận
 
-**PASS toàn bộ 4 hạng mục** (AI Timeline/Inbox, Request Span đầy đủ, Handoff sinh bằng LLM,
-Task claim/lease đầy đủ). Chỉ còn cố tình hoãn: vector search, browser extension, connector
-Codex/GPT thật (thiếu account) — đúng lý do tài liệu tự nêu, không phải bỏ sót. Test-harness
-tăng từ 25 (cuối MVP1) lên **39/39 PASS**, toàn bộ test bằng traffic thật, không mock, 3/4
-hạng mục còn xác nhận qua CLI thật với Claude Code CLI thật (không chỉ test API).
+**PASS toàn bộ 5 hạng mục** (AI Timeline/Inbox, Request Span đầy đủ, Handoff sinh bằng LLM,
+Task claim/lease đầy đủ, Task Management hoàn thiện). Chỉ còn cố tình hoãn: vector search,
+browser extension, connector Codex/GPT thật (thiếu account), tích hợp Jira/Linear (quyết định
+người dùng: chờ khách hàng thật yêu cầu tool cụ thể) — đúng lý do đã nêu, không phải bỏ sót.
+Test-harness tăng từ 25 (cuối MVP1) lên **149/149 PASS** (tính lũy kế qua cả MVP3), toàn bộ test
+bằng traffic thật, không mock.
 
 → **MVP2 hoàn thành, chuyển sang MVP3** — governance/audit/policy cơ bản, giữ nguyên phạm vi
 sản phẩm chung cho team dev tại nhiều loại doanh nghiệp khác nhau, không thiết kế riêng cho

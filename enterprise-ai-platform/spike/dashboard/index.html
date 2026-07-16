@@ -183,22 +183,66 @@ async function renderHome(root) {
     </div>`;
 }
 
+const TASK_STATUSES = ['open', 'in_progress', 'done', 'closed'];
+
+// Hoàn thiện Task Management nội bộ — gap thật: từ đầu dự án chưa có cách tạo/đổi trạng thái
+// task qua sản phẩm (chỉ task_tng142 seed tay). Không tích hợp Jira/Linear (quyết định người
+// dùng chốt) — hoàn thiện luồng nội bộ đã có (project/task/claim) cho công ty dùng ngay.
 async function renderProjects(root) {
-  const { projects } = await api('/v1/projects');
+  const [{ projects }, { employees }] = await Promise.all([api('/v1/projects'), api('/v1/employees')]);
   const taskLists = await Promise.all(projects.map((p) => api(`/v1/projects/${p.id}/tasks`)));
+  const employeeOptions = (selected) => employees.map((e) => `<option value="${esc(e.id)}" ${e.id === selected ? 'selected' : ''}>${esc(e.full_name)}</option>`).join('');
+  const statusOptions = (selected) => TASK_STATUSES.map((s) => `<option value="${esc(s)}" ${s === selected ? 'selected' : ''}>${esc(s)}</option>`).join('');
+
   root.innerHTML = projects.map((p, i) => `
     <div class="panel">
       <h2>${esc(p.name)} <span class="pill ok">${esc(p.status)}</span></h2>
       <table><thead><tr><th>Task ID</th><th>Tiêu đề</th><th>Trạng thái</th><th>Người phụ trách</th><th>Claim (Q20)</th></tr></thead>
       <tbody>${taskLists[i].tasks.map((t) => `
         <tr><td><code>${esc(t.id)}</code></td><td>${esc(t.title)}</td>
-        <td><span class="pill ${t.status === 'closed' ? 'ok' : 'warn'}">${esc(t.status)}</span></td>
-        <td>${esc(t.assignee_employee_id || '—')}</td>
+        <td><select onchange="updateTaskField('${esc(t.id)}','status',this.value)" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;">${statusOptions(t.status)}</select></td>
+        <td><select onchange="updateTaskField('${esc(t.id)}','assignee_employee_id',this.value)" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;">
+              <option value="">— chưa gán —</option>${employeeOptions(t.assignee_employee_id)}</select></td>
         <td>${t.claimed_by_employee_id
             ? `<span class="pill warn">${esc(t.claimed_by_name)} đến ${new Date(t.lease_until).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>`
             : `<span class="empty">${t.claim_mode === 'shared' ? 'shared' : 'chưa ai giữ'}</span>`}</td></tr>`).join('') || `<tr><td colspan="5" class="empty">Chưa có task</td></tr>`}
       </tbody></table>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;">
+        <div style="flex:1;min-width:220px;"><label style="font-size:12px;color:var(--muted);">Tiêu đề task mới</label><br/>
+          <input id="taskTitle-${esc(p.id)}" placeholder="Tiêu đề task" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Người phụ trách (tuỳ chọn)</label><br/>
+          <select id="taskAssignee-${esc(p.id)}" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            <option value="">— chưa gán —</option>${employeeOptions()}</select></div>
+        <button class="btn" onclick="createTaskFromForm('${esc(p.id)}')">+ Task mới</button>
+      </div>
+      <div id="taskResult-${esc(p.id)}" class="empty" style="margin-top:8px;"></div>
     </div>`).join('') || '<div class="panel empty">Chưa có project nào.</div>';
+}
+
+async function createTaskFromForm(projectId) {
+  const resultEl = document.getElementById(`taskResult-${projectId}`);
+  const title = document.getElementById(`taskTitle-${projectId}`).value.trim();
+  const assignee_employee_id = document.getElementById(`taskAssignee-${projectId}`).value || undefined;
+  if (!title) { resultEl.textContent = 'Cần nhập tiêu đề.'; return; }
+  try {
+    const res = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, { title, assignee_employee_id });
+    resultEl.textContent = `Đã tạo: ${res.task_id}`;
+    switchTab('projects');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function updateTaskField(taskId, field, value) {
+  // assignee_employee_id chỉ gán được, chưa có đường "bỏ gán" ở Control Plane (ngoài phạm vi
+  // đợt này) — chọn "— chưa gán —" không gọi API, tránh lỗi 400 vô nghĩa (no_fields_to_update).
+  if (!value) { switchTab('projects'); return; }
+  try {
+    await apiPost(`/v1/tasks/${encodeURIComponent(taskId)}/update`, { [field]: value });
+    switchTab('projects');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
 }
 
 async function renderSessions(root) {

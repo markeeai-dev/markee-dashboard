@@ -61,8 +61,22 @@ async function main() {
         await require('../lib/commands/context').run(sub, parseArgs(subRest));
         break;
       }
+      case 'task': {
+        // "task update <task_id> --status x" có 2 positional (subcommand + task_id) trước phần
+        // cờ — "task add" chỉ có 1. Tách cả 2 ra trước khi đưa phần còn lại vào parseArgs.
+        const [sub, ...subRest] = rest;
+        if (sub === 'update') {
+          const [taskId, ...flagRest] = subRest;
+          const parsed = parseArgs(flagRest);
+          parsed['task-id-positional'] = taskId;
+          await require('../lib/commands/task').run(sub, parsed);
+        } else {
+          await require('../lib/commands/task').run(sub, parseArgs(subRest));
+        }
+        break;
+      }
       default:
-        console.log('Dùng: company-ai <login|init|claude|codex|status|checkpoint|end|context add>');
+        console.log('Dùng: company-ai <login|init|claude|codex|status|checkpoint|end|context add|task add|task update>');
         process.exit(cmd ? 1 : 0);
     }
   } catch (err) {

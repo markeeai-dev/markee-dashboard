@@ -848,6 +848,52 @@ async function main() {
   const offboardNotFound = await post(`${CP}/v1/seats/seat_khong_ton_tai/offboard`, { reason: 'test' }, thanhToken);
   check('offboard seat không tồn tại -> 404', offboardNotFound.status === 404, offboardNotFound);
 
+  // --- Hoàn thiện Task Management nội bộ — tạo/sửa/đóng task qua sản phẩm (gap thật: từ đầu dự
+  // án chỉ có task_tng142 seed tay, chưa ai tạo/đóng được task qua CLI/dashboard) ---
+
+  const taskMissingTitle = await post(`${CP}/v1/projects/proj_trungnguyen/tasks`, {}, thanhToken);
+  check('tạo task thiếu title -> 400', taskMissingTitle.status === 400, taskMissingTitle);
+
+  const taskBadAssignee = await post(`${CP}/v1/projects/proj_trungnguyen/tasks`, { title: 'Task test', assignee_employee_id: 'emp_khong_ton_tai' }, thanhToken);
+  check('tạo task assignee không tồn tại -> 400', taskBadAssignee.status === 400, taskBadAssignee);
+
+  const taskCreated = await post(`${CP}/v1/projects/proj_trungnguyen/tasks`, { title: 'Task test đầy đủ - Đợt task mgmt', assignee_employee_id: 'emp_hoang' }, thanhToken);
+  check('Thanh tạo task mới -> 201', taskCreated.status === 201 && !!taskCreated.json.task_id, taskCreated);
+
+  const tasksAfterCreate = await get(`${CP}/v1/projects/proj_trungnguyen/tasks`, thanhToken);
+  const newTask = tasksAfterCreate.json.tasks.find((t) => t.id === taskCreated.json.task_id);
+  check(
+    'đọc lại task vừa tạo -> đúng title/status=open/assignee_name=Hoang',
+    newTask && newTask.status === 'open' && newTask.assignee_name === 'Hoang',
+    newTask
+  );
+
+  const updateNoFields = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, {}, thanhToken);
+  check('update task không truyền field nào -> 400', updateNoFields.status === 400, updateNoFields);
+
+  const updateNotFound = await post(`${CP}/v1/tasks/task_khong_ton_tai/update`, { status: 'closed' }, thanhToken);
+  check('update task không tồn tại -> 404', updateNotFound.status === 404, updateNotFound);
+
+  const updateBadStatus = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'khong-hop-le' }, thanhToken);
+  check('update task status sai -> 400', updateBadStatus.status === 400, updateBadStatus);
+
+  const updateToClosed = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'closed' }, hoangToken);
+  check('Hoàng (member, không cần admin) đóng task -> 200', updateToClosed.status === 200, updateToClosed);
+
+  const tasksAfterClose = await get(`${CP}/v1/projects/proj_trungnguyen/tasks`, thanhToken);
+  const closedTask = tasksAfterClose.json.tasks.find((t) => t.id === taskCreated.json.task_id);
+  check('task đã đóng -> status=closed', closedTask.status === 'closed', closedTask);
+
+  const updateReopen = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'open' }, thanhToken);
+  check('mở lại task đã đóng -> 200', updateReopen.status === 200, updateReopen);
+
+  const kpiAfterClose = await get(`${CP}/v1/kpi`, thanhToken);
+  check(
+    'KPI Efficiency: lần đầu tiên trong dự án có closed_task_count được ghi nhận qua sản phẩm thật (không tính task đã mở lại, chỉ xác nhận cơ chế hoạt động qua endpoint không lỗi)',
+    kpiAfterClose.status === 200 && Array.isArray(kpiAfterClose.json.efficiency),
+    kpiAfterClose
+  );
+
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);
 }

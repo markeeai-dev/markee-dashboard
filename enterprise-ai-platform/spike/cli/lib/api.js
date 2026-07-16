@@ -98,6 +98,15 @@ class ControlPlaneClient {
   ingestContext(body) {
     return this._req('POST', '/v1/context/ingest', body);
   }
+  listEmployees() {
+    return this._req('GET', '/v1/employees');
+  }
+  createTask(projectId, body) {
+    return this._req('POST', `/v1/projects/${encodeURIComponent(projectId)}/tasks`, body);
+  }
+  updateTask(taskId, body) {
+    return this._req('POST', `/v1/tasks/${encodeURIComponent(taskId)}/update`, body);
+  }
 }
 
 module.exports = { ControlPlaneClient, ControlPlaneError };

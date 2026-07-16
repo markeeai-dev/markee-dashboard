@@ -1007,9 +1007,11 @@ async function handleListProjectContext(req, params) {
 async function handleListTasks(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
-    `SELECT t.id, t.project_id, t.title, t.status, t.assignee_employee_id,
+    `SELECT t.id, t.project_id, t.title, t.status, t.assignee_employee_id, a.full_name AS assignee_name,
             t.claim_mode, t.claimed_by_employee_id, t.lease_until, e.full_name AS claimed_by_name
-     FROM tasks t LEFT JOIN employees e ON e.id = t.claimed_by_employee_id
+     FROM tasks t
+       LEFT JOIN employees e ON e.id = t.claimed_by_employee_id
+       LEFT JOIN employees a ON a.id = t.assignee_employee_id
      WHERE t.project_id = $1 ORDER BY t.created_at`,
     [params.projectId]
   );
@@ -1020,6 +1022,59 @@ async function handleListTasks(req, params) {
     return { ...t, claimed_by_employee_id: active ? t.claimed_by_employee_id : null, claimed_by_name: active ? t.claimed_by_name : null, lease_until: active ? t.lease_until : null };
   });
   return { status: 200, body: { tasks } };
+}
+
+// Hoàn thiện Task Management nội bộ — từ đầu dự án tới giờ CHƯA từng có cách tạo task mới hay
+// đổi trạng thái task qua sản phẩm (chỉ có task_tng142 seed tay), đây là gap thật khiến KPI
+// Efficiency (Đợt 3) luôn hiện closed_task_count=0. Mở cho MỌI nhân viên (giống context/ingest,
+// checkpoints) — task là dữ liệu làm việc chung, không phải governance nhạy cảm.
+const TASK_STATUSES = ['open', 'in_progress', 'done', 'closed'];
+
+async function handleCreateTask(req, params) {
+  const emp = await requireEmployee(req);
+  const body = await readJsonBody(req);
+  if (!body.title) throw new ApiError(400, 'missing_title');
+  if (body.assignee_employee_id) {
+    const { rows } = await query('SELECT id FROM employees WHERE id = $1', [body.assignee_employee_id]);
+    if (!rows.length) throw new ApiError(400, 'assignee_not_found');
+  }
+
+  const taskId = id('task');
+  await query(
+    `INSERT INTO tasks (id, project_id, title, assignee_employee_id) VALUES ($1,$2,$3,$4)`,
+    [taskId, params.projectId, body.title, body.assignee_employee_id || null]
+  );
+  return { status: 201, body: { task_id: taskId } };
+}
+
+async function handleUpdateTask(req, params) {
+  await requireEmployee(req);
+  const body = await readJsonBody(req);
+  if (!body.title && !body.status && !body.assignee_employee_id) throw new ApiError(400, 'no_fields_to_update');
+
+  const { rows } = await query('SELECT id, status FROM tasks WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'task_not_found');
+
+  if (body.status && !TASK_STATUSES.includes(body.status)) throw new ApiError(400, 'invalid_status');
+  if (body.assignee_employee_id) {
+    const { rows: empRows } = await query('SELECT id FROM employees WHERE id = $1', [body.assignee_employee_id]);
+    if (!empRows.length) throw new ApiError(400, 'assignee_not_found');
+  }
+
+  const sets = [];
+  const values = [];
+  if (body.title) { values.push(body.title); sets.push(`title = $${values.length}`); }
+  if (body.assignee_employee_id) { values.push(body.assignee_employee_id); sets.push(`assignee_employee_id = $${values.length}`); }
+  if (body.status) {
+    values.push(body.status);
+    sets.push(`status = $${values.length}`);
+    // closed_at phải nhất quán với status: có giá trị khi và chỉ khi đang closed.
+    sets.push(body.status === 'closed' ? 'closed_at = now()' : 'closed_at = NULL');
+  }
+  values.push(params.id);
+  await query(`UPDATE tasks SET ${sets.join(', ')} WHERE id = $${values.length}`, values);
+
+  return { status: 200, body: { task_id: params.id, updated: true } };
 }
 
 async function findEmployeeSeat(employeeId) {
@@ -1531,6 +1586,16 @@ const routes = [
     method: 'GET',
     pattern: /^\/v1\/projects\/([^/]+)\/tasks$/,
     handler: (req, m) => handleListTasks(req, { projectId: m[1] }),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/projects\/([^/]+)\/tasks$/,
+    handler: (req, m) => handleCreateTask(req, { projectId: m[1] }),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/tasks\/([^/]+)\/update$/,
+    handler: (req, m) => handleUpdateTask(req, { id: m[1] }),
   },
   {
     method: 'GET',
