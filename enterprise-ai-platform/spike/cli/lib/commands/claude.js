@@ -85,13 +85,12 @@ async function run(args, tool) {
   );
 
   // Context bundle -> .center-ai/generated/ (Q24.6) — không đụng gì ngoài thư mục này.
-  const contextData = await client.contextRender(task.id);
-  render.renderTaskMd(gitRoot, { task: contextData.task, project: { name: contextData.task.project_name } });
-  render.renderCheckpointMd(gitRoot, { latestHandoff: contextData.latest_handoff, contextNotes: contextData.context_notes });
-  render.writePlaceholder(gitRoot, 'company.md', 'Chưa có nội dung company-level ở MVP1 pilot');
-  render.writePlaceholder(gitRoot, 'team.md', 'Chưa có nội dung team-level ở MVP1 pilot');
-  render.writePlaceholder(gitRoot, 'project.md', 'Chưa có nội dung project-level riêng ở MVP1 pilot — xem task.md');
-  console.log('Đã ghi context vào .center-ai/generated/.');
+  // Control Plane render sẵn cả 5 file (context-render.js); CLI chỉ ghi xuống đĩa. Dashboard
+  // gọi đúng endpoint này để hiện "AI đang biết gì" -> không thể lệch với thứ AI thật sự đọc.
+  const bundle = await client.contextBundle(task.id);
+  render.writeBundle(gitRoot, bundle.files);
+  const st = bundle.stats;
+  console.log(`Đã ghi context vào .center-ai/generated/ (${st.notes_after_dedup}/${st.notes_total} ghi chú sau khi lọc trùng).`);
 
   // Git snapshot — nguồn liên kết chính (Q24.8), không dựa trailer.
   const existingSession = readSessionJson(gitRoot);

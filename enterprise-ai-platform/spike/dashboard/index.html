@@ -101,6 +101,19 @@
   .stat-sub { font-size:11px; color:var(--faint); }
   .stat.accent .stat-value { color:var(--accent-hi); }
 
+  /* ---- Tab "AI đang biết gì": hiện đúng nội dung 5 file .md Claude Code đọc ---- */
+  .mdfile { border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:12px; }
+  .mdfile-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+                 padding:9px 13px; background:var(--panel-hi); border-bottom:1px solid var(--border); }
+  .mdfile-name { font-family:var(--mono); font-size:12px; font-weight:600; color:var(--accent-hi); }
+  .mdfile-desc { font-size:11px; color:var(--faint); }
+  .mdfile pre { margin:0; padding:13px; font-family:var(--mono); font-size:12px; line-height:1.65;
+                color:var(--text); background:var(--bg); overflow-x:auto;
+                white-space:pre-wrap; word-break:break-word; }
+  .mdfile pre.placeholder { color:var(--faint); font-style:italic; }
+  .notice { background:var(--accent-dim); border:1px solid rgba(76,141,255,.25); border-radius:var(--radius);
+            padding:11px 14px; font-size:12px; color:var(--text); margin-bottom:14px; line-height:1.6; }
+
   /* Dòng sự kiện/ghi chú trên Trang chủ */
   .feed-item { padding:9px 0; border-bottom:1px solid var(--border); }
   .feed-item:last-child { border-bottom:none; }
@@ -204,6 +217,7 @@ const TABS = [
   { id: 'projects', label: 'Projects & Tasks', ico: '▦', group: 'Công việc', hint: 'Tạo task, giao người, đổi trạng thái', render: renderProjects },
   { id: 'sessions', label: 'Active Sessions', ico: '●', group: 'Công việc', hint: 'Phiên làm việc AI đang mở', render: renderSessions },
   { id: 'handoffs', label: 'Handoffs', ico: '⇄', group: 'Công việc', hint: 'Bàn giao — thứ giúp người sau hiểu việc trong vài phút', render: renderHandoffs },
+  { id: 'bundle', label: 'AI đang biết gì', ico: '◎', group: 'Tri thức', hint: 'Chính xác nội dung Claude Code đọc mỗi phiên — không phải bản mô phỏng', render: renderBundle },
   { id: 'memory', label: 'Project Memory', ico: '◫', group: 'Tri thức', hint: 'Requirement, quyết định kỹ thuật, ghi chú BA', render: renderMemory },
   { id: 'patterns', label: 'Pattern Library', ico: '✦', group: 'Tri thức', hint: 'Giải pháp tổng quát đã ẩn danh hoá, dùng lại cho dự án khác', render: renderPatternLibrary },
   { id: 'seats', label: 'Seats & Employees', ico: '◉', group: 'Quản trị', hint: 'Cấp/thu hồi seat AI cho nhân viên', render: renderSeats },
@@ -490,6 +504,108 @@ async function renderTimeline(root) {
 }
 
 const CONTEXT_TYPES = ['requirement', 'decision', 'ba_feedback', 'status', 'known_issue', 'next_step', 'handoff', 'code_context'];
+
+// Trả lời câu hỏi trung tâm của sản phẩm: "AI đang biết những gì?".
+// Nội dung lấy từ ĐÚNG endpoint mà CLI dùng để ghi 5 file xuống máy nhân viên (đã kiểm chứng
+// khớp byte-for-byte) — không phải bản mô phỏng/dựng lại, nên không thể lệch với thứ AI đọc.
+const BUNDLE_FILE_DESC = {
+  company_md: ['company.md', 'Quy tắc toàn công ty — vào AI của MỌI dự án'],
+  team_md: ['team.md', 'Quy tắc của team'],
+  project_md: ['project.md', 'Tri thức chung của dự án'],
+  task_md: ['task.md', 'Task đang làm'],
+  checkpoint_md: ['checkpoint.md', 'Bàn giao gần nhất + ghi chú của task'],
+};
+
+async function renderBundle(root) {
+  const { projects } = await api('/v1/projects');
+  if (!projects.length) { root.innerHTML = '<div class="panel empty">Chưa có project nào.</div>'; return; }
+  if (!state.bundleProjectId || !projects.some((p) => p.id === state.bundleProjectId)) {
+    state.bundleProjectId = projects[0].id;
+  }
+  const { tasks } = await api(`/v1/projects/${encodeURIComponent(state.bundleProjectId)}/tasks`);
+  if (!state.bundleTaskId || !tasks.some((t) => t.id === state.bundleTaskId)) {
+    state.bundleTaskId = tasks.length ? tasks[0].id : null;
+  }
+
+  const picker = `
+    <div class="panel">
+      <h2>Chọn task để xem AI được bơm gì</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select onchange="state.bundleProjectId=this.value; state.bundleTaskId=null; switchTab('bundle')">
+            ${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === state.bundleProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div style="flex:1;min-width:240px;"><label style="font-size:12px;color:var(--muted);">Task</label><br/>
+          <select style="width:100%;" onchange="state.bundleTaskId=this.value; switchTab('bundle')">
+            ${tasks.map((t) => `<option value="${esc(t.id)}" ${t.id === state.bundleTaskId ? 'selected' : ''}>${esc(t.title)}</option>`).join('') || '<option>— chưa có task —</option>'}
+          </select></div>
+      </div>
+    </div>`;
+
+  if (!state.bundleTaskId) { root.innerHTML = picker + '<div class="panel empty">Project này chưa có task nào.</div>'; return; }
+
+  const bundle = await api(`/v1/context/bundle?task_id=${encodeURIComponent(state.bundleTaskId)}`);
+  const st = bundle.stats;
+  const filesHtml = Object.entries(BUNDLE_FILE_DESC).map(([key, [name, desc]]) => {
+    const content = bundle.files[key] || '';
+    const isPlaceholder = content.trim().startsWith('<!--');
+    return `
+      <div class="mdfile">
+        <div class="mdfile-head">
+          <span class="mdfile-name">${esc(name)}</span>
+          <span class="mdfile-desc">${esc(desc)}</span>
+        </div>
+        <pre class="${isPlaceholder ? 'placeholder' : ''}">${esc(content.trim())}</pre>
+      </div>`;
+  }).join('');
+
+  root.innerHTML = picker + `
+    <div class="notice">
+      <b>Đây là nội dung thật, không phải bản mô phỏng.</b> Mỗi lần nhân viên chạy
+      <code>company-ai claude</code>, đúng 5 file này được ghi vào <code>.center-ai/generated/</code>
+      và Claude Code tự đọc qua marker trong <code>CLAUDE.md</code>. Dashboard và CLI gọi chung
+      một endpoint nên không thể lệch nhau.
+      ${st ? `<br/>Đã lọc trùng: <b>${st.notes_total}</b> ghi chú → <b>${st.notes_after_dedup}</b> còn lại (tối đa ${st.max_notes_per_file}/file, ưu tiên decision/requirement đã duyệt).` : ''}
+    </div>
+    ${filesHtml}
+    ${state.who.role === 'admin' ? `
+    <div class="panel">
+      <h2>+ Thêm tri thức công ty / team</h2>
+      <div class="empty" style="margin-bottom:10px;">Nội dung này vào AI của <b>mọi dự án, mọi nhân viên</b> — nên chỉ admin thêm được.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Phạm vi</label><br/>
+          <select id="kbScope">
+            <option value="company">Toàn công ty (company.md)</option>
+            <option value="department">Team (team.md)</option>
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Loại</label><br/>
+          <select id="kbType">
+            <option value="decision">decision</option><option value="requirement">requirement</option>
+            <option value="known_issue">known_issue</option><option value="code_context">code_context</option>
+          </select></div>
+        <div style="flex:1;min-width:280px;"><label style="font-size:12px;color:var(--muted);">Nội dung</label><br/>
+          <input id="kbContent" style="width:100%;" placeholder="VD: Mọi API ra ngoài phải có timeout + retry backoff" /></div>
+        <button class="btn" onclick="addCompanyKnowledge()">Thêm</button>
+      </div>
+      <div id="kbResult" class="empty" style="margin-top:8px;"></div>
+    </div>` : ''}`;
+}
+
+async function addCompanyKnowledge() {
+  const resultEl = document.getElementById('kbResult');
+  const scope_level = document.getElementById('kbScope').value;
+  const type = document.getElementById('kbType').value;
+  const content = document.getElementById('kbContent').value.trim();
+  if (!content) { resultEl.textContent = 'Cần nhập nội dung.'; return; }
+  try {
+    // project_id cố tình KHÔNG truyền: tri thức company/team không thuộc dự án nào
+    // (migration 010 bỏ ràng buộc NOT NULL để loại tri thức này có chỗ tồn tại).
+    await apiPost('/v1/context/ingest', { type, content, scope_level, approved_by: true });
+    switchTab('bundle');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
 
 async function renderMemory(root) {
   const { projects } = await api('/v1/projects');

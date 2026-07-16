@@ -80,6 +80,11 @@ class ControlPlaneClient {
   contextRender(taskId) {
     return this._req('GET', `/v1/context/render?task_id=${encodeURIComponent(taskId)}`);
   }
+  // Bộ tri thức đã render sẵn (5 file .md) — Control Plane dựng nội dung, CLI chỉ ghi xuống đĩa.
+  // Dashboard gọi đúng endpoint này để hiện "AI đang biết gì", nên không thể lệch nhau.
+  contextBundle(taskId) {
+    return this._req('GET', `/v1/context/bundle?task_id=${encodeURIComponent(taskId)}`);
+  }
   draftHandoff(workSessionId, { gitLog, gitDiffStat }) {
     return this._req('POST', `/v1/work-sessions/${encodeURIComponent(workSessionId)}/draft-handoff`, {
       git_log: gitLog,

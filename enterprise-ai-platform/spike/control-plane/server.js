@@ -16,6 +16,9 @@ const { signToken, verifyToken } = require('../shared/token');
 const { query } = require('./db');
 const { id } = require('./ids');
 const { estimateCostUsd } = require('./pricing');
+// Render bộ tri thức (5 file .md) — chuyển từ CLI về đây để CLI lẫn dashboard dùng CHUNG 1 bộ
+// logic, không có chuyện dashboard hiện 1 đằng AI đọc 1 nẻo.
+const { renderBundle } = require('./context-render');
 
 const PORT = parseInt(process.env.PORT || '8090', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -1006,8 +1009,20 @@ async function handleInbox(req, url) {
 async function handleIngestContext(req) {
   const emp = await requireEmployee(req);
   const body = await readJsonBody(req);
-  if (!body.project_id || !body.type || !body.content) throw new ApiError(400, 'missing_fields');
+  if (!body.type || !body.content) throw new ApiError(400, 'missing_fields');
   if (!CONTEXT_TYPE_LABEL[body.type]) throw new ApiError(400, 'invalid_type');
+
+  // Tri thức company/department được bơm vào AI của MỌI dự án, MỌI nhân viên — 1 người ghi sai
+  // là cả team bị AI hướng dẫn sai theo. Nên CHỈ ADMIN nhập được (quyết định đã chốt với người
+  // dùng). Các scope còn lại (session/personal/project) giữ nguyên: mọi nhân viên đều ghi được,
+  // đúng bản chất cộng tác của bảng này.
+  const COMPANY_WIDE_SCOPES = ['company', 'department'];
+  const isCompanyWide = COMPANY_WIDE_SCOPES.includes(body.scope_level);
+  if (isCompanyWide) requireAdmin(emp);
+
+  // project_id: bắt buộc cho scope theo dự án; company/department thì KHÔNG thuộc dự án nào
+  // (migration 010 bỏ NOT NULL để loại tri thức này có chỗ tồn tại).
+  if (!isCompanyWide && !body.project_id) throw new ApiError(400, 'missing_fields');
 
   // approved_by ở ĐÂY vẫn là tự khai (TIN TRỰC TIẾP giá trị truyền lên) — khác với Approval
   // workflow xây ở Đợt 4 (gate AI access theo Data Classification, không liên quan tới ai được
@@ -1016,10 +1031,8 @@ async function handleIngestContext(req) {
   // gộp chung, không phải thiếu nhất quán.
   const approvedBy = body.approved_by === true ? emp.id : body.approved_by || null;
 
-  // Q16 — Company Brain scope_level, thu hẹp: 5 giá trị hợp lệ ở CHECK constraint, nhưng chỉ
-  // session/personal/project có injection logic thật ở đợt này (department/company chưa test
-  // được thật vì pilot chỉ có 1 project — xem MVP3-PROGRESS.md). Vẫn nhận đủ 5 giá trị ở đây
-  // để không phải sửa lại API khi có dữ liệu thật để làm phần còn lại.
+  // Q16 — Company Brain scope_level. Cả 5 tầng nay đều có đường vào thật: company/department
+  // qua admin (dashboard tab Context Bundle), project/personal/session qua CLI + dashboard.
   const SCOPE_LEVELS = ['session', 'personal', 'project', 'department', 'company'];
   if (body.scope_level && !SCOPE_LEVELS.includes(body.scope_level)) throw new ApiError(400, 'invalid_scope_level');
   const scopeLevel = body.scope_level || 'project';
@@ -1028,9 +1041,25 @@ async function handleIngestContext(req) {
   await query(
     `INSERT INTO project_context (id, project_id, task_id, type, content, created_by, approved_by, valid_to, scope_level)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [contextId, body.project_id, body.task_id || null, body.type, body.content, emp.id, approvedBy, body.valid_to || null, scopeLevel]
+    [contextId, isCompanyWide ? null : body.project_id, body.task_id || null, body.type, body.content, emp.id, approvedBy, body.valid_to || null, scopeLevel]
   );
   return { status: 201, body: { context_id: contextId } };
+}
+
+// Cần cho test-harness tự dọn dữ liệu nó tạo ra (trước đây mỗi lần chạy đổ thêm 3 dòng rác vào
+// bộ tri thức thật và không bao giờ dọn — 36/41 dòng là rác test, đẩy nội dung thật ra khỏi
+// giới hạn hiển thị). Chỉ admin, và ghi audit_logs vì xoá tri thức là hành động cần dấu vết.
+async function handleDeleteContext(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query('SELECT id FROM project_context WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'context_not_found');
+
+  // decision_detail (ADR) tham chiếu context_id — xoá con trước để không vướng FK.
+  await query('DELETE FROM decision_detail WHERE context_id = $1', [params.id]);
+  await query('DELETE FROM project_context WHERE id = $1', [params.id]);
+  await writeAuditLog(emp.id, 'context_deleted', 'project_context', params.id, {});
+  return { status: 200, body: { deleted: true } };
 }
 
 async function handleListProjectContext(req, params) {
@@ -1573,6 +1602,55 @@ async function handleContextRender(req, url) {
   };
 }
 
+// Bộ tri thức chung — trả về ĐÚNG 5 file .md mà Claude Code đọc mỗi phiên.
+//
+// Trả lời trực tiếp câu hỏi trung tâm của sản phẩm: "AI đang biết những gì?". Trước đây câu này
+// không trả lời được từ dashboard (gap lớn nhất) vì nội dung chỉ được dựng ở CLI, ngay trên máy
+// nhân viên. Nay CLI lẫn dashboard cùng gọi endpoint này -> cùng 1 nguồn sự thật, không có
+// chuyện dashboard hiện 1 đằng AI đọc 1 nẻo.
+async function handleContextBundle(req, url) {
+  await requireEmployee(req);
+  const taskId = url.searchParams.get('task_id');
+  if (!taskId) throw new ApiError(400, 'missing_task_id');
+
+  const taskRes = await query(
+    `SELECT t.*, p.name AS project_name FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1`,
+    [taskId]
+  );
+  if (!taskRes.rows.length) throw new ApiError(404, 'task_not_found');
+  const task = taskRes.rows[0];
+
+  const handoffRes = await query(
+    `SELECT h.*, e.full_name AS from_employee_name FROM handoffs h
+     JOIN employees e ON e.id = h.from_employee_id
+     WHERE h.task_id = $1 ORDER BY h.created_at DESC LIMIT 1`,
+    [taskId]
+  );
+
+  const NOTE_COLS = 'id, type, content, created_at, approved_by, valid_from, valid_to, scope_level';
+  // 4 nguồn tách bạch -> 4 file riêng, đúng 5 tầng Company Brain (Q16). Trước đây gộp hết vào
+  // checkpoint.md nên company/team/project.md rỗng ruột.
+  const [taskNotes, projectNotes, companyNotes, teamNotes] = await Promise.all([
+    query(`SELECT ${NOTE_COLS} FROM project_context WHERE task_id = $1 ORDER BY created_at DESC LIMIT 50`, [taskId]),
+    query(`SELECT ${NOTE_COLS} FROM project_context WHERE project_id = $1 AND task_id IS NULL
+           AND scope_level NOT IN ('company','department') ORDER BY created_at DESC LIMIT 50`, [task.project_id]),
+    query(`SELECT ${NOTE_COLS} FROM project_context WHERE scope_level = 'company' ORDER BY created_at DESC LIMIT 50`),
+    query(`SELECT ${NOTE_COLS} FROM project_context WHERE scope_level = 'department' ORDER BY created_at DESC LIMIT 50`),
+  ]);
+
+  const bundle = renderBundle({
+    task,
+    project: { name: task.project_name },
+    latestHandoff: handoffRes.rows[0] || null,
+    taskNotes: taskNotes.rows.map(withConfidence),
+    projectNotes: projectNotes.rows.map(withConfidence),
+    companyNotes: companyNotes.rows.map(withConfidence),
+    teamNotes: teamNotes.rows.map(withConfidence),
+  });
+
+  return { status: 200, body: bundle };
+}
+
 // ---------------------------------------------------------------------------
 // Router (thuần, không framework — nhất quán style gateway-adapter/server.js)
 // ---------------------------------------------------------------------------
@@ -1587,6 +1665,7 @@ const routes = [
   },
   { method: 'GET', pattern: /^\/v1\/governance\/full-audit-grants$/, handler: (req) => handleListFullAuditGrants(req) },
   { method: 'POST', pattern: /^\/v1\/context\/ingest$/, handler: (req) => handleIngestContext(req) },
+  { method: 'DELETE', pattern: /^\/v1\/context\/([^/]+)$/, handler: (req, m) => handleDeleteContext(req, { id: m[1] }) },
   {
     method: 'POST',
     pattern: /^\/v1\/projects\/([^/]+)\/classification$/,
@@ -1717,7 +1796,7 @@ const server = http.createServer(async (req, res) => {
   // không thay thế xác thực.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
     return res.end();
@@ -1727,6 +1806,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/v1/context/render') {
       const result = await handleContextRender(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/context/bundle') {
+      const result = await handleContextBundle(req, url);
       return sendJson(res, result.status, result.body);
     }
     if (req.method === 'GET' && url.pathname === '/v1/timeline') {

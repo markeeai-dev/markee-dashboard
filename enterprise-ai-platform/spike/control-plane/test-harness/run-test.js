@@ -42,6 +42,30 @@ async function get(url, token) {
   return { status: res.status, json };
 }
 
+async function del(url, token) {
+  const res = await fetch(url, { method: 'DELETE', headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const json = await res.json().catch(() => ({}));
+  return { status: res.status, json };
+}
+
+// Lỗi thiết kế THẬT của chính test-harness này: mỗi lần chạy nó tạo project_context mới và
+// KHÔNG BAO GIỜ dọn — sau ~20 lần chạy, 36/41 dòng trong bộ tri thức là rác test, đẩy nội dung
+// nghiệp vụ thật ra khỏi giới hạn hiển thị và bơm thẳng vào thứ AI đọc. Từ nay mọi context do
+// test tạo phải đăng ký vào đây để dọn sạch ở cuối lần chạy.
+const createdContextIds = [];
+function trackContext(res) {
+  if (res && res.json && res.json.context_id) createdContextIds.push(res.json.context_id);
+  return res;
+}
+async function cleanupCreatedContexts(token) {
+  let deleted = 0;
+  for (const id of createdContextIds) {
+    const r = await del(`${CP}/v1/context/${encodeURIComponent(id)}`, token);
+    if (r.status === 200) deleted++;
+  }
+  return deleted;
+}
+
 async function main() {
   // --- Login ---
   const wrongCode = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local', access_code: 'sai-ma' });
@@ -440,17 +464,17 @@ async function main() {
   );
   check('context/ingest type sai -> 400 invalid_type', ingestInvalidType.status === 400 && ingestInvalidType.json.error === 'invalid_type', ingestInvalidType);
 
-  const ingestOk = await post(
+  const ingestOk = trackContext(await post(
     `${CP}/v1/context/ingest`,
     {
       project_id: 'proj_trungnguyen',
       task_id: 'task_tng142',
       type: 'requirement',
       content: 'BA yeu cau them bo loc theo khu vuc dia ly (test vá gap A)',
-      approved_by: true, // tự khai đã duyệt — hệ thống chưa có Approval workflow, ghi rõ trong plan
+      approved_by: true, // tự khai đã duyệt — approved_by ở bảng này là tự khai, xem handleIngestContext
     },
     thanhToken
-  );
+  ));
   check('context/ingest hợp lệ -> 201', ingestOk.status === 201 && !!ingestOk.json.context_id, ingestOk);
 
   const contextNotesAfterIngest = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
@@ -749,7 +773,7 @@ async function main() {
 
   // --- MVP3 Đợt 5 — Company Brain scope_level (Q16, thu hẹp) + Pattern Library (Q16) ---
 
-  const ctxScopeDefault = await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen', type: 'status', content: 'test scope_level mặc định' }, thanhToken);
+  const ctxScopeDefault = trackContext(await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen', type: 'status', content: 'test scope_level mặc định' }, thanhToken));
   check('context/ingest không truyền scope_level -> mặc định project', ctxScopeDefault.status === 201, ctxScopeDefault);
 
   const notesAfterDefault = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
@@ -759,7 +783,7 @@ async function main() {
     notesAfterDefault
   );
 
-  const ctxScopePersonal = await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen', type: 'status', content: 'test scope_level personal', scope_level: 'personal' }, thanhToken);
+  const ctxScopePersonal = trackContext(await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen', type: 'status', content: 'test scope_level personal', scope_level: 'personal' }, thanhToken));
   check('context/ingest với scope_level=personal -> 201', ctxScopePersonal.status === 201, ctxScopePersonal);
 
   const notesAfterPersonal = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
@@ -910,6 +934,69 @@ async function main() {
 
   const assignBadEmployee = await post(`${CP}/v1/seats/seat_claude_thanh/assign`, { employee_id: 'emp_khong_ton_tai', reason: 'test' }, thanhToken);
   check('assign employee_id không tồn tại -> 400', assignBadEmployee.status === 400, assignBadEmployee);
+
+  // --- Bộ tri thức chung: bundle 5 file + tri thức company/team (chỉ admin) ---
+
+  const bundleNoTask = await get(`${CP}/v1/context/bundle`, thanhToken);
+  check('bundle thiếu task_id -> 400', bundleNoTask.status === 400, bundleNoTask);
+
+  const bundleNotFound = await get(`${CP}/v1/context/bundle?task_id=task_khong_ton_tai`, thanhToken);
+  check('bundle task không tồn tại -> 404', bundleNotFound.status === 404, bundleNotFound);
+
+  const bundle = await get(`${CP}/v1/context/bundle?task_id=task_tng142`, thanhToken);
+  check(
+    'bundle trả đủ 5 file .md mà Claude Code đọc',
+    bundle.status === 200 && ['company_md', 'team_md', 'project_md', 'task_md', 'checkpoint_md']
+      .every((k) => typeof bundle.json.files[k] === 'string'),
+    bundle.json && Object.keys(bundle.json.files || {})
+  );
+  check(
+    'bundle kèm stats lọc trùng (nói thật đã lọc bao nhiêu, không giấu)',
+    bundle.status === 200 && typeof bundle.json.stats.notes_total === 'number'
+      && typeof bundle.json.stats.notes_after_dedup === 'number',
+    bundle.json && bundle.json.stats
+  );
+  check(
+    'bundle: task_md chứa đúng tên task thật',
+    bundle.json.files.task_md.includes('TNG-142'),
+    bundle.json.files.task_md
+  );
+
+  const kbAsMember = await post(`${CP}/v1/context/ingest`, { type: 'decision', content: 'member ghi quy tac cong ty', scope_level: 'company' }, hoangToken);
+  check('member nhập tri thức company -> 403 (vào AI của mọi người, chỉ admin được ghi)', kbAsMember.status === 403, kbAsMember);
+
+  const kbAsMemberDept = await post(`${CP}/v1/context/ingest`, { type: 'decision', content: 'member ghi quy tac team', scope_level: 'department' }, hoangToken);
+  check('member nhập tri thức department -> 403', kbAsMemberDept.status === 403, kbAsMemberDept);
+
+  const kbCompany = trackContext(await post(`${CP}/v1/context/ingest`,
+    { type: 'decision', content: 'TEST-HARNESS quy tac company tam thoi', scope_level: 'company', approved_by: true }, thanhToken));
+  check('admin nhập tri thức company KHÔNG cần project_id -> 201', kbCompany.status === 201, kbCompany);
+
+  const bundleAfterKb = await get(`${CP}/v1/context/bundle?task_id=task_tng142`, thanhToken);
+  check(
+    'tri thức company vừa nhập xuất hiện trong company_md của bundle (bơm vào AI thật)',
+    bundleAfterKb.json.files.company_md.includes('TEST-HARNESS quy tac company tam thoi'),
+    bundleAfterKb.json.files.company_md
+  );
+
+  const ingestNoProject = await post(`${CP}/v1/context/ingest`, { type: 'status', content: 'thieu project_id' }, thanhToken);
+  check('ingest scope project nhưng thiếu project_id -> 400', ingestNoProject.status === 400, ingestNoProject);
+
+  const delAsMember = await del(`${CP}/v1/context/${encodeURIComponent(kbCompany.json.context_id)}`, hoangToken);
+  check('member xoá context -> 403', delAsMember.status === 403, delAsMember);
+
+  const delNotFound = await del(`${CP}/v1/context/ctx_khong_ton_tai`, thanhToken);
+  check('xoá context không tồn tại -> 404', delNotFound.status === 404, delNotFound);
+
+  // --- Dọn sạch dữ liệu test-harness tự tạo ---
+  // Trước đây bước này KHÔNG tồn tại: mỗi lần chạy đổ thêm rác vào bộ tri thức thật và không
+  // bao giờ dọn (36/41 dòng là rác test, bơm thẳng vào thứ AI đọc). Đây là chỗ chặn gốc.
+  const deleted = await cleanupCreatedContexts(thanhToken);
+  check(
+    `test-harness tự dọn ${deleted}/${createdContextIds.length} context nó tạo — rác không tích luỹ qua các lần chạy`,
+    deleted === createdContextIds.length,
+    { created: createdContextIds.length, deleted }
+  );
 
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);

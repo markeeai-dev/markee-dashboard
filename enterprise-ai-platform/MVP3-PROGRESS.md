@@ -523,3 +523,68 @@ company/project), Company Brain `scope_level` (3/5 tầng), Pattern Library (gat
 động), Workflow gán/thu hồi seat (đủ cả 2 nửa). Phần còn lại của MVP3 (policy/Company Brain theo
 department, Pattern Library reuse, mở rộng Knowledge Graph, Intent-centric Q12, webhook
 Jira/Linear) đều có lý do hoãn cụ thể đã ghi rõ, không phải bỏ sót.
+
+---
+
+# Bộ tri thức chung — cho xem được, bơm được, dọn sạch được
+
+> Người dùng chỉ đúng gap lớn nhất sau khi nhìn dashboard thật: **thứ quan trọng nhất của sản
+> phẩm lại vô hình**. Cơ chế bơm tri thức chạy thật từ MVP1, nhưng không có chỗ nào xem được
+> "AI đang biết gì" → khách hỏi là không show được. Đây là câu hỏi trung tâm của cả sản phẩm.
+
+**PASS — 167/167 test-harness (tăng từ 154).**
+
+## 3 vấn đề thật, xác minh bằng dữ liệu thật (không phải suy đoán)
+
+1. **Không xem được từ dashboard** — gap lớn nhất.
+2. **Bộ tri thức 90% là rác test**: query thật cho thấy **36/41 dòng** `project_context` là rác
+   do **chính test-harness đổ vào mỗi lần chạy** (`test scope_level personal` ×9,
+   `...(test vá gap A)` ×21) — tạo row mới mỗi lần và **không bao giờ dọn**. Lỗi thiết kế của
+   chính bộ test, và nó bơm thẳng vào thứ AI đọc: nội dung nghiệp vụ thật của Thanh bị 20 bản
+   sao rác đẩy ra khỏi giới hạn hiển thị.
+3. **3/5 tầng tri thức rỗng ruột**: `company.md`/`team.md`/`project.md` chỉ có comment
+   placeholder — `project_context.project_id` là `NOT NULL` nên tri thức company/team (vốn không
+   thuộc dự án nào) **về mặt schema là không thể tồn tại**.
+
+## Đã làm
+
+- **Migration 010**: `project_id` bỏ `NOT NULL` → tri thức company/department có chỗ tồn tại.
+- **`context-render.js` (Control Plane)**: chuyển toàn bộ logic render 5 file `.md` từ CLI về
+  Control Plane. **Lý do bắt buộc**: dashboard cũng phải hiện đúng nội dung AI nhận — nếu mỗi
+  bên tự render sẽ có 2 bộ logic lệch nhau, dashboard hiện 1 đằng AI đọc 1 nẻo, hỏng đúng thứ
+  giá trị nhất của sản phẩm. Nay CLI lẫn dashboard cùng gọi `GET /v1/context/bundle`.
+- **Lọc trùng + ưu tiên** (`selectNotes`): bỏ trùng theo `(type, content)` giữ bản mới nhất; ưu
+  tiên `decision`/`requirement` đã duyệt → `known_issue`/`next_step` → `ba_feedback` → `status`;
+  giới hạn 15/file. Kết quả thật: **44 ghi chú → 8** sau lọc, nội dung thật nổi lên đầu.
+- **Tri thức company/team chỉ admin nhập** (quyết định chốt với người dùng): nội dung này vào AI
+  của **mọi dự án, mọi nhân viên** — 1 người ghi sai là cả team bị AI hướng dẫn sai theo.
+- **`DELETE /v1/context/:id`** (admin, ghi `audit_logs`) — để test-harness tự dọn.
+- **Dashboard tab "AI đang biết gì"**: chọn project → task → hiện **đúng 5 file** AI nhận, kèm
+  `stats` nói thật đã lọc bao nhiêu. Admin thấy thêm form nhập tri thức company/team.
+
+## Dọn rác + chặn gốc
+
+- `pg_dump` backup bảng trước khi xoá (`/root/project_context-backup-*.sql`, 46 dòng).
+- Kiểm tra FK trước (`decision_detail` không tham chiếu dòng rác nào) → xoá **42 dòng rác**, giữ
+  đúng **4 dòng thật**. Bộ tri thức giờ có đủ 3 tầng company/department/project nội dung nghiệp
+  vụ thật.
+- **Chặn gốc**: test-harness gom `context_id` nó tạo và xoá hết ở cuối mỗi lần chạy.
+
+## Verification (bằng chứng thật, không phải tin code)
+
+- **`diff` file trên đĩa vs endpoint trả về: 5/5 KHỚP byte-for-byte** — bằng chứng dashboard hiện
+  chính xác cái AI đọc, không thể lệch. Đây là verification quan trọng nhất của đợt này.
+- **Chạy test-harness 3 lần liên tiếp: `count(project_context)` đứng nguyên ở 4** (trước đây mỗi
+  lần +3) — bằng chứng rác không còn tích luỹ.
+- `company-ai claude` thật chạy đúng sau khi đổi CLI sang bundle; `diff` 5 file trước/sau xác
+  nhận: `task.md` **không đổi** (port logic trung thực), `company.md`/`team.md` từ placeholder →
+  tri thức thật, `checkpoint.md` giữ nguyên handoff thật của Thanh và sạch rác.
+- Test-harness: 154 → **167/167 PASS**. Không đụng Gateway Adapter.
+
+## Chưa làm (ngoài phạm vi, có lý do)
+
+Để AI tự curate/đề xuất dọn bộ tri thức (người dùng có nhắc "AI quản lý AI") — endpoint
+`context/bundle` đợt này chính là nền cho việc đó, nhưng chưa làm: chưa có đủ dữ liệu thật để
+biết nên curate theo tiêu chí gì, làm bây giờ là đoán. Đồng bộ realtime giữa phiên đang mở và
+context mới cũng chưa có (context kéo lúc mở phiên — đúng thiết kế Q18 "chứng minh đã cấp phát,
+không chứng minh đã đọc", cần nói rõ với khách chứ không phải bug).
