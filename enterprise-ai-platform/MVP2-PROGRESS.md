@@ -130,14 +130,29 @@ tiên trong toàn bộ dự án `closed_task_count` khác 0 qua dữ liệu sả
 `closed_task_count=1`, `avg_cost_per_closed_task="0.0025"`, `avg_tokens_per_closed_task="743"` —
 số thật từ chính request vừa chạy, không phải số giả).
 
+## Chuẩn bị schema cho connector task tracker ngoài (Linear/Jira) — chưa viết connector thật
+
+> Người dùng thảo luận với GPT về hướng tích hợp Linear/Jira, đối chiếu lại: hướng hybrid GPT đề
+> xuất (tracker ngoài sở hữu task chính thức, Center AI giữ bản mirror tối giản + connector
+> abstraction) khớp đúng mục 14 đã khoá và đúng quyết định trước đó (chưa tích hợp ngay). Phần
+> duy nhất làm ngay: chuẩn bị schema, KHÔNG viết `TaskTrackerConnector`/`LinearConnector` thật —
+> không có account Linear/Jira thật để test, viết connector không kiểm chứng được là code đoán
+> mò, đi ngược kỷ luật "không tính xong nếu chưa test bằng traffic thật" xuyên suốt dự án.
+
+Migration `009_task_external_link.sql`: `tasks` thêm 3 cột nullable
+`external_source`/`external_issue_id`/`last_synced_at` — không đổi hành vi hiện tại, mọi task cũ
+vẫn `NULL`. `handleListTasks` SELECT thêm 3 cột này để sẵn sàng cho connector đọc/ghi sau này.
+Xác nhận qua API thật: task hiện có trả về đúng 3 field mới đều `null`, test-harness 154/154 vẫn
+PASS không regression.
+
 ## MVP2 — Kết luận
 
 **PASS toàn bộ 5 hạng mục** (AI Timeline/Inbox, Request Span đầy đủ, Handoff sinh bằng LLM,
 Task claim/lease đầy đủ, Task Management hoàn thiện). Chỉ còn cố tình hoãn: vector search,
-browser extension, connector Codex/GPT thật (thiếu account), tích hợp Jira/Linear (quyết định
-người dùng: chờ khách hàng thật yêu cầu tool cụ thể) — đúng lý do đã nêu, không phải bỏ sót.
-Test-harness tăng từ 25 (cuối MVP1) lên **149/149 PASS** (tính lũy kế qua cả MVP3), toàn bộ test
-bằng traffic thật, không mock.
+browser extension, connector Codex/GPT thật (thiếu account), tích hợp Jira/Linear thật (quyết
+định người dùng: chờ khách hàng thật yêu cầu tool cụ thể — đã chuẩn bị sẵn schema, chưa viết
+connector) — đúng lý do đã nêu, không phải bỏ sót. Test-harness tăng từ 25 (cuối MVP1) lên
+**154/154 PASS** (tính lũy kế qua cả MVP3), toàn bộ test bằng traffic thật, không mock.
 
 → **MVP2 hoàn thành, chuyển sang MVP3** — governance/audit/policy cơ bản, giữ nguyên phạm vi
 sản phẩm chung cho team dev tại nhiều loại doanh nghiệp khác nhau, không thiết kế riêng cho

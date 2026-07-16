@@ -1049,7 +1049,8 @@ async function handleListTasks(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
     `SELECT t.id, t.project_id, t.title, t.status, t.assignee_employee_id, a.full_name AS assignee_name,
-            t.claim_mode, t.claimed_by_employee_id, t.lease_until, e.full_name AS claimed_by_name
+            t.claim_mode, t.claimed_by_employee_id, t.lease_until, e.full_name AS claimed_by_name,
+            t.external_source, t.external_issue_id, t.last_synced_at
      FROM tasks t
        LEFT JOIN employees e ON e.id = t.claimed_by_employee_id
        LEFT JOIN employees a ON a.id = t.assignee_employee_id
