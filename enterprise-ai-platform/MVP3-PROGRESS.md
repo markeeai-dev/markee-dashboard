@@ -252,10 +252,26 @@ hiển thị, đúng giới hạn đã ghi ở các đợt trước.
 - Backup file cũ (`index.html.bak-<timestamp>`) giữ lại trên droplet trước khi ghi đè, chưa
   cần dùng tới (rollback tức thời nếu cần).
 
-## Tác dụng phụ tốt của việc vá gap này
+## Tác dụng phụ tốt của việc vá gap này — đã hoàn tất luôn
 
 Giới hạn đã ghi ở Đợt 2 ("không test được đường 'không có grant active → không lưu gì' bằng
-traffic thật vì Thanh/Hoàng đều có grant tồn đọng, chưa có endpoint revoke") nay đã có thể vá —
-endpoint revoke vừa xây cho phép dọn sạch grant tồn đọng rồi test lại đường đó bằng traffic
-thật. Chưa thực hiện lại test đó trong đợt này (ngoài phạm vi "vá gap A" đã chốt), để dành cho
-lần sau nếu cần xác nhận thêm.
+traffic thật vì Thanh/Hoàng đều có grant tồn đọng, chưa có endpoint revoke") nay đã vá xong,
+test bằng traffic thật:
+
+1. Revoke toàn bộ 20 grant tồn đọng của emp_thanh/emp_hoang qua chính endpoint vừa xây (200 cho
+   cả 20 lần gọi) — xác nhận lại `GET full-audit-grants`: 0/29 grant còn active.
+2. Tạo 1 Work Session + Tool Session thật qua Control Plane (không mock), lấy `gateway_token`
+   thật do Control Plane tự ký, gửi 1 request thật qua đúng đường công khai
+   `https://valeron.tech/v1/messages` (không bypass Adapter) trong lúc **chắc chắn không có
+   grant active nào**.
+3. Kết quả: request trả về **200 bình thường** (AI vẫn hoạt động đúng, không bị ảnh hưởng bởi
+   việc thiếu grant — đúng nguyên tắc Metadata enforcement mặc định), `request_spans` ghi đúng
+   1 dòng mới khớp chính xác usage trả về (48 input/26 output) — chứng minh pipeline xử lý bình
+   thường. Nhưng bảng `prompts` **0 dòng mới** trong cùng khoảng thời gian — xác nhận đúng: khi
+   không có Full Audit Mode active, không có nội dung thô/redact nào được lưu lại, dù request
+   vẫn qua Adapter và vẫn được tính phí/usage như bình thường.
+
+Đóng luôn Work Session/Tool Session test sau khi xong (không để lại state test tồn đọng — đúng
+tinh thần đã sửa ở chính đợt này). Không cần test-harness case mới cho việc này (đã có case
+"active-grant khi không có grant nào khớp -> grant:null" ở tầng Control Plane từ Đợt 2); đây là
+xác nhận bổ sung bằng traffic thật đầu-cuối, không phải gap còn thiếu nữa.
