@@ -95,6 +95,9 @@ class ControlPlaneClient {
   overlapCheck(taskId) {
     return this._req('GET', `/v1/tasks/${encodeURIComponent(taskId)}/overlap-check`);
   }
+  ingestContext(body) {
+    return this._req('POST', '/v1/context/ingest', body);
+  }
 }
 
 module.exports = { ControlPlaneClient, ControlPlaneError };

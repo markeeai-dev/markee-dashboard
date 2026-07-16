@@ -29,33 +29,40 @@ function parseArgs(argv) {
 
 async function main() {
   const [, , cmd, ...rest] = process.argv;
-  const args = parseArgs(rest);
 
   try {
     switch (cmd) {
       case 'login':
-        await require('../lib/commands/login').run(args);
+        await require('../lib/commands/login').run(parseArgs(rest));
         break;
       case 'init':
-        await require('../lib/commands/init').run(args);
+        await require('../lib/commands/init').run(parseArgs(rest));
         break;
       case 'claude':
-        await require('../lib/commands/claude').run(args, 'claude_code');
+        await require('../lib/commands/claude').run(parseArgs(rest), 'claude_code');
         break;
       case 'codex':
-        await require('../lib/commands/claude').run(args, 'codex');
+        await require('../lib/commands/claude').run(parseArgs(rest), 'codex');
         break;
       case 'status':
-        await require('../lib/commands/status').run(args);
+        await require('../lib/commands/status').run(parseArgs(rest));
         break;
       case 'checkpoint':
-        await require('../lib/commands/checkpoint').run(args);
+        await require('../lib/commands/checkpoint').run(parseArgs(rest));
         break;
       case 'end':
-        await require('../lib/commands/end').run(args);
+        await require('../lib/commands/end').run(parseArgs(rest));
         break;
+      case 'context': {
+        // "context" có subcommand riêng (vd `context add`) — subcommand là positional đầu
+        // tiên, không phải cờ `--...`, nên tách ra TRƯỚC khi đưa phần còn lại vào parseArgs
+        // (parseArgs chỉ hiểu cờ `--key value`, không tự nhận biết positional).
+        const [sub, ...subRest] = rest;
+        await require('../lib/commands/context').run(sub, parseArgs(subRest));
+        break;
+      }
       default:
-        console.log('Dùng: company-ai <login|init|claude|codex|status|checkpoint|end>');
+        console.log('Dùng: company-ai <login|init|claude|codex|status|checkpoint|end|context add>');
         process.exit(cmd ? 1 : 0);
     }
   } catch (err) {
