@@ -415,6 +415,35 @@ async function handleGrantFullAuditMode(req) {
   return { status: 201, body: { grant_id: grantId, expires_at: expiresAt } };
 }
 
+// Vá gap thật phát hiện ở Đợt 2 — grant trước đây chỉ tự hết hạn, không tắt sớm được. Set
+// expires_at = now() (không thêm cột revoked_at) — findActiveFullAuditGrant đã lọc theo
+// expires_at > now() nên grant biến mất khỏi active NGAY, không phải sửa logic đọc ở đâu khác.
+async function handleRevokeFullAuditMode(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query('SELECT id, scope, scope_id, expires_at FROM full_audit_grants WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'grant_not_found');
+
+  // Idempotent — revoke 1 grant đã hết hạn/đã revoke rồi vẫn 200, không lỗi vô nghĩa.
+  if (new Date(rows[0].expires_at).getTime() > Date.now()) {
+    await query('UPDATE full_audit_grants SET expires_at = now() WHERE id = $1', [params.id]);
+    await writeAuditLog(emp.id, 'full_audit_mode_revoked', rows[0].scope, rows[0].scope_id, { grant_id: params.id });
+  }
+  return { status: 200, body: { revoked: true } };
+}
+
+async function handleListFullAuditGrants(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query(
+    `SELECT fag.id, fag.scope, fag.scope_id, fag.reason, fag.expires_at, fag.created_at,
+            e.full_name AS granted_by_name, fag.expires_at > now() AS is_active
+     FROM full_audit_grants fag LEFT JOIN employees e ON e.id = fag.granted_by
+     ORDER BY fag.created_at DESC LIMIT 50`
+  );
+  return { status: 200, body: { grants: rows } };
+}
+
 async function handleListAuditLogs(req) {
   const emp = await requireEmployee(req);
   requireAdmin(emp);
@@ -621,6 +650,30 @@ async function handleInbox(req, url) {
     status: 200,
     body: { assigned_open_tasks: assignedRes.rows, handoffs_to_pick_up: pickupRes.rows },
   };
+}
+
+// Vá gap thật phát hiện ở Đợt 2 — project_context CHƯA từng có endpoint tạo mới ở bất kỳ MVP
+// nào trước đây (Confidence/ADR đúng nhưng chỉ chạy được trên dữ liệu seed). Mở cho MỌI nhân
+// viên gọi (không giới hạn admin) — đúng bản chất cộng tác của bảng này, giống
+// checkpoints/handoffs, khác hẳn dữ liệu governance nhạy cảm (flags/audit_logs/prompts).
+async function handleIngestContext(req) {
+  const emp = await requireEmployee(req);
+  const body = await readJsonBody(req);
+  if (!body.project_id || !body.type || !body.content) throw new ApiError(400, 'missing_fields');
+  if (!CONTEXT_TYPE_LABEL[body.type]) throw new ApiError(400, 'invalid_type');
+
+  // approved_by: hệ thống CHƯA có Approval workflow thật (hoãn có chủ đích ở MVP3) — nếu
+  // truyền lên thì TIN TRỰC TIẾP giá trị đó (tự khai đã duyệt), không ép "người duyệt phải
+  // khác người tạo" (đó là quy tắc riêng của Pattern Library ở Q16, không áp cho bảng này).
+  const approvedBy = body.approved_by === true ? emp.id : body.approved_by || null;
+
+  const contextId = id('ctx');
+  await query(
+    `INSERT INTO project_context (id, project_id, task_id, type, content, created_by, approved_by, valid_to)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [contextId, body.project_id, body.task_id || null, body.type, body.content, emp.id, approvedBy, body.valid_to || null]
+  );
+  return { status: 201, body: { context_id: contextId } };
 }
 
 async function handleListProjectContext(req, params) {
@@ -1114,6 +1167,13 @@ async function handleContextRender(req, url) {
 const routes = [
   { method: 'POST', pattern: /^\/v1\/auth\/login$/, handler: (req) => handleLogin(req) },
   { method: 'POST', pattern: /^\/v1\/governance\/full-audit-mode$/, handler: (req) => handleGrantFullAuditMode(req) },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/governance\/full-audit-mode\/([^/]+)\/revoke$/,
+    handler: (req, m) => handleRevokeFullAuditMode(req, { id: m[1] }),
+  },
+  { method: 'GET', pattern: /^\/v1\/governance\/full-audit-grants$/, handler: (req) => handleListFullAuditGrants(req) },
+  { method: 'POST', pattern: /^\/v1\/context\/ingest$/, handler: (req) => handleIngestContext(req) },
   { method: 'GET', pattern: /^\/v1\/audit-logs$/, handler: (req) => handleListAuditLogs(req) },
   { method: 'GET', pattern: /^\/v1\/flags$/, handler: (req) => handleListFlags(req) },
   { method: 'GET', pattern: /^\/v1\/projects$/, handler: (req) => handleListProjects(req) },

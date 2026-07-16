@@ -429,6 +429,83 @@ async function main() {
   );
   check('tạo ADR hợp lệ -> 201', adrOk.status === 201 && !!adrOk.json.decision_detail_id, adrOk);
 
+  // --- Vá gap A: POST /v1/context/ingest — test khép kín cả vòng (tạo -> đọc lại 2 đường) ---
+  const ingestMissingFields = await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen' }, thanhToken);
+  check('context/ingest thiếu field -> 400', ingestMissingFields.status === 400, ingestMissingFields);
+
+  const ingestInvalidType = await post(
+    `${CP}/v1/context/ingest`,
+    { project_id: 'proj_trungnguyen', type: 'khong_hop_le', content: 'x' },
+    thanhToken
+  );
+  check('context/ingest type sai -> 400 invalid_type', ingestInvalidType.status === 400 && ingestInvalidType.json.error === 'invalid_type', ingestInvalidType);
+
+  const ingestOk = await post(
+    `${CP}/v1/context/ingest`,
+    {
+      project_id: 'proj_trungnguyen',
+      task_id: 'task_tng142',
+      type: 'requirement',
+      content: 'BA yeu cau them bo loc theo khu vuc dia ly (test vá gap A)',
+      approved_by: true, // tự khai đã duyệt — hệ thống chưa có Approval workflow, ghi rõ trong plan
+    },
+    thanhToken
+  );
+  check('context/ingest hợp lệ -> 201', ingestOk.status === 201 && !!ingestOk.json.context_id, ingestOk);
+
+  const contextNotesAfterIngest = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
+  check(
+    'đọc lại qua context-notes thấy đúng entry vừa tạo, approved_by = chính người tạo',
+    contextNotesAfterIngest.json.context_notes.some((c) => c.id === ingestOk.json.context_id && c.approved_by === 'emp_thanh'),
+    contextNotesAfterIngest
+  );
+
+  const contextRenderAfterIngest = await get(`${CP}/v1/context/render?task_id=task_tng142`, thanhToken);
+  check(
+    'đọc lại qua context/render (đường company-ai claude thật dùng) cũng thấy đúng entry',
+    contextRenderAfterIngest.json.context_notes.some((c) => c.id === ingestOk.json.context_id),
+    contextRenderAfterIngest
+  );
+
+  // --- Vá gap A: revoke Full Audit Mode sớm ---
+  const grantToRevoke = await post(
+    `${CP}/v1/governance/full-audit-mode`,
+    { scope: 'employee', scope_id: 'emp_hoang', reason: 'test revoke som (vá gap A)', duration_hours: 4 },
+    thanhToken
+  );
+  const revokeAsMember = await post(`${CP}/v1/governance/full-audit-mode/${grantToRevoke.json.grant_id}/revoke`, {}, hoangToken);
+  check('Hoàng (member) revoke grant -> 403', revokeAsMember.status === 403, revokeAsMember);
+
+  const activeGrantBeforeRevoke = await get(`${CP}/internal/v1/governance/active-grant?employee_id=emp_hoang&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check('trước revoke: grant của Hoàng đang active', activeGrantBeforeRevoke.json.grant?.id === grantToRevoke.json.grant_id, activeGrantBeforeRevoke);
+
+  const revokeAsAdmin = await post(`${CP}/v1/governance/full-audit-mode/${grantToRevoke.json.grant_id}/revoke`, {}, thanhToken);
+  check('Thanh (admin) revoke grant -> 200', revokeAsAdmin.status === 200 && revokeAsAdmin.json.revoked === true, revokeAsAdmin);
+
+  const activeGrantAfterRevoke = await get(`${CP}/internal/v1/governance/active-grant?employee_id=emp_hoang&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check(
+    'sau revoke: grant KHÔNG còn active nữa (hoặc null, hoặc grant active khác nếu Hoàng còn grant tồn đọng)',
+    activeGrantAfterRevoke.json.grant?.id !== grantToRevoke.json.grant_id,
+    activeGrantAfterRevoke
+  );
+
+  const revokeAlreadyRevoked = await post(`${CP}/v1/governance/full-audit-mode/${grantToRevoke.json.grant_id}/revoke`, {}, thanhToken);
+  check('revoke lại 1 grant đã revoke rồi -> vẫn 200 (idempotent)', revokeAlreadyRevoked.status === 200, revokeAlreadyRevoked);
+
+  const revokeNotFound = await post(`${CP}/v1/governance/full-audit-mode/fag_khong_ton_tai/revoke`, {}, thanhToken);
+  check('revoke grant_id không tồn tại -> 404', revokeNotFound.status === 404, revokeNotFound);
+
+  const listGrantsAsMember = await get(`${CP}/v1/governance/full-audit-grants`, hoangToken);
+  check('Hoàng (member) list grants -> 403', listGrantsAsMember.status === 403, listGrantsAsMember);
+
+  const listGrantsAsAdmin = await get(`${CP}/v1/governance/full-audit-grants`, thanhToken);
+  const revokedGrantInList = listGrantsAsAdmin.json.grants?.find((g) => g.id === grantToRevoke.json.grant_id);
+  check(
+    'Thanh (admin) list grants -> 200, thấy đúng grant vừa revoke với is_active=false',
+    listGrantsAsAdmin.status === 200 && revokedGrantInList && revokedGrantInList.is_active === false,
+    revokedGrantInList
+  );
+
   // --- MVP3 tiếp theo, hạng mục 1: Full Audit Mode — lưu nội dung thô có redact (Q22) ---
   const activeGrantWrongSecret = await get(`${CP}/internal/v1/governance/active-grant?employee_id=emp_thanh&project_id=proj_trungnguyen`, 'sai-secret-hoan-toan');
   check('active-grant sai internal secret -> 401', activeGrantWrongSecret.status === 401, activeGrantWrongSecret);
