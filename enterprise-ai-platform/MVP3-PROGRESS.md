@@ -369,3 +369,106 @@ Policy theo department (chưa có `departments` với dữ liệu thật để s
 Thanh/Hoàng, xây bảng lúc này là xây cho nhu cầu giả định), Pattern Library (Q16 — cần dùng lại
 đúng cơ chế Approval vừa xây, để đợt sau), seat offboarding workflow (cũng cần Approval làm
 nền), Company Brain `scope_level` (Q16 — độc lập, rẻ, để riêng 1 đợt nhỏ không gộp vào đây).
+
+---
+
+# Đợt 5 — Company Brain `scope_level` (thu hẹp) + Pattern Library (Q16) + Seat Offboarding thật
+
+> Kế hoạch: xem plan đã duyệt "MVP3 Đợt 5". Người dùng yêu cầu "làm hết luôn" các mục còn lại
+> của MVP3 — rà lại, 3 mục này làm được thật ngay, phần còn lại (policy theo department, webhook
+> Jira/Linear, Intent-centric Q12, Knowledge Graph mở rộng, toàn bộ MVP4) bị chặn bởi thiếu dữ
+> liệu thật/tích hợp bên thứ ba/chính tài liệu khoá ghi rõ "chỉ làm sau khi có khách hàng thật" —
+> không tự ý lệch khỏi tài liệu, đã giải thích rõ với người dùng trước khi lên plan.
+
+**2 phát hiện thật lúc rà soát trước khi lên plan (không phải bỏ sót, phát hiện mới)**:
+1. Company Brain 5 tầng không test được thật với `department`/`company` — pilot chỉ có 1
+   project, không có bảng `departments`. **Thu hẹp**: chỉ làm `session|personal|project` có
+   nghĩa dùng thật, cột vẫn nhận đủ 5 giá trị cho tương lai.
+2. `seats.status`/`seat_runtime_registry.status` ở Control Plane KHÔNG phải nơi Adapter enforce
+   thật — Adapter đọc `registry.json` trên đĩa (Q9). Nếu "offboarding" chỉ đổi cột DB thì không
+   cắt được quyền truy cập thật — sẽ là tính năng giấy tờ, đúng loại lỗi dự án luôn tránh (tiền
+   lệ Gap A). Thiết kế lại: thêm endpoint nội bộ ngay trên Adapter để Control Plane gọi thật.
+
+## Bước 1 — Schema
+
+**PASS.** Migration `008_scope_level_pattern_library.sql`: `project_context.scope_level` (5 giá
+trị, mặc định `project`), bảng `pattern_library` đúng theo mục 11 (`source_context_id?, title,
+content_anonymized, category, generalized_by, approved_by?`). Xác nhận qua `\d` trực tiếp trên
+droplet.
+
+## Bước 2 — Control Plane
+
+**PASS — 138/138 test-harness (tăng từ 115).** `scope_level` thêm vào `context/ingest` (validate
+400 nếu sai, mặc định `project` nếu không truyền)/`context-notes`/`context/render`. Pattern
+Library: `POST /v1/pattern-library/generalize` (mọi nhân viên, `content_anonymized` do người gọi
+tự viết — không có anonymize tự động, cùng lý do đã từ chối regex Data Classification ở Đợt 4),
+`POST /v1/pattern-library/:id/approve` (chỉ admin, **bắt buộc khác người generalize**, 400
+`cannot_approve_own_pattern` nếu trùng), `GET /v1/pattern-library` (chỉ trả pattern đã duyệt cho
+mọi người, `?status=pending` cho admin xem hàng chờ). Seat: `GET /v1/seats`,
+`POST /v1/seats/:id/offboard` (chỉ admin, gọi thật sang Adapter, không cập nhật DB nếu Adapter
+không xác nhận được).
+
+**Lỗi tìm thấy giữa chừng (không phải bỏ sót — phát hiện bằng test thật)**: sau khi deploy,
+test-harness báo FAIL 2 case access-check "chưa duyệt" — nghi bug, nhưng debug bằng log tạm thời
+xác nhận: chính approval của lần chạy test-harness TRƯỚC (và của 1 lần test thật thủ công ở Đợt
+4) vẫn còn hiệu lực thật trong khung giờ `duration_hours`. Đây là gap có thật giống hệt lớp lỗi
+đã vá ở "Vá gap A" cho `full_audit_grants` — `approval_requests` cũng chưa revoke sớm được. Vá
+bằng đúng kỹ thuật cũ: thêm `POST /v1/governance/approval-requests/:id/revoke` (admin, idempotent,
+`expires_at = now()`), test-harness tự dọn approval tồn đọng trước khi assert "chưa duyệt". Chạy
+lại 2 lần liên tiếp xác nhận hết flaky (119/119 rồi 138/138, cả 2 lần đều ổn định).
+
+## Bước 3 — Gateway Adapter: seat status thật
+
+**PASS**, test theo đúng thứ tự mọi đợt trước:
+- a) Mock suite gốc 7/7 PASS.
+- b) Test cục bộ với mock-router: gọi endpoint mới đổi seat Hoàng sang `unhealthy` → request AI
+  thật (mock) → **403 `seat_status_unhealthy`** đúng như enforcement hiện có; đổi lại `healthy`
+  → **200 bình thường**. `registry.json` xác nhận đổi đúng, không có lỗi race.
+- c) Test thật trên droplet: **KHÔNG dùng seat thật của Thanh/Hoàng** — tạo 1 seat giả lập
+  (`seat_test_offboard_verify`, gán tạm cho `emp_thanh` như seat thứ 2, không dùng cho traffic
+  thật) qua SQL trực tiếp (không có endpoint tạo seat — cố ý ngoài phạm vi đợt này). Gọi
+  `POST /v1/seats/seat_test_offboard_verify/offboard` qua Control Plane thật → xác nhận cả 3
+  tầng: `registry.json` seat status = `destroyed` (enforcement thật), DB `seats.status='revoked'`,
+  `seat_runtime_registry.status='destroyed'`, `audit_logs` có `seat_offboarded`. Offboard lại lần
+  2 → 400 `already_revoked` (không cho offboard 2 lần). Dọn sạch seat giả sau khi xác nhận xong
+  (xoá khỏi `registry.json` + DB).
+- d) `company-ai claude` thật (tool-use + streaming) sau toàn bộ quá trình — xác nhận seat thật
+  của Thanh không hề bị đụng tới, `stop_reason: end_turn` bình thường.
+
+**Giới hạn thật, ghi rõ**: test-harness tự động KHÔNG cover được đường enforcement thật đầu-cuối
+(cần seat thật để offboard, không có endpoint tạo seat qua API — ngoài phạm vi đợt này). Test-
+harness chỉ cover được đường guard (permission/not-found) qua API. Đường enforcement thật đã xác
+nhận thủ công như trên, có bằng chứng cụ thể (registry.json/DB/audit_logs), không phải chỉ đọc
+code suy luận.
+
+## Bước 4 — Dashboard
+
+**PASS.** Tab mới "Pattern Library" (mở cho mọi người: form đề xuất generalize, bảng đã duyệt;
+riêng admin thấy thêm khu chờ duyệt, nút Duyệt tự ẩn trên pattern của chính admin đó để tránh bấm
+vào rồi nhận lỗi vô nghĩa — gate thật vẫn nằm ở API, đây chỉ là UX). Seats tab thêm cột/nút
+"Offboard" (chỉ admin thấy, hỏi lý do + xác nhận trước khi gọi). Project Memory: thêm chọn
+`scope_level` khi tạo context + cột hiển thị scope_level trên bảng, ghi rõ department/company
+chưa có tác dụng thật. Deploy, xác nhận qua curl: HTML khớp byte-for-byte bản local.
+
+## Bước 5 — CLI
+
+**PASS, test thật.** `company-ai context add` thêm `--scope-level` (mặc định `project`, không
+hỏi tương tác — chỉ đổi qua flag cho automation). Test thật: tạo context với
+`--scope-level personal`, xác nhận qua API đọc lại đúng `scope_level: "personal"`.
+
+## Verification cuối
+
+- Test-harness: 115 → **138/138 PASS** (đã chạy lại nhiều lần xác nhận hết flaky).
+- Mock Adapter suite: 7/7 PASS trước và sau khi đổi, registry.json cục bộ về trạng thái sạch sau
+  test.
+- Seat thật của Thanh/Hoàng không hề bị đụng trong suốt quá trình test — chỉ dùng seat giả lập
+  tạo/xoá riêng cho việc test enforcement. `company-ai claude` thật xác nhận không ảnh hưởng.
+- `systemctl status` cả 2 service `active` xuyên suốt, không crash-loop.
+
+## Chưa làm (đúng phạm vi đã chốt trong plan, không phải bỏ sót)
+
+Company Brain injection/override logic cho `department`/`company` (cần ≥2 project thật để test
+có ý nghĩa), Pattern Library "reuse" tự động giữa project (tài liệu ghi rõ khoá tới MVP4), policy
+theo department, webhook Jira/Linear, Intent-centric (Q12), mở rộng Knowledge Graph, toàn bộ
+MVP4 — tất cả đều bị chặn bởi thiếu dữ liệu thật/tích hợp bên thứ ba, hoặc chính tài liệu khoá
+ghi rõ lý do hoãn, không phải bỏ sót đợt này.

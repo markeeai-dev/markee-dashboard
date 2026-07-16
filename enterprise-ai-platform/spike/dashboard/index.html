@@ -71,6 +71,7 @@ const TABS = [
   { id: 'sessions', label: 'Active Sessions', render: renderSessions },
   { id: 'handoffs', label: 'Handoffs', render: renderHandoffs },
   { id: 'memory', label: 'Project Memory', render: renderMemory },
+  { id: 'patterns', label: 'Pattern Library', render: renderPatternLibrary },
   { id: 'seats', label: 'Seats & Employees', render: renderSeats },
   { id: 'governance', label: 'Governance', render: renderGovernance, adminOnly: true },
   { id: 'kpi', label: 'KPI', render: renderKpi, adminOnly: true },
@@ -295,18 +296,23 @@ async function renderMemory(root) {
           </select></div>
         <div style="flex:1;min-width:240px;"><label style="font-size:12px;color:var(--muted);">Nội dung</label><br/>
           <input id="ctxContent" placeholder="Nội dung ghi chú" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Company Brain scope (Q16)</label><br/>
+          <select id="ctxScopeLevel" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            <option value="project" selected>project</option><option value="personal">personal</option><option value="session">session</option>
+          </select></div>
         <div><label style="font-size:12px;color:var(--muted);"><input id="ctxApproved" type="checkbox" /> Đã duyệt (tự khai)</label></div>
         <button class="btn" onclick="ingestContextFromForm()">Thêm</button>
       </div>
+      <div class="empty" style="margin-top:6px;">department/company chưa có tác dụng inject xuyên project — pilot chỉ có 1 project, chưa test được thật (xem MVP3-PROGRESS.md).</div>
       <div id="ctxResult" class="empty" style="margin-top:8px;"></div>
     </div>`;
 
   const tablesHtml = projects.map((p, i) => `
     <div class="panel">
       <h2>Project Memory — ${esc(p.name)}</h2>
-      ${notesByProject[i].context_notes.length ? `<table><thead><tr><th>Loại</th><th>Nội dung</th><th>Người tạo</th><th>Lúc</th><th>Confidence (Q15)</th></tr></thead>
+      ${notesByProject[i].context_notes.length ? `<table><thead><tr><th>Loại</th><th>Scope</th><th>Nội dung</th><th>Người tạo</th><th>Lúc</th><th>Confidence (Q15)</th></tr></thead>
       <tbody>${notesByProject[i].context_notes.map((c) => `
-        <tr><td><span class="pill warn">${esc(c.type)}</span></td><td>${esc(c.content)}</td>
+        <tr><td><span class="pill warn">${esc(c.type)}</span></td><td><span class="pill ok">${esc(c.scope_level)}</span></td><td>${esc(c.content)}</td>
         <td>${esc(c.created_by_name)}</td><td>${fmtDate(c.created_at)}</td>
         <td><span class="pill ${c.confidence >= 70 ? 'ok' : c.confidence >= 30 ? 'warn' : 'danger'}">${esc(c.confidence)}%</span></td></tr>`).join('')}</tbody></table>` :
       '<div class="empty">Chưa có ghi chú context nào cho project này.</div>'}
@@ -321,10 +327,11 @@ async function ingestContextFromForm() {
   const task_id = document.getElementById('ctxTaskId').value.trim() || undefined;
   const type = document.getElementById('ctxType').value;
   const content = document.getElementById('ctxContent').value.trim();
+  const scope_level = document.getElementById('ctxScopeLevel').value;
   const approved_by = document.getElementById('ctxApproved').checked;
   if (!content) { resultEl.textContent = 'Cần nhập nội dung.'; return; }
   try {
-    const res = await apiPost('/v1/context/ingest', { project_id, task_id, type, content, approved_by });
+    const res = await apiPost('/v1/context/ingest', { project_id, task_id, type, content, scope_level, approved_by });
     resultEl.textContent = `Đã tạo: ${res.context_id}`;
     switchTab('memory');
   } catch (e) {
@@ -334,14 +341,103 @@ async function ingestContextFromForm() {
 
 async function renderSeats(root) {
   const { employees } = await api('/v1/employees');
+  const isAdmin = state.who?.role === 'admin';
   root.innerHTML = `<div class="panel"><h2>Seats & Employees</h2>
-    <table><thead><tr><th>Nhân viên</th><th>Email</th><th>Trạng thái</th><th>Seat</th><th>Trạng thái seat</th></tr></thead>
+    <table><thead><tr><th>Nhân viên</th><th>Email</th><th>Trạng thái</th><th>Seat</th><th>Trạng thái seat</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
     <tbody>${employees.map((e) => `
       <tr><td>${esc(e.full_name)}</td><td>${esc(e.email)}</td>
       <td><span class="pill ${e.status === 'active' ? 'ok' : 'danger'}">${esc(e.status)}</span></td>
       <td>${e.seat_id ? `<code>${esc(e.seat_id)}</code>` : '<span class="empty">chưa gán seat</span>'}</td>
-      <td>${e.seat_status ? `<span class="pill ${e.seat_status === 'healthy' ? 'ok' : 'danger'}">${esc(e.seat_status)}</span>` : '—'}</td></tr>`).join('')}
+      <td>${e.seat_status ? `<span class="pill ${e.seat_status === 'healthy' ? 'ok' : 'danger'}">${esc(e.seat_status)}</span>` : '—'}</td>
+      ${isAdmin ? `<td>${e.seat_id && e.seat_status !== 'destroyed' ? `<a class="linkbtn" onclick="offboardSeat('${esc(e.seat_id)}')">Offboard</a>` : ''}</td>` : ''}</tr>`).join('')}
     </tbody></table></div>`;
+}
+
+async function offboardSeat(seatId) {
+  const reason = prompt(`Lý do offboard seat ${seatId}? (sẽ cắt quyền truy cập AI thật ngay lập tức)`);
+  if (!reason) return;
+  if (!confirm(`Xác nhận offboard ${seatId}? Không thể hoàn tác qua dashboard.`)) return;
+  try {
+    await apiPost(`/v1/seats/${encodeURIComponent(seatId)}/offboard`, { reason });
+    switchTab('seats');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+// Pattern Library (Q16) — CHỈ phần "generalize có gate", KHÔNG tự động bơm pattern vào project
+// khác (phần "reuse" cố tình khoá tới MVP4, xem MVP3-PROGRESS.md). Mở cho mọi nhân viên xem/đề
+// xuất, chỉ admin duyệt — và người duyệt phải khác người đề xuất (chặn ở tầng API, dashboard chỉ
+// không hiện nút Duyệt trên pattern của chính mình để tránh bấm vào rồi nhận lỗi vô nghĩa).
+async function renderPatternLibrary(root) {
+  const isAdmin = state.who?.role === 'admin';
+  const [approved, pending] = await Promise.all([
+    api('/v1/pattern-library'),
+    isAdmin ? api('/v1/pattern-library?status=pending') : Promise.resolve({ patterns: [] }),
+  ]);
+
+  const pendingHtml = isAdmin ? `
+    <div class="panel">
+      <h2>Chờ duyệt</h2>
+      <div class="empty" style="margin-bottom:10px;">Người duyệt phải khác người đề xuất — đúng yêu cầu Q16.</div>
+      <table><thead><tr><th>Tiêu đề</th><th>Danh mục</th><th>Đề xuất bởi</th><th>Lúc</th><th></th></tr></thead>
+      <tbody>${pending.patterns.length ? pending.patterns.map((p) => `
+        <tr><td>${esc(p.title)}</td><td>${esc(p.category)}</td><td>${esc(p.generalized_by_name)}</td><td>${fmtDate(p.created_at)}</td>
+        <td>${p.generalized_by_name === state.who.full_name ? '<span class="empty">pattern của bạn — cần người khác duyệt</span>' : `<a class="linkbtn" onclick="approvePattern('${esc(p.id)}')">Duyệt</a>`}</td></tr>`).join('') :
+        '<tr><td colspan="5" class="empty">Không có pattern nào chờ duyệt.</td></tr>'}
+      </tbody></table>
+    </div>` : '';
+
+  root.innerHTML = `
+    <div class="panel">
+      <h2>+ Đề xuất pattern mới (generalize)</h2>
+      <div class="empty" style="margin-bottom:10px;">Tự tay viết lại nội dung đã xoá định danh khách hàng — không có anonymize tự động, cùng lý do không làm regex Data Classification real-time.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div style="min-width:200px;"><label style="font-size:12px;color:var(--muted);">Tiêu đề</label><br/>
+          <input id="patTitle" placeholder="Retry pattern cho API rate limit" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Danh mục</label><br/>
+          <input id="patCategory" placeholder="reliability" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div style="flex:1;min-width:280px;"><label style="font-size:12px;color:var(--muted);">Nội dung đã ẩn danh hoá</label><br/>
+          <input id="patContent" placeholder="Dùng exponential backoff + jitter, tối đa 5 lần thử..." style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <button class="btn" onclick="generalizePattern()">Đề xuất</button>
+      </div>
+      <div id="patResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    ${pendingHtml}
+
+    <div class="panel">
+      <h2>Pattern đã duyệt</h2>
+      <table><thead><tr><th>Tiêu đề</th><th>Danh mục</th><th>Nội dung</th><th>Duyệt bởi</th></tr></thead>
+      <tbody>${approved.patterns.length ? approved.patterns.map((p) => `
+        <tr><td>${esc(p.title)}</td><td><span class="pill ok">${esc(p.category)}</span></td><td>${esc(p.content_anonymized)}</td><td>${esc(p.approved_by_name)}</td></tr>`).join('') :
+        '<tr><td colspan="4" class="empty">Chưa có pattern nào được duyệt.</td></tr>'}
+      </tbody></table>
+    </div>`;
+}
+
+async function generalizePattern() {
+  const resultEl = document.getElementById('patResult');
+  const title = document.getElementById('patTitle').value.trim();
+  const category = document.getElementById('patCategory').value.trim();
+  const content = document.getElementById('patContent').value.trim();
+  if (!title || !category || !content) { resultEl.textContent = 'Cần nhập đủ tiêu đề, danh mục, nội dung.'; return; }
+  try {
+    const res = await apiPost('/v1/pattern-library/generalize', { title, category, content });
+    resultEl.textContent = `Đã đề xuất: ${res.pattern_id} — chờ admin (khác bạn) duyệt.`;
+    switchTab('patterns');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function approvePattern(id) {
+  try {
+    await apiPost(`/v1/pattern-library/${encodeURIComponent(id)}/approve`, {});
+    switchTab('patterns');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
 }
 
 // Governance (Q13/Q22) — chỉ admin thấy tab này (đã lọc ở renderTabs). Risk Score KHÔNG tự

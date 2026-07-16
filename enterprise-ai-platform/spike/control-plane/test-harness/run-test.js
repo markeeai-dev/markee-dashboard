@@ -610,6 +610,21 @@ async function main() {
 
   // --- MVP3 Đợt 4 — Policy Engine cơ bản: Data Classification (tầng Project) + Approval (Q13) ---
 
+  // Dọn approval tồn đọng từ lần chạy trước (hoặc từ test/demo thủ công trước đó) TRƯỚC khi
+  // test — "chưa duyệt -> allowed:false" chỉ đáng tin nếu không còn approval nào từ trước vẫn
+  // hiệu lực. Cùng vấn đề đã gặp ở "Hoàng chưa có grant" (Đợt 2): không giả định trạng thái
+  // sạch, chủ động dọn bằng chính endpoint revoke vừa xây (không phải bỏ sót ở Đợt 4 — lúc đó
+  // chưa cần vì chưa có ai chạy lại nhiều lần trong cùng khung giờ hiệu lực).
+  async function revokeStaleApprovals(employeeId) {
+    const list = await get(`${CP}/v1/governance/approval-requests?status=approved`, thanhToken);
+    const stale = (list.json.approval_requests || []).filter(
+      (a) => a.employee_id === employeeId && a.project_id === 'proj_trungnguyen' && a.classification === 'customer_data'
+    );
+    for (const a of stale) await post(`${CP}/v1/governance/approval-requests/${a.id}/revoke`, {}, thanhToken);
+  }
+  await revokeStaleApprovals('emp_thanh');
+  await revokeStaleApprovals('emp_hoang');
+
   // An toàn mặc định TRƯỚC KHI tạo policy nào — đúng yêu cầu plan, phải xác nhận traffic thật
   // của Thanh/Hoàng không bị ảnh hưởng cho tới khi admin chủ động cấu hình.
   const accessCheckDefault = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
@@ -704,6 +719,18 @@ async function main() {
   const accessCheckAfterApprove = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
   check('access-check sau khi được duyệt -> allowed:true', accessCheckAfterApprove.status === 200 && accessCheckAfterApprove.json.allowed === true, accessCheckAfterApprove);
 
+  const revokeApprovalAsMember = await post(`${CP}/v1/governance/approval-requests/${createApproval1.json.approval_request_id}/revoke`, {}, hoangToken);
+  check('Hoàng (member) revoke approval -> 403', revokeApprovalAsMember.status === 403, revokeApprovalAsMember);
+
+  const revokeApprovalOk = await post(`${CP}/v1/governance/approval-requests/${createApproval1.json.approval_request_id}/revoke`, {}, thanhToken);
+  check('Thanh (admin) revoke approval đã duyệt -> 200', revokeApprovalOk.status === 200 && revokeApprovalOk.json.revoked === true, revokeApprovalOk);
+
+  const revokeApprovalAgainIdempotent = await post(`${CP}/v1/governance/approval-requests/${createApproval1.json.approval_request_id}/revoke`, {}, thanhToken);
+  check('revoke lại approval đã revoke rồi -> vẫn 200 (idempotent)', revokeApprovalAgainIdempotent.status === 200, revokeApprovalAgainIdempotent);
+
+  const accessCheckAfterRevoke = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check('access-check sau khi revoke -> allowed:false ngay lập tức', accessCheckAfterRevoke.status === 200 && accessCheckAfterRevoke.json.allowed === false, accessCheckAfterRevoke);
+
   const createApprovalHoang = await post(`${CP}/internal/v1/governance/approval-requests`, { employee_id: 'emp_hoang', project_id: 'proj_trungnguyen', classification: 'customer_data' }, INTERNAL_SECRET);
   const rejectOk = await post(`${CP}/v1/governance/approval-requests/${createApprovalHoang.json.approval_request_id}/reject`, {}, thanhToken);
   check('Thanh (admin) reject -> 200, status=rejected', rejectOk.status === 200 && rejectOk.json.status === 'rejected', rejectOk);
@@ -719,6 +746,107 @@ async function main() {
 
   const accessCheckAfterReset = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
   check('access-check sau khi reset về unclassified -> allowed:true (không còn policy khớp)', accessCheckAfterReset.status === 200 && accessCheckAfterReset.json.allowed === true, accessCheckAfterReset);
+
+  // --- MVP3 Đợt 5 — Company Brain scope_level (Q16, thu hẹp) + Pattern Library (Q16) ---
+
+  const ctxScopeDefault = await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen', type: 'status', content: 'test scope_level mặc định' }, thanhToken);
+  check('context/ingest không truyền scope_level -> mặc định project', ctxScopeDefault.status === 201, ctxScopeDefault);
+
+  const notesAfterDefault = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
+  check(
+    'context vừa tạo (không truyền scope_level) đọc lại thấy scope_level=project',
+    notesAfterDefault.json.context_notes.find((n) => n.id === ctxScopeDefault.json.context_id)?.scope_level === 'project',
+    notesAfterDefault
+  );
+
+  const ctxScopePersonal = await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen', type: 'status', content: 'test scope_level personal', scope_level: 'personal' }, thanhToken);
+  check('context/ingest với scope_level=personal -> 201', ctxScopePersonal.status === 201, ctxScopePersonal);
+
+  const notesAfterPersonal = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
+  check(
+    'context vừa tạo (scope_level=personal) đọc lại đúng',
+    notesAfterPersonal.json.context_notes.find((n) => n.id === ctxScopePersonal.json.context_id)?.scope_level === 'personal',
+    notesAfterPersonal
+  );
+
+  const ctxScopeInvalid = await post(`${CP}/v1/context/ingest`, { project_id: 'proj_trungnguyen', type: 'status', content: 'test scope_level sai', scope_level: 'khong-hop-le' }, thanhToken);
+  check('context/ingest scope_level sai -> 400', ctxScopeInvalid.status === 400, ctxScopeInvalid);
+
+  const contextRenderScope = await get(`${CP}/v1/context/render?task_id=task_tng142`, thanhToken);
+  check(
+    'context/render (đường company-ai claude thật dùng) cũng trả kèm scope_level',
+    contextRenderScope.status === 200 && contextRenderScope.json.context_notes.every((n) => typeof n.scope_level === 'string'),
+    contextRenderScope
+  );
+
+  // Pattern Library — generalize thủ công + gate "người duyệt phải khác người tạo"
+  const patternMissingFields = await post(`${CP}/v1/pattern-library/generalize`, { title: 'thiếu content/category' }, thanhToken);
+  check('generalize thiếu field -> 400', patternMissingFields.status === 400, patternMissingFields);
+
+  const patternGeneralize = await post(
+    `${CP}/v1/pattern-library/generalize`,
+    { title: 'Retry pattern cho API rate limit', content: 'Dùng exponential backoff + jitter, tối đa 5 lần thử, không giữ tên khách hàng cụ thể.', category: 'reliability' },
+    thanhToken
+  );
+  check('Thanh generalize 1 pattern mới -> 201', patternGeneralize.status === 201 && !!patternGeneralize.json.pattern_id, patternGeneralize);
+
+  const patternListBeforeApprove = await get(`${CP}/v1/pattern-library?category=reliability`, hoangToken);
+  check(
+    'pattern chưa duyệt -> KHÔNG hiện trong GET công khai',
+    patternListBeforeApprove.status === 200 && !patternListBeforeApprove.json.patterns.some((p) => p.id === patternGeneralize.json.pattern_id),
+    patternListBeforeApprove
+  );
+
+  const patternPendingAsMember = await get(`${CP}/v1/pattern-library?status=pending`, hoangToken);
+  check('Hoàng (member) xem hàng chờ duyệt pattern -> 403', patternPendingAsMember.status === 403, patternPendingAsMember);
+
+  const patternPendingAsAdmin = await get(`${CP}/v1/pattern-library?status=pending`, thanhToken);
+  check(
+    'Thanh (admin) xem hàng chờ duyệt -> 200, thấy đúng pattern vừa tạo',
+    patternPendingAsAdmin.status === 200 && patternPendingAsAdmin.json.patterns.some((p) => p.id === patternGeneralize.json.pattern_id),
+    patternPendingAsAdmin
+  );
+
+  const patternApproveSelf = await post(`${CP}/v1/pattern-library/${patternGeneralize.json.pattern_id}/approve`, {}, thanhToken);
+  check(
+    'Thanh tự duyệt pattern của chính mình -> 400 (người duyệt phải khác người tạo)',
+    patternApproveSelf.status === 400 && patternApproveSelf.json.error === 'cannot_approve_own_pattern',
+    patternApproveSelf
+  );
+
+  const patternApproveNotAdmin = await post(`${CP}/v1/pattern-library/${patternGeneralize.json.pattern_id}/approve`, {}, hoangToken);
+  check('Hoàng (member) duyệt pattern -> 403', patternApproveNotAdmin.status === 403, patternApproveNotAdmin);
+
+  // Hoàng không phải admin nên không tự approve được thật qua vai trò — nhưng test cần 1 admin
+  // KHÁC người tạo để xác nhận nhánh hợp lệ; seed chỉ có đúng 1 admin (Thanh), nên xác nhận
+  // đúng nhánh chặn (400/403) là đủ chứng minh gate hoạt động, không giả lập thêm admin thứ 2.
+  const patternApproveNotFound = await post(`${CP}/v1/pattern-library/pat_khong_ton_tai/approve`, {}, thanhToken);
+  check('duyệt pattern_id không tồn tại -> 404', patternApproveNotFound.status === 404, patternApproveNotFound);
+
+  // --- MVP3 Đợt 5 — Seat Offboarding: chỉ test được đường guard qua API (permission/not-found)
+  // — không có endpoint tạo seat mới (cố ý ngoài phạm vi đợt này), nên không tự tạo seat test
+  // được trong chính test-harness mà không phá quy ước "chỉ gọi API, không đụng DB trực tiếp"
+  // của file này. Đường enforcement thật đầu-cuối (registry.json thật đổi + DB đổi + audit_logs)
+  // đã xác nhận THỦ CÔNG bằng 1 seat giả lập tạo tạm qua SQL trực tiếp trên droplet, xem
+  // MVP3-PROGRESS.md — không phải bỏ sót, ghi rõ giới hạn thật của bộ test tự động này.
+  const seatsAsMember = await get(`${CP}/v1/seats`, hoangToken);
+  check('Hoàng (member) xem seats -> 403', seatsAsMember.status === 403, seatsAsMember);
+
+  const seatsAsAdmin = await get(`${CP}/v1/seats`, thanhToken);
+  check(
+    'Thanh (admin) xem seats -> 200, thấy đúng 2 seat thật',
+    seatsAsAdmin.status === 200 && seatsAsAdmin.json.seats.some((s) => s.id === 'seat_claude_thanh') && seatsAsAdmin.json.seats.some((s) => s.id === 'seat_claude_hoang'),
+    seatsAsAdmin
+  );
+
+  const offboardAsMember = await post(`${CP}/v1/seats/seat_claude_thanh/offboard`, { reason: 'test' }, hoangToken);
+  check('Hoàng (member) offboard seat -> 403', offboardAsMember.status === 403, offboardAsMember);
+
+  const offboardMissingReason = await post(`${CP}/v1/seats/seat_khong_ton_tai/offboard`, {}, thanhToken);
+  check('offboard thiếu reason -> 400', offboardMissingReason.status === 400, offboardMissingReason);
+
+  const offboardNotFound = await post(`${CP}/v1/seats/seat_khong_ton_tai/offboard`, { reason: 'test' }, thanhToken);
+  check('offboard seat không tồn tại -> 404', offboardNotFound.status === 404, offboardNotFound);
 
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);

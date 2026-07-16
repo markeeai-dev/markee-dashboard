@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { verifyToken } = require('../shared/token');
-const { resolveSeat } = require('./registry');
+const { resolveSeat, loadRegistry, REGISTRY_PATH } = require('./registry');
 const { scanForSecrets, scanForPii, redact } = require('../shared/governance-scan');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -176,6 +176,38 @@ const server = http.createServer((req, res) => {
   const requestStartedAt = Date.now();
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  // MVP3 Đợt 5 — Seat Offboarding: đường ghi DUY NHẤT vào registry.json, xác thực bằng
+  // INTERNAL_SERVICE_SECRET (KHÔNG phải token nghiệp vụ ký cho AI request) — Control Plane gọi
+  // sau khi admin xác nhận offboard, để enforcement thật xảy ra ngay (Adapter đọc lại file này
+  // mỗi request, xem registry.js). Phải xử lý và return TRƯỚC toàn bộ logic proxy AI bên dưới.
+  if (req.method === 'POST' && /^\/internal\/v1\/seats\/[^/]+\/status$/.test(req.url)) {
+    if (!INTERNAL_SERVICE_SECRET || token !== INTERNAL_SERVICE_SECRET) {
+      return sendJson(res, 401, { error: 'invalid_internal_secret' });
+    }
+    const seatId = req.url.split('/')[4];
+    const chunks = [];
+    req.on('data', (c) => chunks.push(c));
+    req.on('end', () => {
+      let body;
+      try {
+        body = JSON.parse(chunks.length ? Buffer.concat(chunks).toString('utf8') : '{}');
+      } catch {
+        return sendJson(res, 400, { error: 'invalid_json_body' });
+      }
+      if (!body.status) return sendJson(res, 400, { error: 'missing_status' });
+      try {
+        const registry = loadRegistry();
+        if (!registry[seatId]) return sendJson(res, 404, { error: 'seat_not_found' });
+        registry[seatId].status = body.status;
+        fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
+        return sendJson(res, 200, { seat_id: seatId, status: body.status });
+      } catch (err) {
+        return sendJson(res, 500, { error: 'registry_write_failed', detail: err.message });
+      }
+    });
+    return;
+  }
 
   // Env vars CENTER_AI_* nếu có mặt trong request (vd header debug) KHÔNG được đọc
   // ở đây để quyết định identity — chỉ token mới có giá trị (security contract Q24.2).

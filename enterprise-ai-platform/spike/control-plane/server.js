@@ -22,6 +22,10 @@ const HOST = process.env.HOST || '127.0.0.1';
 const GATEWAY_TOKEN_SECRET = process.env.CENTERAI_TOKEN_SECRET;
 const EMPLOYEE_TOKEN_SECRET = process.env.CENTERAI_EMPLOYEE_TOKEN_SECRET;
 const GATEWAY_BASE_URL = process.env.GATEWAY_BASE_URL || 'https://valeron.tech';
+// MVP3 Đợt 5 — Seat Offboarding: Control Plane gọi thẳng sang Adapter để enforce thật (Adapter
+// vẫn sở hữu registry.json, Control Plane không tự sửa file). Mặc định đúng thực tế pilot này —
+// 2 service cùng chạy 1 droplet.
+const ADAPTER_INTERNAL_URL = process.env.ADAPTER_INTERNAL_URL || 'http://127.0.0.1:8080';
 const IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6h (Q18/Q24.5 — không dùng ranh giới "cùng ngày")
 const GATEWAY_TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // đủ dài cho 1 ca làm việc
 // MVP2 hạng mục 4 — Task claim/lease (Q20). Lease tự gia hạn mỗi khi người giữ claim tạo
@@ -620,6 +624,132 @@ async function handleDecideApprovalRequest(req, params, approve) {
   return { status: 200, body: { approval_request_id: params.id, status: 'rejected' } };
 }
 
+// Cùng gap class đã vá cho full_audit_grants (Vá gap A) — 1 approval đã cấp không tắt sớm được
+// nếu admin đổi ý/cấp nhầm, chỉ tự hết hạn theo duration_hours. Cùng cách vá: set expires_at =
+// now(), findActiveApproval đã lọc expires_at > now() nên biến mất khỏi active NGAY.
+async function handleRevokeApproval(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query('SELECT id, status, expires_at FROM approval_requests WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'approval_request_not_found');
+
+  if (rows[0].status === 'approved' && new Date(rows[0].expires_at).getTime() > Date.now()) {
+    await query(`UPDATE approval_requests SET expires_at = now() WHERE id = $1`, [params.id]);
+    await writeAuditLog(emp.id, 'approval_revoked', 'approval_request', params.id, {});
+  }
+  return { status: 200, body: { revoked: true } };
+}
+
+// --- MVP3 Đợt 5 — Pattern Library (Q16): CHỈ phần "generalize có gate", KHÔNG bật reuse tự
+// động giữa project (tài liệu ghi rõ khoá tới MVP4). `content_anonymized` do chính người gọi tự
+// tay viết lại — không có auto-redaction/anonymize tự động, cùng lý do đã từ chối regex Data
+// Classification real-time ở Đợt 4: ẩn danh hoá tự động không đáng tin, phải là hành động thủ
+// công có ý thức của con người. ---
+
+async function handleGeneralizePattern(req) {
+  const emp = await requireEmployee(req);
+  const body = await readJsonBody(req);
+  if (!body.title || !body.content || !body.category) throw new ApiError(400, 'missing_fields');
+
+  const patternId = id('pat');
+  await query(
+    `INSERT INTO pattern_library (id, source_context_id, title, content_anonymized, category, generalized_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [patternId, body.source_context_id || null, body.title, body.content, body.category, emp.id]
+  );
+  return { status: 201, body: { pattern_id: patternId } };
+}
+
+async function handleApprovePattern(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query('SELECT id, generalized_by, approved_by FROM pattern_library WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'pattern_not_found');
+  if (rows[0].approved_by) throw new ApiError(400, 'already_approved');
+  // Đúng yêu cầu tài liệu Q16: "người duyệt phải khác người tạo" — khác hẳn context/ingest
+  // (tự khai) hay Approval workflow Đợt 4 (không có ràng buộc này, mục đích khác).
+  if (rows[0].generalized_by === emp.id) throw new ApiError(400, 'cannot_approve_own_pattern');
+
+  await query('UPDATE pattern_library SET approved_by = $1 WHERE id = $2', [emp.id, params.id]);
+  await writeAuditLog(emp.id, 'pattern_approved', 'pattern_library', params.id, {});
+  return { status: 200, body: { pattern_id: params.id, approved: true } };
+}
+
+async function handleListPatterns(req, url) {
+  const emp = await requireEmployee(req);
+  const category = url.searchParams.get('category');
+  const statusPending = url.searchParams.get('status') === 'pending';
+  if (statusPending) requireAdmin(emp); // chỉ admin xem được hàng chờ duyệt
+
+  const conditions = [statusPending ? 'pl.approved_by IS NULL' : 'pl.approved_by IS NOT NULL'];
+  const params = [];
+  if (category) {
+    params.push(category);
+    conditions.push(`pl.category = $${params.length}`);
+  }
+  const { rows } = await query(
+    `SELECT pl.id, pl.title, pl.content_anonymized, pl.category, pl.created_at,
+            g.full_name AS generalized_by_name, a.full_name AS approved_by_name
+     FROM pattern_library pl
+       JOIN employees g ON g.id = pl.generalized_by
+       LEFT JOIN employees a ON a.id = pl.approved_by
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY pl.created_at DESC LIMIT 50`,
+    params
+  );
+  return { status: 200, body: { patterns: rows } };
+}
+
+// --- MVP3 Đợt 5 — Seat Offboarding: enforcement THẬT, không chỉ đổi cờ DB. seats.status/
+// seat_runtime_registry.status ở Control Plane KHÔNG phải nơi Adapter thực sự chặn (Adapter đọc
+// registry.json trên đĩa, xem gateway-adapter/registry.js) — nếu chỉ đổi DB thì offboarding là
+// tính năng giấy tờ không có tác dụng thật. Gọi thẳng sang Adapter để enforce trước khi báo
+// thành công, không cập nhật DB nếu Adapter không xác nhận được. ---
+
+async function handleListSeats(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query(
+    `SELECT s.id, s.provider, s.status, srr.employee_id, e.full_name AS employee_name, srr.status AS runtime_status
+     FROM seats s
+       LEFT JOIN seat_runtime_registry srr ON srr.seat_id = s.id
+       LEFT JOIN employees e ON e.id = srr.employee_id
+     ORDER BY s.id`
+  );
+  return { status: 200, body: { seats: rows } };
+}
+
+async function handleOffboardSeat(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const body = await readJsonBody(req);
+  if (!body.reason) throw new ApiError(400, 'missing_reason');
+
+  const { rows } = await query('SELECT id, status FROM seats WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'seat_not_found');
+  if (rows[0].status === 'revoked') throw new ApiError(400, 'already_revoked');
+
+  // Await, KHÔNG fire-and-forget — phải biết chắc enforcement thật đã xảy ra trước khi báo
+  // thành công, không được để DB nói "đã offboard" trong khi seat vẫn truy cập được thật.
+  let adapterRes;
+  try {
+    adapterRes = await fetch(`${ADAPTER_INTERNAL_URL}/internal/v1/seats/${encodeURIComponent(params.id)}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` },
+      body: JSON.stringify({ status: 'destroyed' }),
+    });
+  } catch (err) {
+    throw new ApiError(502, 'adapter_unreachable', { detail: err.message });
+  }
+  if (!adapterRes.ok) throw new ApiError(502, 'adapter_rejected_status_update');
+
+  await query(`UPDATE seats SET status = 'revoked' WHERE id = $1`, [params.id]);
+  await query(`UPDATE seat_runtime_registry SET status = 'destroyed', updated_at = now() WHERE seat_id = $1`, [params.id]);
+  await writeAuditLog(emp.id, 'seat_offboarded', 'seat', params.id, { reason: body.reason });
+
+  return { status: 200, body: { seat_id: params.id, status: 'revoked' } };
+}
+
 async function handleListAuditLogs(req) {
   const emp = await requireEmployee(req);
   requireAdmin(emp);
@@ -838,16 +968,26 @@ async function handleIngestContext(req) {
   if (!body.project_id || !body.type || !body.content) throw new ApiError(400, 'missing_fields');
   if (!CONTEXT_TYPE_LABEL[body.type]) throw new ApiError(400, 'invalid_type');
 
-  // approved_by: hệ thống CHƯA có Approval workflow thật (hoãn có chủ đích ở MVP3) — nếu
-  // truyền lên thì TIN TRỰC TIẾP giá trị đó (tự khai đã duyệt), không ép "người duyệt phải
-  // khác người tạo" (đó là quy tắc riêng của Pattern Library ở Q16, không áp cho bảng này).
+  // approved_by ở ĐÂY vẫn là tự khai (TIN TRỰC TIẾP giá trị truyền lên) — khác với Approval
+  // workflow xây ở Đợt 4 (gate AI access theo Data Classification, không liên quan tới ai được
+  // đánh dấu "đã duyệt" một context) và khác với gate riêng "người duyệt phải khác người tạo"
+  // của Pattern Library (Q16, đợt này) — 3 cơ chế phục vụ 3 mục đích khác nhau, cố tình không
+  // gộp chung, không phải thiếu nhất quán.
   const approvedBy = body.approved_by === true ? emp.id : body.approved_by || null;
+
+  // Q16 — Company Brain scope_level, thu hẹp: 5 giá trị hợp lệ ở CHECK constraint, nhưng chỉ
+  // session/personal/project có injection logic thật ở đợt này (department/company chưa test
+  // được thật vì pilot chỉ có 1 project — xem MVP3-PROGRESS.md). Vẫn nhận đủ 5 giá trị ở đây
+  // để không phải sửa lại API khi có dữ liệu thật để làm phần còn lại.
+  const SCOPE_LEVELS = ['session', 'personal', 'project', 'department', 'company'];
+  if (body.scope_level && !SCOPE_LEVELS.includes(body.scope_level)) throw new ApiError(400, 'invalid_scope_level');
+  const scopeLevel = body.scope_level || 'project';
 
   const contextId = id('ctx');
   await query(
-    `INSERT INTO project_context (id, project_id, task_id, type, content, created_by, approved_by, valid_to)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [contextId, body.project_id, body.task_id || null, body.type, body.content, emp.id, approvedBy, body.valid_to || null]
+    `INSERT INTO project_context (id, project_id, task_id, type, content, created_by, approved_by, valid_to, scope_level)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [contextId, body.project_id, body.task_id || null, body.type, body.content, emp.id, approvedBy, body.valid_to || null, scopeLevel]
   );
   return { status: 201, body: { context_id: contextId } };
 }
@@ -855,7 +995,7 @@ async function handleIngestContext(req) {
 async function handleListProjectContext(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
-    `SELECT pc.id, pc.task_id, pc.type, pc.content, pc.created_at, pc.approved_by, pc.valid_from, pc.valid_to,
+    `SELECT pc.id, pc.task_id, pc.type, pc.content, pc.created_at, pc.approved_by, pc.valid_from, pc.valid_to, pc.scope_level,
             e.full_name AS created_by_name
      FROM project_context pc JOIN employees e ON e.id = pc.created_by
      WHERE pc.project_id = $1 ORDER BY pc.created_at DESC LIMIT 50`,
@@ -1320,7 +1460,7 @@ async function handleContextRender(req, url) {
     [taskId]
   );
   const contextRes = await query(
-    `SELECT id, type, content, created_at, approved_by, valid_from, valid_to FROM project_context
+    `SELECT id, type, content, created_at, approved_by, valid_from, valid_to, scope_level FROM project_context
      WHERE task_id = $1 OR (project_id = $2 AND task_id IS NULL)
      ORDER BY created_at DESC LIMIT 20`,
     [taskId, taskRes.rows[0].project_id]
@@ -1366,6 +1506,23 @@ const routes = [
     method: 'POST',
     pattern: /^\/v1\/governance\/approval-requests\/([^/]+)\/reject$/,
     handler: (req, m) => handleDecideApprovalRequest(req, { id: m[1] }, false),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/governance\/approval-requests\/([^/]+)\/revoke$/,
+    handler: (req, m) => handleRevokeApproval(req, { id: m[1] }),
+  },
+  { method: 'POST', pattern: /^\/v1\/pattern-library\/generalize$/, handler: (req) => handleGeneralizePattern(req) },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/pattern-library\/([^/]+)\/approve$/,
+    handler: (req, m) => handleApprovePattern(req, { id: m[1] }),
+  },
+  { method: 'GET', pattern: /^\/v1\/seats$/, handler: (req) => handleListSeats(req) },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/seats\/([^/]+)\/offboard$/,
+    handler: (req, m) => handleOffboardSeat(req, { id: m[1] }),
   },
   { method: 'GET', pattern: /^\/v1\/audit-logs$/, handler: (req) => handleListAuditLogs(req) },
   { method: 'GET', pattern: /^\/v1\/flags$/, handler: (req) => handleListFlags(req) },
@@ -1506,6 +1663,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/v1/governance/approval-requests') {
       const result = await handleListApprovalRequests(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/pattern-library') {
+      const result = await handleListPatterns(req, url);
       return sendJson(res, result.status, result.body);
     }
 
