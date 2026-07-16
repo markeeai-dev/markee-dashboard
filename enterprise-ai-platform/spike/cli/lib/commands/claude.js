@@ -144,6 +144,43 @@ async function run(args, tool) {
     },
   });
 
+  // Phát hiện thật (kiểm tra thủ công) — SIGINT gửi vào tiến trình wrapper KHÔNG luôn truyền
+  // đúng xuống tiến trình con qua cross-spawn trên Windows/Git Bash, khiến `claude`/`codex` tiếp
+  // tục chạy trong khi wrapper coi như đã bị ngắt. Ngay cả khi truyền được, hoặc khi wrapper bị
+  // crash/kill đột ngột, KHÔNG có bước dọn nào chạy — Tool Session bị bỏ lại `ended_at` NULL,
+  // không có checkpoint. Không phải lỗ hổng bảo mật (token tự hết hạn đúng TTL, seat vẫn cô lập
+  // đúng) nhưng mất thông tin quan trọng cho handoff. Bắt SIGINT/SIGTERM ngay trên tiến trình
+  // wrapper (Node tự xử lý được tín hiệu này một cách đáng tin cậy trên mọi nền tảng, không phụ
+  // thuộc việc forward xuống tiến trình con) để luôn chạy đúng bước dọn trước khi thoát.
+  let cleanedUp = false;
+  async function cleanup(trigger) {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    try {
+      const headAfter = git.getHeadCommit(gitRoot);
+      const filesChanged = git.getChangedFiles(startedHeadCommit, headAfter, gitRoot);
+      await client.createCheckpoint(tsResult.tool_session_id, {
+        trigger: 'tool_close',
+        completed: [],
+        remaining: trigger === 'tool_close' ? [] : [`Phiên bị ngắt đột ngột (${trigger}) — có thể còn việc dở dang chưa ghi lại.`],
+        files_changed: filesChanged,
+        git_commit: headAfter,
+        git_branch: git.getBranch(gitRoot),
+      });
+      await client.endToolSession(tsResult.tool_session_id);
+    } catch (err) {
+      console.error('Lỗi khi dọn dẹp Tool Session:', err.message);
+    }
+  }
+
+  let interrupted = null;
+  const onSignal = (signal) => {
+    interrupted = signal;
+    child.kill('SIGKILL'); // cross-spawn không đảm bảo forward tín hiệu xuống con trên Windows
+  };
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+
   await new Promise((resolve, reject) => {
     child.on('exit', resolve);
     child.on('error', reject);
@@ -151,20 +188,13 @@ async function run(args, tool) {
 
   // Tool thoát: đóng Tool Session, checkpoint tự động — Work Session VẪN active,
   // KHÔNG tạo handoff (chỉ `company-ai end` mới làm việc đó — Q24.2/24.5).
-  const headAfter = git.getHeadCommit(gitRoot);
-  const filesChanged = git.getChangedFiles(startedHeadCommit, headAfter, gitRoot);
+  await cleanup(interrupted || 'tool_close');
 
-  await client.createCheckpoint(tsResult.tool_session_id, {
-    trigger: 'tool_close',
-    completed: [],
-    remaining: [],
-    files_changed: filesChanged,
-    git_commit: headAfter,
-    git_branch: git.getBranch(gitRoot),
-  });
-  await client.endToolSession(tsResult.tool_session_id);
-
-  console.log('\nTool Session đã đóng (checkpoint tự động đã ghi). Work Session vẫn active.');
+  if (interrupted) {
+    console.log(`\nTool Session đã bị ngắt (${interrupted}) — đã ghi checkpoint đánh dấu rõ, Work Session vẫn active.`);
+  } else {
+    console.log('\nTool Session đã đóng (checkpoint tự động đã ghi). Work Session vẫn active.');
+  }
   console.log('Chạy `company-ai end` khi đã xong hẳn việc để tạo handoff cho người tiếp theo.');
 }
 
