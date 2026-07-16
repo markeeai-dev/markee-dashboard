@@ -433,30 +433,23 @@ export default function ChatInput({
             )}
             
             {/* Dropdown chọn Model */}
-            {/* Dropdown chọn Model */}
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
               onTouchStart={() => {
-                // iOS Hack: Tắt bàn phím ảo ngay khi ngón tay chạm vào nút chọn
+                // iOS Hack: Ép ẩn bàn phím ảo để tính lại tọa độ chuẩn
                 if (document.activeElement instanceof HTMLElement) {
                   document.activeElement.blur();
                 }
               }}
               onMouseDown={() => {
-                // Đề phòng cho các trình duyệt khác
+                // Đề phòng các trình duyệt khác
                 if (document.activeElement instanceof HTMLElement) {
                   document.activeElement.blur();
                 }
               }}
               className="text-base md:text-xs bg-slate-100 border-none rounded-xl p-2 text-slate-900 outline-none focus:ring-1 focus:ring-markee-primary cursor-pointer shrink-0 max-w-35 truncate"
             >
-              {Object.entries(MODEL_CONFIG).map(([key, name]) => (
-                <option key={key} value={key} disabled={disabledModels.has(key)}>
-                  {name} {disabledModels.has(key) && '(Lỗi)'}
-                </option>
-              ))}
-            </select>
               {Object.entries(MODEL_CONFIG).map(([key, name]) => (
                 <option key={key} value={key} disabled={disabledModels.has(key)}>
                   {name} {disabledModels.has(key) && '(Lỗi)'}
