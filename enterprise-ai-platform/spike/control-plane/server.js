@@ -331,6 +331,121 @@ async function handleListFlags(req) {
   return { status: 200, body: { flags: rows } };
 }
 
+// --- MVP3 tiếp theo, hạng mục 1 · Full Audit Mode — lưu nội dung thô có redact (Q22) ---
+// Adapter gọi endpoint này TRƯỚC (kiểm tra có grant active không) rồi mới quyết định redact +
+// gửi nội dung — Control Plane vẫn tự kiểm tra lại grant còn hiệu lực lúc INSERT (defense in
+// depth, không tin tưởng tuyệt đối cache phía Adapter).
+
+async function findActiveFullAuditGrant(employeeId, projectId) {
+  const { rows } = await query(
+    `SELECT id, scope, scope_id, expires_at FROM full_audit_grants
+     WHERE expires_at > now()
+       AND ((scope = 'employee' AND scope_id = $1) OR (scope = 'project' AND scope_id = $2))
+     ORDER BY expires_at DESC LIMIT 1`,
+    [employeeId, projectId]
+  );
+  return rows[0] || null;
+}
+
+async function handleCheckActiveGrant(req, url) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || token !== INTERNAL_SERVICE_SECRET) throw new ApiError(401, 'invalid_internal_secret');
+
+  const employeeId = url.searchParams.get('employee_id');
+  const projectId = url.searchParams.get('project_id');
+  const grant = await findActiveFullAuditGrant(employeeId, projectId);
+  return { status: 200, body: { grant } };
+}
+
+async function handleIngestPrompt(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || token !== INTERNAL_SERVICE_SECRET) throw new ApiError(401, 'invalid_internal_secret');
+
+  const body = await readJsonBody(req);
+  if (!body.gateway_request_id || !body.full_audit_grant_id || !body.prompt_redacted || !body.prompt_hash) {
+    throw new ApiError(400, 'missing_fields');
+  }
+
+  // Kiểm tra lại grant còn hiệu lực NGAY LÚC GHI — không chỉ tin Adapter đã kiểm tra trước đó
+  // (grant có thể vừa hết hạn giữa lúc Adapter check và lúc request AI trả lời xong).
+  const { rows: grantRows } = await query(`SELECT id FROM full_audit_grants WHERE id = $1 AND expires_at > now()`, [body.full_audit_grant_id]);
+  if (!grantRows.length) throw new ApiError(403, 'grant_expired_or_not_found');
+
+  const promptId = id('pr');
+  await query(
+    `INSERT INTO prompts (id, gateway_request_id, employee_id, work_session_id, content_redacted, content_hash, full_audit_grant_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [promptId, body.gateway_request_id, body.employee_id || null, body.work_session_id || null, body.prompt_redacted, body.prompt_hash, body.full_audit_grant_id]
+  );
+  if (body.response_redacted) {
+    await query(`INSERT INTO responses (id, prompt_id, content_redacted) VALUES ($1,$2,$3)`, [id('rs'), promptId, body.response_redacted]);
+  }
+  return { status: 201, body: { prompt_id: promptId } };
+}
+
+// Xem nội dung thô đã lưu — chỉ admin, VÀ mỗi lần xem đều ghi audit_logs (xem = hành động cần
+// dấu vết, đúng Q22 "bắt buộc kèm lý do truy cập... ghi audit_logs", không phải xem tự do).
+async function handleListPrompts(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query(
+    `SELECT p.id, p.employee_id, e.full_name, p.content_redacted, p.created_at,
+            r.content_redacted AS response_redacted
+     FROM prompts p LEFT JOIN employees e ON e.id = p.employee_id
+       LEFT JOIN responses r ON r.prompt_id = p.id
+     WHERE p.work_session_id = $1 ORDER BY p.created_at ASC`,
+    [params.id]
+  );
+  await writeAuditLog(emp.id, 'full_audit_content_viewed', 'work_session', params.id, { row_count: rows.length });
+  return { status: 200, body: { prompts: rows } };
+}
+
+// --- MVP3 tiếp theo, hạng mục 2 · Context Confidence + Reasoning Log/ADR (Q15) ---
+
+const CONFIDENCE_DECAY_DAYS = 30; // mốc khởi điểm đơn giản (100% -> 20% qua 30 ngày), có thể
+// tinh chỉnh sau — không phải công thức "đúng" duy nhất, ghi rõ để không ai hiểu nhầm là chuẩn cứng.
+const CONTEXT_TYPE_LABEL = {
+  decision: 'Decision', status: 'Status', known_issue: 'Known issue', requirement: 'Requirement',
+  ba_feedback: 'BA feedback', next_step: 'Next step', handoff: 'Handoff', code_context: 'Code context',
+};
+
+function computeConfidence(row) {
+  if (row.valid_to && new Date(row.valid_to).getTime() < Date.now()) return 0;
+  if (row.type === 'decision' && row.approved_by) return 100; // KHÔNG decay cho decision đã duyệt (Q15)
+  const ageDays = Math.max(0, (Date.now() - new Date(row.valid_from).getTime()) / 86400000);
+  const decayed = Math.round(100 - (ageDays / CONFIDENCE_DECAY_DAYS) * 80);
+  return Math.max(20, Math.min(100, decayed));
+}
+
+function withConfidence(row) {
+  const confidence = computeConfidence(row);
+  const typeLabel = CONTEXT_TYPE_LABEL[row.type] || row.type;
+  const approvedTxt = row.approved_by ? 'approved, ' : '';
+  const staleTxt = confidence < 30 ? ', có thể đã lỗi thời' : '';
+  return { ...row, confidence, confidence_label: `${typeLabel} — ${approvedTxt}${confidence}% confidence${staleTxt}` };
+}
+
+async function handleCreateDecisionDetail(req, params) {
+  const emp = await requireEmployee(req);
+  const body = await readJsonBody(req);
+  if (!body.chosen || !body.rationale) throw new ApiError(400, 'missing_fields');
+
+  const ctxRes = await query('SELECT id, type FROM project_context WHERE id = $1', [params.id]);
+  if (!ctxRes.rows.length) throw new ApiError(404, 'context_not_found');
+  if (ctxRes.rows[0].type !== 'decision') throw new ApiError(400, 'context_not_decision_type');
+
+  const detailId = id('dd');
+  await query(
+    `INSERT INTO decision_detail (id, context_id, options_considered, criteria, chosen, rationale, superseded_reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [detailId, params.id, JSON.stringify(body.options_considered || []), JSON.stringify(body.criteria || []), body.chosen, body.rationale, body.superseded_reason || null]
+  );
+  await writeAuditLog(emp.id, 'decision_detail_created', 'project_context', params.id, { chosen: body.chosen });
+  return { status: 201, body: { decision_detail_id: detailId } };
+}
+
 // --- MVP2 · AI Timeline + AI Inbox (Q14) — "view, không phải bảng mới": union theo thời
 // gian trên các bảng MVP1 đã có, không tạo bảng mới, đúng như tài liệu yêu cầu.
 
@@ -405,12 +520,13 @@ async function handleInbox(req, url) {
 async function handleListProjectContext(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
-    `SELECT pc.id, pc.task_id, pc.type, pc.content, pc.created_at, e.full_name AS created_by_name
+    `SELECT pc.id, pc.task_id, pc.type, pc.content, pc.created_at, pc.approved_by, pc.valid_from, pc.valid_to,
+            e.full_name AS created_by_name
      FROM project_context pc JOIN employees e ON e.id = pc.created_by
      WHERE pc.project_id = $1 ORDER BY pc.created_at DESC LIMIT 50`,
     [params.projectId]
   );
-  return { status: 200, body: { context_notes: rows } };
+  return { status: 200, body: { context_notes: rows.map(withConfidence) } };
 }
 
 async function handleListTasks(req, params) {
@@ -869,7 +985,7 @@ async function handleContextRender(req, url) {
     [taskId]
   );
   const contextRes = await query(
-    `SELECT type, content, created_at FROM project_context
+    `SELECT id, type, content, created_at, approved_by, valid_from, valid_to FROM project_context
      WHERE task_id = $1 OR (project_id = $2 AND task_id IS NULL)
      ORDER BY created_at DESC LIMIT 20`,
     [taskId, taskRes.rows[0].project_id]
@@ -880,7 +996,7 @@ async function handleContextRender(req, url) {
     body: {
       task: taskRes.rows[0],
       latest_handoff: handoffRes.rows[0] || null,
-      context_notes: contextRes.rows,
+      context_notes: contextRes.rows.map(withConfidence),
     },
   };
 }
@@ -936,6 +1052,16 @@ const routes = [
     method: 'POST',
     pattern: /^\/v1\/work-sessions\/([^/]+)\/draft-handoff$/,
     handler: (req, m) => handleDraftHandoff(req, { id: m[1] }),
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/work-sessions\/([^/]+)\/prompts$/,
+    handler: (req, m) => handleListPrompts(req, { id: m[1] }),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/context\/([^/]+)\/decision-detail$/,
+    handler: (req, m) => handleCreateDecisionDetail(req, { id: m[1] }),
   },
   {
     method: 'POST',
@@ -997,6 +1123,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/v1/governance/risk-score') {
       const result = await handleGetRiskScore(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/internal/v1/governance/active-grant') {
+      const result = await handleCheckActiveGrant(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'POST' && url.pathname === '/internal/v1/gateway/prompts') {
+      const result = await handleIngestPrompt(req);
       return sendJson(res, result.status, result.body);
     }
 

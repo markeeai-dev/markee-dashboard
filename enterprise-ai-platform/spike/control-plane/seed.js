@@ -38,7 +38,22 @@ async function seed() {
      ON CONFLICT (id) DO NOTHING`
   );
 
-  console.log('[seed] done: emp_thanh, emp_hoang, 2 seats, proj_trungnguyen, task_tng142');
+  // MVP3 tiếp theo (Q15) — dữ liệu mẫu để test Context Confidence + ADR. Ghi chú thật: TOÀN
+  // BỘ sản phẩm từ trước tới giờ CHƯA có endpoint tạo mới project_context (`/v1/context/ingest`
+  // theo mục 12 tài liệu chính chưa xây ở bất kỳ MVP nào) — đây là seed test-only, không phải
+  // giả vờ có luồng nhập liệu thật. Ghi rõ trong MVP3-PROGRESS.md là việc còn thiếu thật.
+  await query(
+    `INSERT INTO project_context (id, project_id, task_id, type, content, created_by, approved_by, valid_from) VALUES
+       ('ctx_decision_1', 'proj_trungnguyen', 'task_tng142', 'decision',
+        'Chon dung retry voi backoff thay vi queue rieng cho viec goi API Facebook',
+        'emp_thanh', 'emp_thanh', now()),
+       ('ctx_status_1', 'proj_trungnguyen', 'task_tng142', 'status',
+        'Da hoan thanh phan fetch comment co ban, dang lam pagination',
+        'emp_thanh', NULL, now() - interval '20 days')
+     ON CONFLICT (id) DO NOTHING`
+  );
+
+  console.log('[seed] done: emp_thanh, emp_hoang, 2 seats, proj_trungnguyen, task_tng142, 2 project_context (Q15 test data)');
   await pool.end();
 }
 

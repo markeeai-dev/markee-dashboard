@@ -78,4 +78,23 @@ function scanForPii(text) {
   return [...scan(text, PII_PATTERNS), ...scanForCardNumber(text)];
 }
 
-module.exports = { scanForSecrets, scanForPii };
+// MVP3 tiếp theo (Full Audit Mode, Q22) — thay match bằng placeholder `[REDACTED:<type>]`,
+// tái dùng ĐÚNG các pattern đã có ở scanForSecrets/scanForPii, không viết detector thứ 2 (2 bộ
+// pattern lệch nhau là rủi ro thật — lưu "đã redact" theo pattern A nhưng chặn theo pattern B).
+// card_number giữ nguyên yêu cầu qua Luhn mới redact, đúng logic đã sửa ở scanForCardNumber —
+// KHÔNG redact bừa mọi chuỗi 13-19 số (sẽ xoá nhầm timestamp/ID thật, làm nội dung lưu vô nghĩa).
+function redact(text) {
+  if (!text) return text;
+  let result = text;
+  for (const p of [...SECRET_PATTERNS, ...PII_PATTERNS]) {
+    p.re.lastIndex = 0;
+    result = result.replace(p.re, `[REDACTED:${p.type}]`);
+  }
+  result = result.replace(/\b(?:\d[ -]?){13,19}\b/g, (match) => {
+    const digits = match.replace(/[ -]/g, '');
+    return digits.length >= 13 && digits.length <= 19 && luhnValid(digits) ? '[REDACTED:card_number]' : match;
+  });
+  return result;
+}
+
+module.exports = { scanForSecrets, scanForPii, redact };

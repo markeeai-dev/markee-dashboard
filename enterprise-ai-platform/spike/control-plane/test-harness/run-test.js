@@ -385,6 +385,113 @@ async function main() {
     flagsAsAdmin
   );
 
+  // --- MVP3 tiếp theo, hạng mục 2: Context Confidence + ADR (Q15) ---
+  const contextNotesConfidence = await get(`${CP}/v1/projects/proj_trungnguyen/context-notes`, thanhToken);
+  const decisionNote = contextNotesConfidence.json.context_notes?.find((c) => c.id === 'ctx_decision_1');
+  const statusNote = contextNotesConfidence.json.context_notes?.find((c) => c.id === 'ctx_status_1');
+  check(
+    'context-notes: decision đã approved -> confidence 100%, không decay',
+    decisionNote && decisionNote.confidence === 100 && decisionNote.confidence_label.includes('approved'),
+    decisionNote
+  );
+  check(
+    'context-notes: status chưa duyệt, 20 ngày tuổi -> confidence decay đúng khoảng 20-100%',
+    statusNote && statusNote.confidence > 20 && statusNote.confidence < 100,
+    statusNote
+  );
+
+  const contextRenderConfidence = await get(`${CP}/v1/context/render?task_id=task_tng142`, thanhToken);
+  check(
+    'context/render cũng trả kèm confidence (company-ai claude dùng endpoint này)',
+    contextRenderConfidence.status === 200 && contextRenderConfidence.json.context_notes.every((c) => typeof c.confidence === 'number'),
+    contextRenderConfidence
+  );
+
+  const adrMissingFields = await post(`${CP}/v1/context/ctx_decision_1/decision-detail`, {}, thanhToken);
+  check('tạo ADR thiếu field -> 400', adrMissingFields.status === 400, adrMissingFields);
+
+  const adrWrongType = await post(
+    `${CP}/v1/context/ctx_status_1/decision-detail`,
+    { chosen: 'x', rationale: 'y' },
+    thanhToken
+  );
+  check('tạo ADR trên context không phải type=decision -> 400', adrWrongType.status === 400 && adrWrongType.json.error === 'context_not_decision_type', adrWrongType);
+
+  const adrOk = await post(
+    `${CP}/v1/context/ctx_decision_1/decision-detail`,
+    {
+      options_considered: ['retry voi backoff', 'queue rieng'],
+      criteria: ['do phuc tap', 'chi phi van hanh'],
+      chosen: 'retry voi backoff',
+      rationale: 'Don gian hon, khong can them ha tang queue cho quy mo hien tai',
+    },
+    thanhToken
+  );
+  check('tạo ADR hợp lệ -> 201', adrOk.status === 201 && !!adrOk.json.decision_detail_id, adrOk);
+
+  // --- MVP3 tiếp theo, hạng mục 1: Full Audit Mode — lưu nội dung thô có redact (Q22) ---
+  const activeGrantWrongSecret = await get(`${CP}/internal/v1/governance/active-grant?employee_id=emp_thanh&project_id=proj_trungnguyen`, 'sai-secret-hoan-toan');
+  check('active-grant sai internal secret -> 401', activeGrantWrongSecret.status === 401, activeGrantWrongSecret);
+
+  // Dùng employee_id không có thật thay vì emp_hoang — test-harness chạy nhiều lần tích luỹ
+  // grant thật (vd Hoàng đã có grant 2h còn hiệu lực từ lần chạy Governance trước đó), giả
+  // định "Hoàng chưa có grant" không còn đúng theo DB thật, không phải lỗi code active-grant.
+  const activeGrantNone = await get(`${CP}/internal/v1/governance/active-grant?employee_id=emp_khong_ton_tai&project_id=proj_khong_ton_tai`, INTERNAL_SECRET);
+  check('active-grant khi không có grant nào khớp -> grant:null', activeGrantNone.status === 200 && activeGrantNone.json.grant === null, activeGrantNone);
+
+  const grantForThanh = await post(
+    `${CP}/v1/governance/full-audit-mode`,
+    { scope: 'employee', scope_id: 'emp_thanh', reason: 'test luu noi dung tho co redact', duration_hours: 1 },
+    thanhToken
+  );
+  check('tạo grant cho Thanh (test hạng mục 1) -> 201', grantForThanh.status === 201, grantForThanh);
+  const thanhGrantId = grantForThanh.json.grant_id;
+
+  const activeGrantFound = await get(`${CP}/internal/v1/governance/active-grant?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check('active-grant tìm đúng grant vừa tạo cho Thanh', activeGrantFound.status === 200 && activeGrantFound.json.grant?.id === thanhGrantId, activeGrantFound);
+
+  const ingestPromptWrongSecret = await post(`${CP}/internal/v1/gateway/prompts`, { gateway_request_id: 'x' }, 'sai-secret-hoan-toan');
+  check('ingest prompt sai internal secret -> 401', ingestPromptWrongSecret.status === 401, ingestPromptWrongSecret);
+
+  const ingestPromptFakeGrant = await post(
+    `${CP}/internal/v1/gateway/prompts`,
+    { gateway_request_id: 'x', full_audit_grant_id: 'fag_khong_ton_tai', prompt_redacted: 'test', prompt_hash: 'abc' },
+    INTERNAL_SECRET
+  );
+  check('ingest prompt với grant_id giả/hết hạn -> 403', ingestPromptFakeGrant.status === 403 && ingestPromptFakeGrant.json.error === 'grant_expired_or_not_found', ingestPromptFakeGrant);
+
+  const ingestPromptOk = await post(
+    `${CP}/internal/v1/gateway/prompts`,
+    {
+      gateway_request_id: 'gw_test_full_audit',
+      employee_id: 'emp_thanh',
+      work_session_id: wsId,
+      prompt_redacted: 'giup toi debug ham nay, key la [REDACTED:aws_access_key]',
+      prompt_hash: 'sha256_gia_lap_cho_test',
+      full_audit_grant_id: thanhGrantId,
+      response_redacted: 'day la cach debug...',
+    },
+    INTERNAL_SECRET
+  );
+  check('ingest prompt với grant hợp lệ -> 201', ingestPromptOk.status === 201 && !!ingestPromptOk.json.prompt_id, ingestPromptOk);
+
+  const promptsAsMember = await get(`${CP}/v1/work-sessions/${wsId}/prompts`, hoangToken);
+  check('Hoàng (member) xem prompts đã lưu -> 403', promptsAsMember.status === 403, promptsAsMember);
+
+  const promptsAsAdmin = await get(`${CP}/v1/work-sessions/${wsId}/prompts`, thanhToken);
+  check(
+    'Thanh (admin) xem prompts -> 200, thấy đúng nội dung ĐÃ REDACT (không phải bản gốc)',
+    promptsAsAdmin.status === 200 && promptsAsAdmin.json.prompts.some((p) => p.id === ingestPromptOk.json.prompt_id && p.content_redacted.includes('[REDACTED:aws_access_key]')),
+    promptsAsAdmin
+  );
+
+  const auditLogsAfterView = await get(`${CP}/v1/audit-logs`, thanhToken);
+  check(
+    'Xem prompts đã tự ghi audit_logs (full_audit_content_viewed) — xem là hành động có dấu vết',
+    auditLogsAfterView.status === 200 && auditLogsAfterView.json.audit_logs.some((a) => a.action === 'full_audit_content_viewed'),
+    auditLogsAfterView
+  );
+
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);
 }
