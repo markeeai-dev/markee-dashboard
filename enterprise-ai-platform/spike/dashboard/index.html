@@ -277,10 +277,11 @@ async function renderMemory(root) {
   root.innerHTML = projects.map((p, i) => `
     <div class="panel">
       <h2>Project Memory — ${esc(p.name)}</h2>
-      ${notesByProject[i].context_notes.length ? `<table><thead><tr><th>Loại</th><th>Nội dung</th><th>Người tạo</th><th>Lúc</th></tr></thead>
+      ${notesByProject[i].context_notes.length ? `<table><thead><tr><th>Loại</th><th>Nội dung</th><th>Người tạo</th><th>Lúc</th><th>Confidence (Q15)</th></tr></thead>
       <tbody>${notesByProject[i].context_notes.map((c) => `
         <tr><td><span class="pill warn">${esc(c.type)}</span></td><td>${esc(c.content)}</td>
-        <td>${esc(c.created_by_name)}</td><td>${fmtDate(c.created_at)}</td></tr>`).join('')}</tbody></table>` :
+        <td>${esc(c.created_by_name)}</td><td>${fmtDate(c.created_at)}</td>
+        <td><span class="pill ${c.confidence >= 70 ? 'ok' : c.confidence >= 30 ? 'warn' : 'danger'}">${esc(c.confidence)}%</span></td></tr>`).join('')}</tbody></table>` :
       '<div class="empty">Chưa có ghi chú context nào cho project này.</div>'}
     </div>`).join('') || '<div class="panel empty">Chưa có project nào.</div>';
 }

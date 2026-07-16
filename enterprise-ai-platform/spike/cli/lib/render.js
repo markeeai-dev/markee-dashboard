@@ -51,7 +51,9 @@ function renderCheckpointMd(gitRoot, { latestHandoff, contextNotes }) {
   if (contextNotes && contextNotes.length) {
     lines.push('', '## Ghi chú khác (requirement / decision / BA feedback)');
     for (const note of contextNotes) {
-      lines.push(`- [${note.type}] ${note.content}`);
+      // Confidence (Q15) — tính sẵn ở Control Plane, CLI chỉ hiển thị, không tự tính lại.
+      const confidenceTxt = typeof note.confidence === 'number' ? ` _(${note.confidence_label})_` : '';
+      lines.push(`- [${note.type}] ${note.content}${confidenceTxt}`);
     }
   }
 

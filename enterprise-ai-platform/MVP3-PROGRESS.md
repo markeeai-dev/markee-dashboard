@@ -84,3 +84,82 @@ Data Classification, Approval workflow, và việc nối Full Audit Mode vào ch
 đổi sang lưu nội dung thô có redact — cả 3 đều ghi rõ lý do hoãn trong plan (cần Policy Engine/
 cơ chế pending-state/redaction chuẩn trước, làm ẩu ở đây rủi ro hơn không làm). Không có gì
 liên quan ngành điện/năng lượng trong toàn bộ đợt này, đúng chỉ đạo của người dùng.
+
+---
+
+# Đợt 2 — Full Audit Mode (lưu nội dung thô có redact) + Context Confidence/ADR (Q15)
+
+> Kế hoạch: xem plan đã duyệt lần 2. Làm đúng phần đã tự hứa hoãn ở Đợt 1 ("để đợt sau khi có
+> redaction rõ ràng") — nay có `governance-scan.js` thật, đủ điều kiện làm tiếp.
+
+## Bước 1 — Schema
+
+**PASS.** `005_full_audit_content.sql`: bảng `prompts`/`responses`, mọi dòng bắt buộc gắn
+`full_audit_grant_id` (FK, NOT NULL) — không có đường nào chèn được dòng không gắn grant nào.
+`006_context_confidence.sql`: thêm `approved_by`/`valid_from`/`valid_to` vào `project_context`
+(đã có trong schema đầy đủ mục 11, MVP1 cắt gọn, thêm lại đúng lúc cần), bảng `decision_detail`
+(ADR). Xác nhận bằng query trực tiếp trước khi code gì thêm.
+
+## Bước 2 — `redact()` trong `governance-scan.js`
+
+**PASS — 8/8 test cục bộ**, gồm: secret/PII được thay đúng bằng `[REDACTED:<type>]`, phần còn
+lại của text giữ nguyên, redact bên trong payload JSON vẫn giữ JSON hợp lệ (quan trọng vì đây
+là bản sẽ lưu), số thẻ Luhn-invalid (timestamp...) KHÔNG bị redact nhầm, và — quan trọng nhất —
+**scan lại trên bản đã redact không còn phát hiện secret/PII gốc nào**. Tái dùng đúng 1 bộ
+pattern với `scanForSecrets`/`scanForPii` (không viết detector thứ 2, tránh 2 bộ lệch nhau).
+
+## Bước 3-4 — Control Plane: endpoint cho cả 2 hạng mục
+
+**PASS — 68/68 test-harness (tăng từ 52)**, test xong TRƯỚC khi đụng Adapter đúng thứ tự plan.
+
+- Hạng mục 1: `GET /internal/v1/governance/active-grant`, `POST /internal/v1/gateway/prompts`
+  (re-check grant còn hạn ngay lúc ghi, không chỉ tin Adapter đã check trước đó — defense in
+  depth), `GET /v1/work-sessions/:id/prompts` (chỉ admin, **mỗi lần xem tự ghi 1 dòng
+  `audit_logs`** — xem là hành động có dấu vết, không phải xem tự do).
+- Hạng mục 2: `context/render` và `context-notes` (đã có từ MVP1) nay trả kèm
+  `confidence`/`confidence_label` tính lúc đọc (không lưu cứng). `POST /v1/context/:id/decision-detail`
+  (ADR) — validate đúng type=decision mới tạo được.
+- **Phát hiện thật giữa chừng**: `project_context` từ trước tới giờ CHƯA từng có endpoint tạo
+  mới (`/v1/context/ingest` theo mục 12 tài liệu chính chưa xây ở bất kỳ MVP nào) — thêm seed
+  data để test được Confidence/ADR trên dữ liệu thật, ghi rõ đây là gap có thật của sản phẩm
+  (không phải lỗi đợt này), để làm khi có luồng nhập context thật.
+- 1 test tự viết sai giả định (nghĩ Hoàng chưa có grant nào, nhưng grant thật từ lần test Đợt 1
+  vẫn còn hiệu lực) — sửa lại test cho đúng với dữ liệu thật, không phải sửa code sản phẩm.
+
+## Bước 5 — Gateway Adapter: nối Full Audit Mode capture thật
+
+**PASS**, test theo đúng thứ tự đã dùng ở Đợt 1 (mock trước → traffic thật → CLI thật):
+- a) Mock test gốc — 7/7 PASS, không phá gì.
+- b-c) Traffic thật qua Adapter công khai trong lúc Thanh có grant active: 1 request nội dung
+  bình thường → lưu đúng nguyên văn; 1 request có CCCD giả lập → **lưu đúng bản đã redact**
+  (`[REDACTED:vn_national_id]`), trong khi request gửi THẬT lên Claude vẫn giữ nguyên nội dung
+  gốc (đúng Metadata enforcement — chỉ khác nhau giữa bản gửi đi và bản lưu lại).
+- d) `company-ai claude` thật (tool-use + streaming) — không bị ảnh hưởng.
+
+**Giới hạn thật, ghi rõ**: không test được đường "không có grant active → không lưu gì" bằng
+traffic thật ngay lúc này, vì cả Thanh lẫn Hoàng đều đang có grant active thật tồn đọng từ các
+lần test trước (chưa có endpoint revoke). Đường này đã test đúng ở tầng Control Plane (query
+không khớp trả về `null`) và đúng theo review code (chỉ 1 điều kiện `if (activeGrant)` duy nhất
+dẫn tới việc lưu — không có đường nào khác).
+
+## Bước 6 — CLI + Dashboard hiển thị Confidence
+
+**PASS.** `company-ai claude` thật → `checkpoint.md` hiện đúng
+`[decision] ... (Decision — approved, 100% confidence)` và
+`[status] ... (Status — 47% confidence)` (khớp đúng công thức decay: 20 ngày tuổi →
+100-(20/30)*80≈47%). Dashboard Project Memory thêm cột Confidence (màu theo ngưỡng).
+
+## Verification cuối (theo đúng yêu cầu plan)
+
+- `systemctl status` cả 2 service — active xuyên suốt, không crash-loop.
+- Test-harness: 52 → **68/68 PASS**, không regression phần cũ.
+- Xác nhận bằng dữ liệu thật (không chỉ tin code): query trực tiếp bảng `prompts` sau traffic
+  thật, thấy đúng bản đã redact, không thấy giá trị CCCD gốc `079203012345` ở đâu cả.
+
+## Chưa làm (đúng phạm vi plan đợt 2, không phải bỏ sót)
+
+KPI 4 lớp (chỉ 3/4 lớp có dữ liệu thật, Outcome cần tích hợp CI/PR/QA chưa có — bịa số là đúng
+thứ tài liệu cấm), Company Brain `scope_level` (cần bảng `departments` chưa có + Pattern
+Library chính tài liệu yêu cầu hoãn tới MVP4), Intent-centric Q12 (chỉ có ý nghĩa sau khi có dữ
+liệu prompt/response thật để gắn vào — vừa mới bắt đầu có ở đợt này), Policy engine, webhook
+Jira/Linear, workflow offboarding seat — đều cần domain/tích hợp bên thứ 3 chưa có.
