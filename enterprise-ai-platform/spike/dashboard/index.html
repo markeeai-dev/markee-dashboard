@@ -3,45 +3,160 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Center AI — Ops Dashboard (MVP1)</title>
+<title>Center AI — Ops Dashboard</title>
 <style>
-  :root { --bg:#0f1115; --panel:#171a21; --border:#262b36; --text:#e6e8ee; --muted:#8b93a7;
-          --accent:#5b8cff; --ok:#33c17a; --warn:#e0a72e; --danger:#e05a5a; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
-  header { display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--border); }
-  header h1 { font-size:16px; margin:0; font-weight:600; }
-  header .who { color:var(--muted); font-size:13px; }
-  nav { display:flex; gap:4px; padding:10px 20px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
-  nav button { background:none; border:1px solid transparent; color:var(--muted); padding:6px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
-  nav button.active { background:var(--panel); color:var(--text); border-color:var(--border); }
-  main { padding:20px; max-width:1100px; margin:0 auto; }
-  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:16px; }
-  .panel h2 { font-size:14px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--border); vertical-align:top; }
-  th { color:var(--muted); font-weight:500; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; }
-  .pill.ok { background:rgba(51,193,122,.15); color:var(--ok); }
-  .pill.warn { background:rgba(224,167,46,.15); color:var(--warn); }
-  .pill.danger { background:rgba(224,90,90,.15); color:var(--danger); }
-  .home-grid { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:16px; }
-  @media (max-width:800px) { .home-grid { grid-template-columns: 1fr; } }
-  .empty { color:var(--muted); font-size:13px; padding:8px 0; }
-  #loginScreen { max-width:360px; margin:80px auto; }
-  #loginScreen input { width:100%; padding:9px 10px; margin:6px 0 14px; background:#0c0e12; border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:14px; }
-  #loginScreen label { font-size:12px; color:var(--muted); }
-  #loginScreen button, .btn { background:var(--accent); color:#fff; border:none; padding:9px 16px; border-radius:6px; cursor:pointer; font-size:14px; }
-  #loginError { color:var(--danger); font-size:13px; min-height:18px; }
-  code { background:#0c0e12; padding:1px 5px; border-radius:4px; font-size:12px; }
-  a.linkbtn { color:var(--accent); text-decoration:none; font-size:12px; cursor:pointer; }
+  /* Giữ NGUYÊN tên biến CSS cũ (--bg/--panel/--border/--text/--muted/--accent/--ok/--warn/
+     --danger) — các hàm render dùng inline style trỏ thẳng vào chúng, đổi tên là vỡ hết.
+     Chỉ đổi GIÁ TRỊ + thêm biến mới, nên toàn bộ 11 tab tự đẹp lên mà không phải sửa JS. */
+  :root {
+    --bg:#0b0e14; --surface:#111621; --panel:#141a26; --panel-hi:#19202e;
+    --border:#222b3d; --border-hi:#2e3a52;
+    --text:#e9edf5; --muted:#8792a8; --faint:#5d6880;
+    --accent:#4c8dff; --accent-hi:#6ba1ff; --accent-dim:rgba(76,141,255,.12);
+    --ok:#3ecf8e; --warn:#e6a338; --danger:#f0616d;
+    --radius:10px; --radius-sm:6px;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sidebar-w: 224px;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; font-family:var(--font); background:var(--bg); color:var(--text);
+         font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+  ::selection { background:var(--accent-dim); }
+
+  /* ---- Vỏ ứng dụng: sidebar cố định + vùng nội dung cuộn riêng ----
+     Trước đây 11 tab xếp ngang bị TRÀN/cắt mất ở cửa sổ hẹp (lỗi thật, thấy trên ảnh chụp
+     màn hình của người dùng). Sidebar dọc chứa thoải mái, không bao giờ tràn dù thêm tab. */
+  #app { display:grid; grid-template-columns:var(--sidebar-w) 1fr; height:100vh; }
+
+  #sidebar { background:var(--surface); border-right:1px solid var(--border);
+             display:flex; flex-direction:column; overflow-y:auto; }
+  .brand { padding:18px 18px 14px; border-bottom:1px solid var(--border); }
+  .brand-name { font-size:15px; font-weight:650; letter-spacing:-.01em; display:flex; align-items:center; gap:8px; }
+  .brand-dot { width:8px; height:8px; border-radius:50%; background:var(--accent);
+               box-shadow:0 0 0 3px var(--accent-dim); flex:none; }
+  .brand-sub { font-size:11px; color:var(--faint); margin-top:4px; letter-spacing:.02em; }
+  .nav-group { padding:14px 10px 0; }
+  .nav-group-label { font-size:10px; color:var(--faint); text-transform:uppercase;
+                     letter-spacing:.09em; font-weight:600; padding:0 8px 6px; }
+  nav button { display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+               background:none; border:none; color:var(--muted); padding:7px 8px;
+               border-radius:var(--radius-sm); cursor:pointer; font-size:13px;
+               font-family:inherit; margin-bottom:1px; transition:background .12s, color .12s; }
+  nav button:hover { background:var(--panel); color:var(--text); }
+  nav button.active { background:var(--accent-dim); color:var(--accent-hi); font-weight:550; }
+  nav button .ico { width:15px; text-align:center; flex:none; opacity:.85; font-size:12px; }
+  .sidebar-foot { margin-top:auto; padding:12px 14px; border-top:1px solid var(--border);
+                  font-size:12px; color:var(--faint); }
+  .sidebar-foot .who-name { color:var(--text); font-weight:550; font-size:13px; }
+  .sidebar-foot .who-role { display:inline-block; font-size:10px; padding:1px 6px; border-radius:4px;
+                            background:var(--panel-hi); color:var(--muted); margin-left:6px;
+                            text-transform:uppercase; letter-spacing:.05em; }
+
+  #mainpane { overflow-y:auto; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px;
+            padding:0 26px; height:56px; border-bottom:1px solid var(--border);
+            position:sticky; top:0; background:rgba(11,14,20,.85);
+            backdrop-filter:blur(8px); z-index:5; }
+  .topbar h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:-.01em; }
+  main { padding:22px 26px 60px; max-width:1240px; }
+
+  /* ---- Panel / bảng / pill: dùng chung bởi cả 11 tab ---- */
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius);
+           padding:16px 18px; margin-bottom:14px; }
+  .panel h2 { font-size:12px; margin:0 0 12px; color:var(--muted); text-transform:uppercase;
+              letter-spacing:.07em; font-weight:600; }
+
+  /* Bảng rộng tự cuộn NGANG trong khung của nó — không bao giờ để cả trang trượt ngang.
+     KHÔNG dùng white-space:nowrap: các bảng như Project Memory/Pattern Library có ô nội dung
+     dài, ép 1 dòng sẽ tạo bảng rộng vô lý phải kéo ngang mới đọc được. Cho chữ xuống dòng tự
+     nhiên, chỉ cuộn khi thật sự không đủ chỗ. */
+  .panel table { display:block; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px;
+          font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--faint); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  tbody tr:last-child td { border-bottom:none; }
+  tbody tr:hover td { background:var(--panel-hi); }
+
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+          font-weight:550; white-space:nowrap; }
+  .pill.ok { background:rgba(62,207,142,.13); color:var(--ok); box-shadow:inset 0 0 0 1px rgba(62,207,142,.2); }
+  .pill.warn { background:rgba(230,163,56,.13); color:var(--warn); box-shadow:inset 0 0 0 1px rgba(230,163,56,.2); }
+  .pill.danger { background:rgba(240,97,109,.13); color:var(--danger); box-shadow:inset 0 0 0 1px rgba(240,97,109,.2); }
+
+  .home-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; align-items:start; }
+  @media (max-width:1000px) { .home-grid { grid-template-columns:1fr; } }
+  .empty { color:var(--faint); font-size:13px; padding:6px 0; }
+
+  /* ---- Dải số tổng quan trên Trang chủ: tóm tắt trước, chi tiết sau ---- */
+  .stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:14px; margin-bottom:14px; }
+  @media (max-width:1000px) { .stats { grid-template-columns:repeat(2, 1fr); } }
+  @media (max-width:520px) { .stats { grid-template-columns:1fr; } }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:15px 16px; }
+  .stat-label { font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.08em; font-weight:600; }
+  .stat-value { font-size:26px; font-weight:640; margin:6px 0 2px; letter-spacing:-.02em;
+                font-variant-numeric:tabular-nums; line-height:1.1; }
+  .stat-sub { font-size:11px; color:var(--faint); }
+  .stat.accent .stat-value { color:var(--accent-hi); }
+
+  /* Dòng sự kiện/ghi chú trên Trang chủ */
+  .feed-item { padding:9px 0; border-bottom:1px solid var(--border); }
+  .feed-item:last-child { border-bottom:none; }
+  .feed-item:first-child { padding-top:0; }
+  .feed-main { font-size:13px; }
+  .feed-meta { font-size:11px; color:var(--faint); margin-top:3px; }
+
+  /* ---- Form controls (các render function dùng inline style trỏ vào biến trên, phần này
+         lo cho control không có inline style) ---- */
+  input, select, textarea { font-family:inherit; font-size:13px; color:var(--text);
+    background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm);
+    padding:7px 10px; outline:none; transition:border-color .12s, box-shadow .12s; }
+  input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-dim); }
+  input::placeholder { color:var(--faint); }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+    outline:2px solid var(--accent); outline-offset:2px; }
+
+  .btn { background:var(--accent); color:#fff; border:none; padding:8px 15px;
+         border-radius:var(--radius-sm); cursor:pointer; font-size:13px; font-weight:550;
+         font-family:inherit; transition:background .12s; }
+  .btn:hover { background:var(--accent-hi); }
+  code { background:var(--bg); border:1px solid var(--border); padding:1px 5px;
+         border-radius:4px; font-size:12px; font-family:var(--mono); color:var(--muted); }
+  a.linkbtn { color:var(--accent); text-decoration:none; font-size:12px; cursor:pointer; font-weight:550; }
+  a.linkbtn:hover { color:var(--accent-hi); text-decoration:underline; }
+
+  /* ---- Màn đăng nhập ---- */
+  #loginScreen { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .login-card { width:100%; max-width:380px; background:var(--panel); border:1px solid var(--border);
+                border-radius:14px; padding:28px; }
+  .login-brand { display:flex; align-items:center; gap:9px; font-size:17px; font-weight:650;
+                 margin-bottom:4px; letter-spacing:-.01em; }
+  .login-sub { color:var(--faint); font-size:12px; margin-bottom:22px; }
+  #loginScreen input { width:100%; margin:6px 0 14px; padding:9px 11px; }
+  #loginScreen label { font-size:12px; color:var(--muted); font-weight:550; }
+  #loginScreen .btn { width:100%; padding:10px; margin-top:4px; }
+  #loginError { color:var(--danger); font-size:12px; min-height:17px; }
+
+  @media (max-width:760px) {
+    #app { grid-template-columns:1fr; height:auto; }
+    #sidebar { border-right:none; border-bottom:1px solid var(--border); }
+    .nav-group { display:flex; flex-wrap:wrap; gap:4px; padding:8px; }
+    .nav-group-label { width:100%; }
+    nav button { width:auto; }
+    .sidebar-foot { margin-top:0; }
+    main { padding:16px; }
+    .topbar { padding:0 16px; }
+  }
 </style>
 </head>
 <body>
 
 <div id="loginScreen">
-  <div class="panel">
-    <h2>Đăng nhập Center AI</h2>
+  <div class="login-card">
+    <div class="login-brand"><span class="brand-dot"></span> Center AI</div>
+    <div class="login-sub">Enterprise AI Operations · Pilot</div>
     <!-- Mặc định "/api" = đường same-origin (nginx proxy sang Control Plane). Trước đây trỏ
          thẳng https://cp.valeron.tech — request cross-origin, hay bị ad-blocker/extension/
          firewall công ty chặn thẳng ở tầng mạng, báo "Failed to fetch" dù server hoàn toàn
@@ -51,34 +166,49 @@
     <label>Email công ty</label>
     <input id="cpEmail" placeholder="thanh@company.local" />
     <label>Mã pilot access code</label>
-    <input id="cpAccessCode" type="password" />
+    <input id="cpAccessCode" type="password" placeholder="do admin cấp riêng" />
     <div id="loginError"></div>
-    <button onclick="doLogin()">Đăng nhập</button>
+    <button class="btn" onclick="doLogin()">Đăng nhập</button>
   </div>
 </div>
 
 <div id="app" style="display:none">
-  <header>
-    <h1>Center AI — Ops Dashboard <span style="color:var(--muted); font-weight:400;">(MVP1 pilot)</span></h1>
-    <div class="who"><span id="whoami"></span> · <a class="linkbtn" onclick="logout()">đăng xuất</a></div>
-  </header>
-  <nav id="tabs"></nav>
-  <main id="content"></main>
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-name"><span class="brand-dot"></span> Center AI</div>
+      <div class="brand-sub">Enterprise AI Operations</div>
+    </div>
+    <nav id="tabs"></nav>
+    <div class="sidebar-foot">
+      <div><span class="who-name" id="whoami"></span><span class="who-role" id="whorole"></span></div>
+      <a class="linkbtn" onclick="logout()">Đăng xuất</a>
+    </div>
+  </aside>
+  <div id="mainpane">
+    <div class="topbar">
+      <h1 id="pagetitle"></h1>
+      <div style="font-size:12px;color:var(--faint);" id="pagehint"></div>
+    </div>
+    <main id="content"></main>
+  </div>
 </div>
 
 <script>
+// `group` + `hint` thêm cho điều hướng dễ quét (11 mục phẳng xếp ngang trước đây vừa khó
+// tìm vừa TRÀN mất chữ ở cửa sổ hẹp — lỗi thật). `id`/`label`/`render`/`adminOnly` giữ
+// nguyên, switchTab/boot vẫn dùng đúng như cũ.
 const TABS = [
-  { id: 'home', label: 'Trang chủ', render: renderHome },
-  { id: 'inbox', label: 'Inbox', render: renderInbox },
-  { id: 'timeline', label: 'Timeline', render: renderTimeline },
-  { id: 'projects', label: 'Projects & Tasks', render: renderProjects },
-  { id: 'sessions', label: 'Active Sessions', render: renderSessions },
-  { id: 'handoffs', label: 'Handoffs', render: renderHandoffs },
-  { id: 'memory', label: 'Project Memory', render: renderMemory },
-  { id: 'patterns', label: 'Pattern Library', render: renderPatternLibrary },
-  { id: 'seats', label: 'Seats & Employees', render: renderSeats },
-  { id: 'governance', label: 'Governance', render: renderGovernance, adminOnly: true },
-  { id: 'kpi', label: 'KPI', render: renderKpi, adminOnly: true },
+  { id: 'home', label: 'Trang chủ', ico: '◈', group: 'Tổng quan', hint: 'Ai đang làm gì, cần tiếp quản gì', render: renderHome },
+  { id: 'inbox', label: 'Inbox', ico: '▤', group: 'Tổng quan', hint: 'Việc liên quan tới bạn hôm nay', render: renderInbox },
+  { id: 'timeline', label: 'Timeline', ico: '◷', group: 'Tổng quan', hint: 'Dòng sự kiện của dự án theo thời gian', render: renderTimeline },
+  { id: 'projects', label: 'Projects & Tasks', ico: '▦', group: 'Công việc', hint: 'Tạo task, giao người, đổi trạng thái', render: renderProjects },
+  { id: 'sessions', label: 'Active Sessions', ico: '●', group: 'Công việc', hint: 'Phiên làm việc AI đang mở', render: renderSessions },
+  { id: 'handoffs', label: 'Handoffs', ico: '⇄', group: 'Công việc', hint: 'Bàn giao — thứ giúp người sau hiểu việc trong vài phút', render: renderHandoffs },
+  { id: 'memory', label: 'Project Memory', ico: '◫', group: 'Tri thức', hint: 'Requirement, quyết định kỹ thuật, ghi chú BA', render: renderMemory },
+  { id: 'patterns', label: 'Pattern Library', ico: '✦', group: 'Tri thức', hint: 'Giải pháp tổng quát đã ẩn danh hoá, dùng lại cho dự án khác', render: renderPatternLibrary },
+  { id: 'seats', label: 'Seats & Employees', ico: '◉', group: 'Quản trị', hint: 'Cấp/thu hồi seat AI cho nhân viên', render: renderSeats },
+  { id: 'governance', label: 'Governance', ico: '◆', group: 'Quản trị', hint: 'Bảo mật, phân loại dữ liệu, duyệt truy cập', render: renderGovernance, adminOnly: true },
+  { id: 'kpi', label: 'KPI', ico: '▲', group: 'Quản trị', hint: 'Adoption / Efficiency / Collaboration', render: renderKpi, adminOnly: true },
 ];
 let state = { cpUrl: '', token: '', who: null, active: 'home' };
 
@@ -159,29 +289,67 @@ async function renderHome(root) {
     contextNotes = notesByProject.flatMap((n) => n.context_notes).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5);
   } catch {}
 
-  root.innerHTML = `
+  // cost-summary hiện mở cho mọi nhân viên (chỉ requireEmployee, không requireAdmin) — giữ
+  // đúng hành vi sẵn có, không âm thầm đổi quyền trong lúc chỉ làm lại giao diện. Vẫn bắt lỗi
+  // để nếu endpoint hỏng/đổi quyền sau này thì chỉ mất dải số, không sập cả Trang chủ.
+  let cost = null;
+  try { cost = await api('/v1/cost-summary'); } catch {}
+
+  let statsHtml = '';
+  if (cost && cost.cost_by_employee) {
+    const totalCost = cost.cost_by_employee.reduce((s, e) => s + Number(e.total_estimated_cost_usd || 0), 0);
+    const totalReq = cost.cost_by_employee.reduce((s, e) => s + Number(e.request_count || 0), 0);
+    const weighted = cost.cost_by_employee.reduce((s, e) => s + Number(e.avg_latency_ms || 0) * Number(e.request_count || 0), 0);
+    const avgLatency = totalReq ? Math.round(weighted / totalReq) : 0;
+    statsHtml = `
+      <div class="stats">
+        <div class="stat accent">
+          <div class="stat-label">Đang làm</div>
+          <div class="stat-value">${sessions.work_sessions.length}</div>
+          <div class="stat-sub">phiên AI đang mở</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Chi phí AI</div>
+          <div class="stat-value">$${totalCost.toFixed(2)}</div>
+          <div class="stat-sub">${cost.cost_by_employee.length} nhân viên, cộng dồn</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Request</div>
+          <div class="stat-value">${totalReq.toLocaleString('vi-VN')}</div>
+          <div class="stat-sub">đã đi qua gateway công ty</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Độ trễ TB</div>
+          <div class="stat-value">${(avgLatency / 1000).toFixed(2)}s</div>
+          <div class="stat-sub">trung bình theo số request</div>
+        </div>
+      </div>`;
+  }
+
+  root.innerHTML = statsHtml + `
     <div class="home-grid">
       <div class="panel">
         <h2>Đang làm</h2>
         ${sessions.work_sessions.length ? sessions.work_sessions.map((s) => `
-          <div style="margin-bottom:8px;">
-            <b>${esc(s.employee_name)}</b> — ${esc(s.task_id)} — ${esc(s.task_title)}
-            <div class="empty">${fmtElapsed(s.last_activity_at)} trước hoạt động gần nhất, ${esc(s.project_name)}</div>
+          <div class="feed-item">
+            <div class="feed-main"><b>${esc(s.employee_name)}</b> — ${esc(s.task_title)}</div>
+            <div class="feed-meta"><code>${esc(s.task_id)}</code> · ${esc(s.project_name)} · hoạt động ${fmtElapsed(s.last_activity_at)} trước</div>
           </div>`).join('') : '<div class="empty">Không có ai đang làm.</div>'}
       </div>
       <div class="panel">
         <h2>Cần tiếp quản (của tôi)</h2>
         ${inbox.handoffs_to_pick_up.length ? inbox.handoffs_to_pick_up.map((h) => `
-          <div style="margin-bottom:8px;">
-            <b>${esc(h.task_id)}</b> — handoff mới từ ${esc(h.from_employee_name)}, chưa ai tiếp quản
-            <div class="empty">${fmtDate(h.handoff_created_at)}, ${esc(h.project_name)}</div>
+          <div class="feed-item">
+            <div class="feed-main"><b>${esc(h.task_id)}</b> — bàn giao mới từ ${esc(h.from_employee_name)}<span class="pill warn" style="margin-left:6px;">chưa ai nhận</span></div>
+            <div class="feed-meta">${esc(h.project_name)} · ${fmtDate(h.handoff_created_at)}</div>
           </div>`).join('') : '<div class="empty">Không có gì cần tiếp quản.</div>'}
       </div>
       <div class="panel">
         <h2>Context mới</h2>
         ${contextNotes.length ? contextNotes.map((c) => `
-          <div style="margin-bottom:8px;">[${esc(c.type)}] ${esc(c.content)}
-            <div class="empty">${esc(c.created_by_name)} — ${fmtDate(c.created_at)}</div>
+          <div class="feed-item">
+            <div class="feed-main"><span class="pill warn">${esc(c.type)}</span> ${esc(c.content)}</div>
+            <div class="feed-meta">${esc(c.created_by_name)} — ${fmtDate(c.created_at)}</div>
           </div>`).join('') : '<div class="empty">Chưa có ghi chú context nào (requirement/decision/BA feedback).</div>'}
       </div>
     </div>`;
@@ -766,17 +934,29 @@ async function renderKpi(root) {
 
 function renderTabs() {
   const visible = TABS.filter((t) => !t.adminOnly || state.who.role === 'admin');
-  document.getElementById('tabs').innerHTML = visible.map((t) =>
-    `<button class="${state.active === t.id ? 'active' : ''}" onclick="switchTab('${t.id}')">${t.label}</button>`
-  ).join('');
+  const groups = [];
+  for (const t of visible) {
+    let g = groups.find((x) => x.name === t.group);
+    if (!g) { g = { name: t.group, items: [] }; groups.push(g); }
+    g.items.push(t);
+  }
+  document.getElementById('tabs').innerHTML = groups.map((g) => `
+    <div class="nav-group">
+      <div class="nav-group-label">${esc(g.name)}</div>
+      ${g.items.map((t) => `<button class="${state.active === t.id ? 'active' : ''}" onclick="switchTab('${t.id}')">
+        <span class="ico">${t.ico}</span>${esc(t.label)}</button>`).join('')}
+    </div>`).join('');
 }
 async function switchTab(id) {
   state.active = id;
   renderTabs();
+  const tab = TABS.find((t) => t.id === id);
+  document.getElementById('pagetitle').textContent = tab.label;
+  document.getElementById('pagehint').textContent = tab.hint || '';
   const root = document.getElementById('content');
   root.innerHTML = '<div class="empty">Đang tải…</div>';
   try {
-    await TABS.find((t) => t.id === id).render(root);
+    await tab.render(root);
   } catch (e) {
     root.innerHTML = `<div class="panel"><div class="empty">Lỗi tải dữ liệu: ${esc(e.message)}</div></div>`;
   }
@@ -784,8 +964,9 @@ async function switchTab(id) {
 
 function boot() {
   document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
-  document.getElementById('whoami').textContent = `${state.who.full_name} (${state.who.employee_id})`;
+  document.getElementById('app').style.display = 'grid'; // #app là CSS grid (sidebar + nội dung)
+  document.getElementById('whoami').textContent = state.who.full_name;
+  document.getElementById('whorole').textContent = state.who.role === 'admin' ? 'admin' : 'member';
   renderTabs();
   switchTab(state.active);
 }
