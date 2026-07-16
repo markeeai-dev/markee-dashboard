@@ -275,3 +275,97 @@ test bằng traffic thật:
 tinh thần đã sửa ở chính đợt này). Không cần test-harness case mới cho việc này (đã có case
 "active-grant khi không có grant nào khớp -> grant:null" ở tầng Control Plane từ Đợt 2); đây là
 xác nhận bổ sung bằng traffic thật đầu-cuối, không phải gap còn thiếu nữa.
+
+---
+
+# Đợt 4 — Policy Engine cơ bản: Data Classification (tầng Project) + Approval workflow (Q13)
+
+> Kế hoạch: xem plan đã duyệt "MVP3 Đợt 4". Mở khoá nền tảng chung cho 4/6 mục MVP3 còn lại
+> (Data Classification, Approval, tiền đề cho Pattern Library + seat offboarding ở đợt sau).
+> Company Brain `scope_level` và policy theo department cố ý để lại — lý do ghi trong plan.
+
+**Quyết định thiết kế chốt qua AskUserQuestion trước khi lên plan**: Data Classification gắn
+nhãn ở **tầng Project** (admin gắn 1 lần/project), KHÔNG làm regex real-time theo từng prompt
+như Secret/PII Scan — "dữ liệu khách hàng" vs "mã nguồn nội bộ" vs "công khai" không có pattern
+cấu trúc rõ, làm real-time sẽ báo sai/sót nhiều, đi ngược nguyên tắc "không đáng tin thì không
+làm" đã giữ xuyên suốt dự án.
+
+## Bước 1 — Schema
+
+**PASS.** Migration `007_policy_approval.sql`: `projects.classification` (mặc định
+`unclassified`, CHECK 4 giá trị), bảng `policies` (scope company/project, classification,
+requires_approval), bảng `approval_requests` (pending/approved/rejected, `expires_at` chỉ set
+khi approved — cùng kiểu với `full_audit_grants`). Xác nhận bằng `\d projects` trực tiếp trên
+droplet: `proj_trungnguyen` mặc định đúng `unclassified` — an toàn, không đổi hành vi hiện tại.
+
+## Bước 2 — Control Plane: 7 endpoint mới
+
+**PASS — 115/115 test-harness (tăng từ 87, 28 case mới)**, test khép kín cả vòng (set
+classification → tạo policy → access-check chặn → tạo approval request → approve/reject →
+access-check lại đúng theo trạng thái mới → reset về mặc định) đúng yêu cầu plan.
+
+- `POST /v1/projects/:id/classification` + `POST`/`GET /v1/policies` (admin) — validate scope
+  company (không được có `scope_id`) vs project (bắt buộc `scope_id` là project có thật).
+- `GET /internal/v1/governance/access-check` — ưu tiên policy riêng cho project trước, fallback
+  company-wide; không có policy hoặc `requires_approval=false` → `allowed:true`.
+- `POST /internal/v1/governance/approval-requests` (Adapter gọi khi block) — **upsert**, xác
+  nhận gọi 2 lần liên tiếp không tạo trùng pending (nhân viên thử lại nhiều lần không spam).
+- `POST /v1/governance/approval-requests/:id/approve|reject` (admin, cần `duration_hours` khi
+  approve, giống hệt pattern Full Audit Mode) — chỉ quyết định được request đang `pending`.
+
+**Sự cố lúc test (không phải bug, tự phát hiện + tự giải thích đúng)**: lần test real traffic
+đầu tiên qua Adapter cho `emp_thanh` không bị chặn dù đã tạo policy — nghi ngờ bug, debug bằng
+cách thêm log tạm thời vào handler, phát hiện: chính approval request của Thanh đã được
+test-harness approve (`duration_hours: 1`) từ vài phút trước đó **vẫn còn hiệu lực thật** — hệ
+thống hoạt động đúng, không phải lỗi. Xoá log debug, chuyển sang test bằng `emp_hoang` (request
+của Hoàng bị test-harness reject, không có approval active) — xác nhận chặn đúng 403.
+
+## Bước 3 — Gateway Adapter: gắn access-check gate
+
+**PASS**, test theo đúng thứ tự đã dùng mọi đợt trước:
+- a) Mock suite gốc (`spike/test-harness/run-test.js`) — 7/7 PASS (chạy với
+  `CENTERAI_INTERNAL_SERVICE_SECRET` rỗng, xác nhận fail-open không ảnh hưởng gì khi Control
+  Plane không cấu hình).
+- b) Regression trước khi tạo policy nào: request thật qua `https://valeron.tech/v1/messages`
+  với `proj_trungnguyen` còn `unclassified` → **200 bình thường**, không đổi hành vi.
+- c) Tạo policy company-wide `customer_data` + classify `proj_trungnguyen` sang `customer_data`
+  → request thật của Hoàng → **403 `approval_required`** + tự động tạo đúng 1 dòng
+  `approval_requests` pending (xác nhận qua `GET /v1/governance/approval-requests?status=pending`).
+- d) Thanh (admin) approve qua API (`duration_hours: 1`) → gửi lại ĐÚNG request đó (token khác,
+  cùng employee/project) → **200 bình thường** — xác nhận full cycle chặn → tự tạo yêu cầu →
+  duyệt → thông qua hoạt động đúng bằng traffic thật, không chỉ đọc code.
+- e) **Revert `proj_trungnguyen` về `unclassified` ngay sau khi xác nhận** — không để lại policy
+  chặn ảnh hưởng công việc hàng ngày thật của Thanh/Hoàng. Xác nhận lại qua `\d`/query trực tiếp.
+- f) `company-ai claude` thật (không phải chỉ curl) — chạy non-interactive
+  (`-p "..." --output-format stream-json --include-partial-messages --verbose`) sau khi đã
+  revert, xác nhận toàn bộ pipeline tool-use/streaming/cost vẫn hoạt động đúng, không bị ảnh
+  hưởng bởi thay đổi Adapter (`stop_reason: end_turn`, `total_cost_usd` tính đúng).
+
+**Đánh đổi bảo mật cần ghi rõ**: `checkAccess()` fail-open khi Control Plane lỗi/timeout — giống
+hệt `checkActiveGrant` (Q23: gateway không được là SPOF chặn cả việc code, uptime P0). Nghĩa là
+nếu Control Plane sập, request đáng ra phải bị chặn tạm thời sẽ không bị chặn — đánh đổi nhất
+quán với toàn bộ dự án, không phải lối tắt riêng cho đợt này.
+
+## Bước 4 — Dashboard
+
+**PASS.** Governance tab thêm 3 panel: "Phân loại dữ liệu Project" (bảng + form đặt
+classification), "Policy" (bảng + form tạo policy company/project), "Yêu cầu duyệt truy cập"
+(bảng + nút Duyệt/Từ chối trên dòng pending). Đây là phần UI lớn nhất từ trước tới giờ trong 1
+đợt — đúng bài học từ Gap A, không cắt UI để làm nhanh hơn. Deploy, xác nhận qua curl: HTML trả
+về khớp byte-for-byte với bản local (`diff` rỗng), chứa đủ `setProjectClassification`/
+`createPolicy`/`decideApproval`/"Phân loại dữ liệu Project"/"Yêu cầu duyệt truy cập".
+
+## Verification cuối
+
+- Test-harness: 87 → **115/115 PASS**, không regression.
+- Mock suite Adapter: 7/7 PASS trước và sau khi đổi.
+- `proj_trungnguyen` xác nhận `unclassified`, không còn policy nào chặn traffic thật của
+  Thanh/Hoàng sau khi đợt này kết thúc — kiểm tra trực tiếp DB, không chỉ tin API.
+- `systemctl status` cả 2 service `active` xuyên suốt, không crash-loop.
+
+## Chưa làm (đúng phạm vi đã chốt trong plan, không phải bỏ sót)
+
+Policy theo department (chưa có `departments` với dữ liệu thật để scope theo — team chỉ có
+Thanh/Hoàng, xây bảng lúc này là xây cho nhu cầu giả định), Pattern Library (Q16 — cần dùng lại
+đúng cơ chế Approval vừa xây, để đợt sau), seat offboarding workflow (cũng cần Approval làm
+nền), Company Brain `scope_level` (Q16 — độc lập, rẻ, để riêng 1 đợt nhỏ không gộp vào đây).

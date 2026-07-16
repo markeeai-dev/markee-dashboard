@@ -117,7 +117,7 @@ async function handleLogin(req) {
 
 async function handleListProjects(req) {
   await requireEmployee(req);
-  const { rows } = await query('SELECT id, name, status FROM projects WHERE status = $1 ORDER BY name', ['active']);
+  const { rows } = await query('SELECT id, name, status, classification FROM projects WHERE status = $1 ORDER BY name', ['active']);
   return { status: 200, body: { projects: rows } };
 }
 
@@ -442,6 +442,182 @@ async function handleListFullAuditGrants(req) {
      ORDER BY fag.created_at DESC LIMIT 50`
   );
   return { status: 200, body: { grants: rows } };
+}
+
+// --- MVP3 Đợt 4 — Policy Engine cơ bản: Data Classification (tầng Project — quyết định đã
+// chốt với người dùng, KHÔNG phải regex real-time từng prompt như Secret/PII Scan, vì phân loại
+// "dữ liệu khách hàng" vs "mã nguồn nội bộ" vs "công khai" không có pattern cấu trúc rõ, làm
+// real-time sẽ báo sai/sót nhiều) + Approval workflow (Q13). ---
+
+async function handleSetProjectClassification(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const body = await readJsonBody(req);
+  const VALID_CLASS = ['unclassified', 'public', 'internal', 'customer_data'];
+  if (!VALID_CLASS.includes(body.classification)) throw new ApiError(400, 'invalid_classification');
+
+  const { rows } = await query('UPDATE projects SET classification = $1 WHERE id = $2 RETURNING id', [body.classification, params.id]);
+  if (!rows.length) throw new ApiError(404, 'project_not_found');
+  await writeAuditLog(emp.id, 'project_classification_set', 'project', params.id, { classification: body.classification });
+
+  return { status: 200, body: { project_id: params.id, classification: body.classification } };
+}
+
+async function handleCreatePolicy(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const body = await readJsonBody(req);
+  const VALID_CLASS = ['unclassified', 'public', 'internal', 'customer_data'];
+  if (!['company', 'project'].includes(body.scope)) throw new ApiError(400, 'invalid_scope');
+  if (!VALID_CLASS.includes(body.classification)) throw new ApiError(400, 'invalid_classification');
+  if (body.scope === 'company' && body.scope_id) throw new ApiError(400, 'scope_id_must_be_null_for_company');
+  if (body.scope === 'project') {
+    if (!body.scope_id) throw new ApiError(400, 'scope_id_required_for_project');
+    const { rows } = await query('SELECT id FROM projects WHERE id = $1', [body.scope_id]);
+    if (!rows.length) throw new ApiError(400, 'project_not_found');
+  }
+  const requiresApproval = body.requires_approval !== false; // mặc định true nếu không truyền
+
+  const policyId = id('pol');
+  await query(
+    `INSERT INTO policies (id, scope, scope_id, classification, requires_approval, created_by) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [policyId, body.scope, body.scope_id || null, body.classification, requiresApproval, emp.id]
+  );
+  await writeAuditLog(emp.id, 'policy_created', body.scope, body.scope_id || null, { classification: body.classification, requires_approval: requiresApproval });
+
+  return { status: 201, body: { policy_id: policyId } };
+}
+
+async function handleListPolicies(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query(
+    `SELECT p.id, p.scope, p.scope_id, pr.name AS project_name, p.classification, p.requires_approval, p.created_at, e.full_name AS created_by_name
+     FROM policies p LEFT JOIN employees e ON e.id = p.created_by LEFT JOIN projects pr ON pr.id = p.scope_id
+     ORDER BY p.created_at DESC`
+  );
+  return { status: 200, body: { policies: rows } };
+}
+
+// Ưu tiên policy gắn riêng cho project trước, fallback company-wide nếu không có.
+async function findMatchingPolicy(projectId, classification) {
+  const { rows } = await query(
+    `SELECT id, requires_approval FROM policies
+     WHERE classification = $2 AND ((scope = 'project' AND scope_id = $1) OR scope = 'company')
+     ORDER BY (scope = 'project') DESC LIMIT 1`,
+    [projectId, classification]
+  );
+  return rows[0] || null;
+}
+
+async function findActiveApproval(employeeId, projectId, classification) {
+  const { rows } = await query(
+    `SELECT id FROM approval_requests
+     WHERE employee_id = $1 AND project_id = $2 AND classification = $3
+       AND status = 'approved' AND expires_at > now()
+     ORDER BY expires_at DESC LIMIT 1`,
+    [employeeId, projectId, classification]
+  );
+  return rows[0] || null;
+}
+
+// Adapter gọi TRƯỚC khi forward request lên 9Router — cùng kiểu xác thực nội bộ với
+// /internal/v1/governance/active-grant.
+async function handleAccessCheck(req, url) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || token !== INTERNAL_SERVICE_SECRET) throw new ApiError(401, 'invalid_internal_secret');
+
+  const employeeId = url.searchParams.get('employee_id');
+  const projectId = url.searchParams.get('project_id');
+
+  const { rows: projRows } = await query('SELECT classification FROM projects WHERE id = $1', [projectId]);
+  const classification = projRows[0] ? projRows[0].classification : 'unclassified';
+
+  const policy = await findMatchingPolicy(projectId, classification);
+  if (!policy || !policy.requires_approval) {
+    return { status: 200, body: { allowed: true } };
+  }
+
+  const approval = await findActiveApproval(employeeId, projectId, classification);
+  if (approval) return { status: 200, body: { allowed: true } };
+
+  return { status: 200, body: { allowed: false, classification } };
+}
+
+// Adapter gọi khi block để tự động tạo yêu cầu duyệt — upsert: đã có pending khớp
+// employee/project/classification thì không tạo trùng (nhân viên thử lại nhiều lần không spam).
+async function handleCreateApprovalRequestInternal(req) {
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token || token !== INTERNAL_SERVICE_SECRET) throw new ApiError(401, 'invalid_internal_secret');
+
+  const body = await readJsonBody(req);
+  if (!body.employee_id || !body.project_id || !body.classification) throw new ApiError(400, 'missing_fields');
+
+  const { rows: existing } = await query(
+    `SELECT id FROM approval_requests WHERE employee_id=$1 AND project_id=$2 AND classification=$3 AND status='pending'`,
+    [body.employee_id, body.project_id, body.classification]
+  );
+  if (existing.length) return { status: 200, body: { approval_request_id: existing[0].id, created: false } };
+
+  const reqId = id('apr');
+  await query(
+    `INSERT INTO approval_requests (id, employee_id, project_id, classification) VALUES ($1,$2,$3,$4)`,
+    [reqId, body.employee_id, body.project_id, body.classification]
+  );
+  return { status: 201, body: { approval_request_id: reqId, created: true } };
+}
+
+async function handleListApprovalRequests(req, url) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const status = url.searchParams.get('status');
+  const params = [];
+  let where = '';
+  if (status) {
+    params.push(status);
+    where = 'WHERE ar.status = $1';
+  }
+  const { rows } = await query(
+    `SELECT ar.id, ar.employee_id, e.full_name AS employee_name, ar.project_id, pr.name AS project_name,
+            ar.classification, ar.status, ar.requested_at, ar.decided_at,
+            d.full_name AS decided_by_name, ar.expires_at
+     FROM approval_requests ar
+       LEFT JOIN employees e ON e.id = ar.employee_id
+       LEFT JOIN projects pr ON pr.id = ar.project_id
+       LEFT JOIN employees d ON d.id = ar.decided_by
+     ${where}
+     ORDER BY ar.requested_at DESC LIMIT 50`,
+    params
+  );
+  return { status: 200, body: { approval_requests: rows } };
+}
+
+// Chỉ quyết định được request đang 'pending' — tránh nhập nhằng approve/reject lại 1 request đã
+// quyết định rồi; muốn cấp lại thì để lần block tiếp theo tự tạo request mới.
+async function handleDecideApprovalRequest(req, params, approve) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query('SELECT id, status FROM approval_requests WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'approval_request_not_found');
+  if (rows[0].status !== 'pending') throw new ApiError(400, 'not_pending');
+
+  if (approve) {
+    const body = await readJsonBody(req);
+    const durationHours = Number(body.duration_hours) > 0 ? Number(body.duration_hours) : 4;
+    const expiresAt = new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
+    await query(
+      `UPDATE approval_requests SET status='approved', decided_by=$1, decided_at=now(), expires_at=$2 WHERE id=$3`,
+      [emp.id, expiresAt, params.id]
+    );
+    await writeAuditLog(emp.id, 'approval_granted', 'approval_request', params.id, { expires_at: expiresAt });
+    return { status: 200, body: { approval_request_id: params.id, status: 'approved', expires_at: expiresAt } };
+  }
+
+  await query(`UPDATE approval_requests SET status='rejected', decided_by=$1, decided_at=now() WHERE id=$2`, [emp.id, params.id]);
+  await writeAuditLog(emp.id, 'approval_rejected', 'approval_request', params.id, {});
+  return { status: 200, body: { approval_request_id: params.id, status: 'rejected' } };
 }
 
 async function handleListAuditLogs(req) {
@@ -1174,6 +1350,23 @@ const routes = [
   },
   { method: 'GET', pattern: /^\/v1\/governance\/full-audit-grants$/, handler: (req) => handleListFullAuditGrants(req) },
   { method: 'POST', pattern: /^\/v1\/context\/ingest$/, handler: (req) => handleIngestContext(req) },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/projects\/([^/]+)\/classification$/,
+    handler: (req, m) => handleSetProjectClassification(req, { id: m[1] }),
+  },
+  { method: 'POST', pattern: /^\/v1\/policies$/, handler: (req) => handleCreatePolicy(req) },
+  { method: 'GET', pattern: /^\/v1\/policies$/, handler: (req) => handleListPolicies(req) },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/governance\/approval-requests\/([^/]+)\/approve$/,
+    handler: (req, m) => handleDecideApprovalRequest(req, { id: m[1] }, true),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/governance\/approval-requests\/([^/]+)\/reject$/,
+    handler: (req, m) => handleDecideApprovalRequest(req, { id: m[1] }, false),
+  },
   { method: 'GET', pattern: /^\/v1\/audit-logs$/, handler: (req) => handleListAuditLogs(req) },
   { method: 'GET', pattern: /^\/v1\/flags$/, handler: (req) => handleListFlags(req) },
   { method: 'GET', pattern: /^\/v1\/projects$/, handler: (req) => handleListProjects(req) },
@@ -1301,6 +1494,18 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/internal/v1/gateway/prompts') {
       const result = await handleIngestPrompt(req);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/internal/v1/governance/access-check') {
+      const result = await handleAccessCheck(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'POST' && url.pathname === '/internal/v1/governance/approval-requests') {
+      const result = await handleCreateApprovalRequestInternal(req);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/governance/approval-requests') {
+      const result = await handleListApprovalRequests(req, url);
       return sendJson(res, result.status, result.body);
     }
 

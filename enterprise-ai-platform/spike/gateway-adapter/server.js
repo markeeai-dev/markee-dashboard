@@ -132,6 +132,45 @@ function reportPrompt(entry) {
   });
 }
 
+// MVP3 Đợt 4 — Policy Engine cơ bản (Q13): Data Classification (tầng Project) + Approval.
+// Cùng kiểu cache/fail-open với checkActiveGrant — mặc định (không có policy nào) là đường đi
+// phổ biến nhất, phải rẻ và không bao giờ chặn request AI thật vì lỗi hạ tầng nội bộ (Q23: P0
+// uptime, gateway không được là SPOF chặn cả việc code).
+const accessCheckCache = new Map(); // key: `${employee_id}:${project_id}` -> { result, fetchedAt }
+const ACCESS_CHECK_CACHE_TTL_MS = 30_000;
+
+async function checkAccess(employeeId, projectId) {
+  if (!INTERNAL_SERVICE_SECRET) return { allowed: true };
+  const key = `${employeeId}:${projectId}`;
+  const cached = accessCheckCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < ACCESS_CHECK_CACHE_TTL_MS) return cached.result;
+
+  try {
+    const res = await fetch(
+      `${CONTROL_PLANE_URL}/internal/v1/governance/access-check?employee_id=${encodeURIComponent(employeeId)}&project_id=${encodeURIComponent(projectId || '')}`,
+      { headers: { Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` } }
+    );
+    const json = await res.json().catch(() => ({}));
+    const result = res.ok ? json : { allowed: true };
+    accessCheckCache.set(key, { result, fetchedAt: Date.now() });
+    return result;
+  } catch (err) {
+    console.error('[adapter] checkAccess failed (non-fatal, fail-open — không chặn request AI thật vì lỗi hạ tầng nội bộ):', err.message);
+    return { allowed: true };
+  }
+}
+
+function reportApprovalRequest(entry) {
+  if (!INTERNAL_SERVICE_SECRET) return;
+  fetch(`${CONTROL_PLANE_URL}/internal/v1/governance/approval-requests`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` },
+    body: JSON.stringify(entry),
+  }).catch((err) => {
+    console.error('[adapter] reportApprovalRequest failed (non-fatal):', err.message);
+  });
+}
+
 const server = http.createServer((req, res) => {
   const gatewayRequestId = crypto.randomUUID();
   const requestStartedAt = Date.now();
@@ -272,6 +311,29 @@ const server = http.createServer((req, res) => {
           blocked: false,
         });
       }
+    }
+
+    // MVP3 Đợt 4 · Q13 — Policy Engine cơ bản: Data Classification (tầng Project) + Approval.
+    // MẶC ĐỊNH (project chưa phân loại, chưa có policy) là allowed:true, hành vi y hệt trước
+    // đây — chỉ chặn khi admin đã chủ động classify project + tạo policy requires_approval,
+    // và nhân viên đó chưa có approval đang hiệu lực cho đúng project/classification đó.
+    const access = await checkAccess(employee_id, project_id);
+    if (!access.allowed) {
+      reportApprovalRequest({ employee_id, project_id, classification: access.classification });
+      logSpan({
+        gateway_request_id: gatewayRequestId,
+        employee_id,
+        seat_id,
+        status: 'rejected',
+        reason: 'approval_required',
+        classification: access.classification,
+        flagged: true,
+      });
+      return sendJson(res, 403, {
+        error: 'approval_required',
+        detail: `Project này được phân loại "${access.classification}" và cần admin duyệt trước khi dùng AI. Yêu cầu duyệt đã được ghi nhận — báo admin duyệt qua dashboard rồi thử lại.`,
+        gateway_request_id: gatewayRequestId,
+      });
     }
 
     // MVP3 tiếp theo · Q22 — Full Audit Mode: MẶC ĐỊNH (không có grant active) là KHÔNG lưu

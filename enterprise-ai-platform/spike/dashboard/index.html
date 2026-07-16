@@ -346,12 +346,17 @@ async function renderSeats(root) {
 
 // Governance (Q13/Q22) — chỉ admin thấy tab này (đã lọc ở renderTabs). Risk Score KHÔNG tự
 // động xử lý ai — chỉ hiển thị để quản lý tự xem xét, đúng nguyên tắc "không tự động kết luận".
+const CLASSIFICATIONS = ['unclassified', 'public', 'internal', 'customer_data'];
+
 async function renderGovernance(root) {
-  const [riskScore, flagsRes, auditRes, grantsRes] = await Promise.all([
+  const [riskScore, flagsRes, auditRes, grantsRes, projectsRes, policiesRes, approvalRes] = await Promise.all([
     api('/v1/governance/risk-score'),
     api('/v1/flags'),
     api('/v1/audit-logs'),
     api('/v1/governance/full-audit-grants'),
+    api('/v1/projects'),
+    api('/v1/policies'),
+    api('/v1/governance/approval-requests'),
   ]);
 
   root.innerHTML = `
@@ -400,6 +405,68 @@ async function renderGovernance(root) {
     </div>
 
     <div class="panel">
+      <h2>Phân loại dữ liệu Project (Q13)</h2>
+      <div class="empty" style="margin-bottom:10px;">Gắn nhãn ở tầng Project, không phải quét tự động từng prompt — "dữ liệu khách hàng"/"mã nguồn nội bộ" không có pattern rõ như secret/PII nên không đáng tin nếu làm real-time.</div>
+      <table><thead><tr><th>Project</th><th>Phân loại hiện tại</th></tr></thead>
+      <tbody>${projectsRes.projects.map((p) => `
+        <tr><td>${esc(p.name)}</td><td><span class="pill ${p.classification === 'customer_data' ? 'danger' : p.classification === 'unclassified' ? 'warn' : 'ok'}">${esc(p.classification)}</span></td></tr>`).join('')}
+      </tbody></table>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;">
+        <div><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select id="clsProject" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${projectsRes.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Phân loại</label><br/>
+          <select id="clsValue" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${CLASSIFICATIONS.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+          </select></div>
+        <button class="btn" onclick="setProjectClassification()">Đặt phân loại</button>
+      </div>
+      <div id="clsResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Policy (Q13)</h2>
+      <div class="empty" style="margin-bottom:10px;">Policy company-wide áp dụng mọi project trừ khi có policy riêng cho project đó (project ghi đè company).</div>
+      <table><thead><tr><th>Scope</th><th>Phân loại</th><th>Cần duyệt?</th><th>Tạo bởi</th></tr></thead>
+      <tbody>${policiesRes.policies.length ? policiesRes.policies.map((p) => `
+        <tr><td>${p.scope === 'company' ? 'company (toàn công ty)' : `project: ${esc(p.project_name || p.scope_id)}`}</td>
+        <td>${esc(p.classification)}</td><td>${p.requires_approval ? 'Có' : 'Không'}</td><td>${esc(p.created_by_name)}</td></tr>`).join('') :
+        '<tr><td colspan="4" class="empty">Chưa có policy nào — mọi request AI hiện không bị chặn bởi Policy Engine.</td></tr>'}
+      </tbody></table>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;">
+        <div><label style="font-size:12px;color:var(--muted);">Scope</label><br/>
+          <select id="polScope" onchange="document.getElementById('polProjectWrap').style.display = this.value === 'project' ? '' : 'none'" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            <option value="company">company (toàn công ty)</option><option value="project">project (ghi đè riêng)</option>
+          </select></div>
+        <div id="polProjectWrap" style="display:none;"><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select id="polProject" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${projectsRes.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Phân loại</label><br/>
+          <select id="polClass" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${CLASSIFICATIONS.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);"><input id="polRequiresApproval" type="checkbox" checked /> Cần duyệt trước khi dùng AI</label></div>
+        <button class="btn" onclick="createPolicy()">Tạo policy</button>
+      </div>
+      <div id="polResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Yêu cầu duyệt truy cập (Approval — Q13)</h2>
+      <div class="empty" style="margin-bottom:10px;">Tự động tạo khi nhân viên bị chặn bởi policy — không phải tự nhân viên xin, để không ai phải nhớ gọi API.</div>
+      <table><thead><tr><th>Nhân viên</th><th>Project</th><th>Phân loại</th><th>Trạng thái</th><th>Lúc yêu cầu</th><th></th></tr></thead>
+      <tbody>${approvalRes.approval_requests.length ? approvalRes.approval_requests.map((a) => `
+        <tr><td>${esc(a.employee_name)}</td><td>${esc(a.project_name)}</td><td>${esc(a.classification)}</td>
+        <td><span class="pill ${a.status === 'pending' ? 'warn' : a.status === 'approved' ? 'ok' : 'danger'}">${esc(a.status)}</span></td>
+        <td>${fmtDate(a.requested_at)}</td>
+        <td>${a.status === 'pending' ? `<a class="linkbtn" onclick="decideApproval('${esc(a.id)}',true)">Duyệt</a> · <a class="linkbtn" onclick="decideApproval('${esc(a.id)}',false)">Từ chối</a>` : ''}</td></tr>`).join('') :
+        '<tr><td colspan="6" class="empty">Chưa có yêu cầu nào.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
       <h2>Flags gần đây</h2>
       <table><thead><tr><th>Nhân viên</th><th>Loại</th><th>Mức</th><th>Chi tiết</th><th>Lúc</th></tr></thead>
       <tbody>${flagsRes.flags.length ? flagsRes.flags.map((f) => `
@@ -441,6 +508,51 @@ async function revokeGrant(grantId) {
   if (!confirm('Revoke grant này ngay? (grant vẫn còn hiệu lực cho tới khi hết hạn nếu không revoke)')) return;
   try {
     await apiPost(`/v1/governance/full-audit-mode/${encodeURIComponent(grantId)}/revoke`, {});
+    switchTab('governance');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+async function setProjectClassification() {
+  const resultEl = document.getElementById('clsResult');
+  const projectId = document.getElementById('clsProject').value;
+  const classification = document.getElementById('clsValue').value;
+  try {
+    await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/classification`, { classification });
+    resultEl.textContent = `Đã đặt phân loại: ${classification}`;
+    switchTab('governance');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function createPolicy() {
+  const resultEl = document.getElementById('polResult');
+  const scope = document.getElementById('polScope').value;
+  const classification = document.getElementById('polClass').value;
+  const requires_approval = document.getElementById('polRequiresApproval').checked;
+  const body = { scope, classification, requires_approval };
+  if (scope === 'project') body.scope_id = document.getElementById('polProject').value;
+  try {
+    await apiPost('/v1/policies', body);
+    resultEl.textContent = 'Đã tạo policy.';
+    switchTab('governance');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function decideApproval(id, approve) {
+  try {
+    if (approve) {
+      const hours = prompt('Duyệt trong bao nhiêu giờ?', '4');
+      if (hours === null) return;
+      await apiPost(`/v1/governance/approval-requests/${encodeURIComponent(id)}/approve`, { duration_hours: Number(hours) || 4 });
+    } else {
+      if (!confirm('Từ chối yêu cầu này?')) return;
+      await apiPost(`/v1/governance/approval-requests/${encodeURIComponent(id)}/reject`, {});
+    }
     switchTab('governance');
   } catch (e) {
     alert('Lỗi: ' + e.message);

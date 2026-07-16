@@ -608,6 +608,118 @@ async function main() {
     kpiLayerFiltered
   );
 
+  // --- MVP3 Đợt 4 — Policy Engine cơ bản: Data Classification (tầng Project) + Approval (Q13) ---
+
+  // An toàn mặc định TRƯỚC KHI tạo policy nào — đúng yêu cầu plan, phải xác nhận traffic thật
+  // của Thanh/Hoàng không bị ảnh hưởng cho tới khi admin chủ động cấu hình.
+  const accessCheckDefault = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check(
+    'access-check mặc định (chưa có policy nào) -> allowed:true, không ảnh hưởng traffic thật',
+    accessCheckDefault.status === 200 && accessCheckDefault.json.allowed === true,
+    accessCheckDefault
+  );
+
+  const setClassInvalid = await post(`${CP}/v1/projects/proj_trungnguyen/classification`, { classification: 'khong-hop-le' }, thanhToken);
+  check('set classification sai giá trị -> 400', setClassInvalid.status === 400, setClassInvalid);
+
+  const setClassAsMember = await post(`${CP}/v1/projects/proj_trungnguyen/classification`, { classification: 'customer_data' }, hoangToken);
+  check('Hoàng (member) set classification -> 403', setClassAsMember.status === 403, setClassAsMember);
+
+  const setClassOk = await post(`${CP}/v1/projects/proj_trungnguyen/classification`, { classification: 'customer_data' }, thanhToken);
+  check('Thanh (admin) set classification customer_data -> 200', setClassOk.status === 200 && setClassOk.json.classification === 'customer_data', setClassOk);
+
+  const projectsAfterClass = await get(`${CP}/v1/projects`, thanhToken);
+  check(
+    'list projects hiện đúng classification vừa set',
+    projectsAfterClass.json.projects.find((p) => p.id === 'proj_trungnguyen')?.classification === 'customer_data',
+    projectsAfterClass
+  );
+
+  const policyBadScope = await post(`${CP}/v1/policies`, { scope: 'khong-hop-le', classification: 'customer_data' }, thanhToken);
+  check('tạo policy scope sai -> 400', policyBadScope.status === 400, policyBadScope);
+
+  const policyCompanyWithScopeId = await post(`${CP}/v1/policies`, { scope: 'company', scope_id: 'proj_trungnguyen', classification: 'customer_data' }, thanhToken);
+  check('tạo policy scope=company nhưng có scope_id -> 400', policyCompanyWithScopeId.status === 400, policyCompanyWithScopeId);
+
+  const policyProjectNoScopeId = await post(`${CP}/v1/policies`, { scope: 'project', classification: 'customer_data' }, thanhToken);
+  check('tạo policy scope=project thiếu scope_id -> 400', policyProjectNoScopeId.status === 400, policyProjectNoScopeId);
+
+  const policyProjectNotFound = await post(`${CP}/v1/policies`, { scope: 'project', scope_id: 'proj_khong_ton_tai', classification: 'customer_data' }, thanhToken);
+  check('tạo policy scope=project với project không tồn tại -> 400', policyProjectNotFound.status === 400, policyProjectNotFound);
+
+  const policyOk = await post(`${CP}/v1/policies`, { scope: 'company', classification: 'customer_data', requires_approval: true }, thanhToken);
+  check('Thanh (admin) tạo policy company-wide customer_data requires_approval -> 201', policyOk.status === 201 && !!policyOk.json.policy_id, policyOk);
+
+  const policiesAsMember = await get(`${CP}/v1/policies`, hoangToken);
+  check('Hoàng (member) xem policies -> 403', policiesAsMember.status === 403, policiesAsMember);
+
+  const policiesAsAdmin = await get(`${CP}/v1/policies`, thanhToken);
+  check('Thanh (admin) xem policies -> 200, thấy đúng policy vừa tạo', policiesAsAdmin.status === 200 && policiesAsAdmin.json.policies.some((p) => p.id === policyOk.json.policy_id), policiesAsAdmin);
+
+  const accessCheckWrongSecret = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, 'sai-secret-hoan-toan');
+  check('access-check sai internal secret -> 401', accessCheckWrongSecret.status === 401, accessCheckWrongSecret);
+
+  const accessCheckBlocked = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check(
+    'access-check sau khi có policy + chưa duyệt -> allowed:false, đúng classification',
+    accessCheckBlocked.status === 200 && accessCheckBlocked.json.allowed === false && accessCheckBlocked.json.classification === 'customer_data',
+    accessCheckBlocked
+  );
+
+  const createApprovalWrongSecret = await post(`${CP}/internal/v1/governance/approval-requests`, { employee_id: 'emp_thanh', project_id: 'proj_trungnguyen', classification: 'customer_data' }, 'sai-secret-hoan-toan');
+  check('tạo approval request nội bộ sai secret -> 401', createApprovalWrongSecret.status === 401, createApprovalWrongSecret);
+
+  const createApproval1 = await post(`${CP}/internal/v1/governance/approval-requests`, { employee_id: 'emp_thanh', project_id: 'proj_trungnguyen', classification: 'customer_data' }, INTERNAL_SECRET);
+  check('Adapter tự tạo approval request khi block -> 201, created:true', createApproval1.status === 201 && createApproval1.json.created === true, createApproval1);
+
+  const createApproval2 = await post(`${CP}/internal/v1/governance/approval-requests`, { employee_id: 'emp_thanh', project_id: 'proj_trungnguyen', classification: 'customer_data' }, INTERNAL_SECRET);
+  check(
+    'gọi lại lần 2 (nhân viên thử lại) -> upsert, không tạo trùng pending',
+    createApproval2.status === 200 && createApproval2.json.created === false && createApproval2.json.approval_request_id === createApproval1.json.approval_request_id,
+    createApproval2
+  );
+
+  const approvalListAsMember = await get(`${CP}/v1/governance/approval-requests`, hoangToken);
+  check('Hoàng (member) xem approval requests -> 403', approvalListAsMember.status === 403, approvalListAsMember);
+
+  const approvalListPending = await get(`${CP}/v1/governance/approval-requests?status=pending`, thanhToken);
+  check(
+    'Thanh (admin) xem approval requests pending -> 200, thấy đúng request vừa tạo',
+    approvalListPending.status === 200 && approvalListPending.json.approval_requests.some((a) => a.id === createApproval1.json.approval_request_id),
+    approvalListPending
+  );
+
+  const approveAsMember = await post(`${CP}/v1/governance/approval-requests/${createApproval1.json.approval_request_id}/approve`, { duration_hours: 1 }, hoangToken);
+  check('Hoàng (member) approve -> 403', approveAsMember.status === 403, approveAsMember);
+
+  const approveNotFound = await post(`${CP}/v1/governance/approval-requests/apr_khong_ton_tai/approve`, { duration_hours: 1 }, thanhToken);
+  check('approve id không tồn tại -> 404', approveNotFound.status === 404, approveNotFound);
+
+  const approveOk = await post(`${CP}/v1/governance/approval-requests/${createApproval1.json.approval_request_id}/approve`, { duration_hours: 1 }, thanhToken);
+  check('Thanh (admin) approve -> 200, status=approved, có expires_at', approveOk.status === 200 && approveOk.json.status === 'approved' && !!approveOk.json.expires_at, approveOk);
+
+  const approveAgain = await post(`${CP}/v1/governance/approval-requests/${createApproval1.json.approval_request_id}/approve`, { duration_hours: 1 }, thanhToken);
+  check('approve lại request đã quyết định -> 400 not_pending', approveAgain.status === 400, approveAgain);
+
+  const accessCheckAfterApprove = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check('access-check sau khi được duyệt -> allowed:true', accessCheckAfterApprove.status === 200 && accessCheckAfterApprove.json.allowed === true, accessCheckAfterApprove);
+
+  const createApprovalHoang = await post(`${CP}/internal/v1/governance/approval-requests`, { employee_id: 'emp_hoang', project_id: 'proj_trungnguyen', classification: 'customer_data' }, INTERNAL_SECRET);
+  const rejectOk = await post(`${CP}/v1/governance/approval-requests/${createApprovalHoang.json.approval_request_id}/reject`, {}, thanhToken);
+  check('Thanh (admin) reject -> 200, status=rejected', rejectOk.status === 200 && rejectOk.json.status === 'rejected', rejectOk);
+
+  const accessCheckHoangAfterReject = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_hoang&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check('access-check của Hoàng sau khi bị reject -> vẫn allowed:false (reject không cấp quyền)', accessCheckHoangAfterReject.status === 200 && accessCheckHoangAfterReject.json.allowed === false, accessCheckHoangAfterReject);
+
+  // Dọn lại đúng trạng thái mặc định — không để lại policy nào chặn traffic thật của
+  // Thanh/Hoàng sau khi test-harness chạy xong (policy company-wide vẫn còn nhưng chỉ khớp
+  // classification='customer_data', proj_trungnguyen trở lại 'unclassified' nên không khớp nữa).
+  const resetClass = await post(`${CP}/v1/projects/proj_trungnguyen/classification`, { classification: 'unclassified' }, thanhToken);
+  check('reset proj_trungnguyen về unclassified sau test -> 200', resetClass.status === 200 && resetClass.json.classification === 'unclassified', resetClass);
+
+  const accessCheckAfterReset = await get(`${CP}/internal/v1/governance/access-check?employee_id=emp_thanh&project_id=proj_trungnguyen`, INTERNAL_SECRET);
+  check('access-check sau khi reset về unclassified -> allowed:true (không còn policy khớp)', accessCheckAfterReset.status === 200 && accessCheckAfterReset.json.allowed === true, accessCheckAfterReset);
+
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);
 }
