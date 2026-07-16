@@ -18,7 +18,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { verifyToken } = require('../shared/token');
 const { resolveSeat } = require('./registry');
-const { scanForSecrets, scanForPii } = require('../shared/governance-scan');
+const { scanForSecrets, scanForPii, redact } = require('../shared/governance-scan');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const SECRET = process.env.CENTERAI_TOKEN_SECRET || 'spike-dev-secret-change-me';
@@ -90,6 +90,46 @@ function reportFlag(entry) {
 function sendJson(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+// MVP3 tiếp theo · Q22 — Full Audit Mode: kiểm tra có grant active không TRƯỚC KHI quyết định
+// lưu nội dung. Cache trong process (TTL ngắn) để đỡ round-trip Control Plane trên MỌI request
+// — mặc định (không có grant) là đường đi phổ biến nhất, phải rẻ. Cache sai lệch vài chục giây
+// chấp nhận được (không phải cơ chế bảo mật chặn cứng như Secret Scan, chỉ ảnh hưởng việc có
+// bắt đầu/dừng lưu audit content sớm/muộn vài giây quanh lúc bật/tắt Full Audit Mode).
+const activeGrantCache = new Map(); // key: `${employee_id}:${project_id}` -> { grant, fetchedAt }
+const ACTIVE_GRANT_CACHE_TTL_MS = 30_000;
+
+async function checkActiveGrant(employeeId, projectId) {
+  if (!INTERNAL_SERVICE_SECRET) return null;
+  const key = `${employeeId}:${projectId}`;
+  const cached = activeGrantCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < ACTIVE_GRANT_CACHE_TTL_MS) return cached.grant;
+
+  try {
+    const res = await fetch(
+      `${CONTROL_PLANE_URL}/internal/v1/governance/active-grant?employee_id=${encodeURIComponent(employeeId)}&project_id=${encodeURIComponent(projectId || '')}`,
+      { headers: { Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` } }
+    );
+    const json = await res.json().catch(() => ({}));
+    const grant = res.ok ? json.grant || null : null;
+    activeGrantCache.set(key, { grant, fetchedAt: Date.now() });
+    return grant;
+  } catch (err) {
+    console.error('[adapter] checkActiveGrant failed (non-fatal, coi như không có grant):', err.message);
+    return null; // lỗi mạng KHÔNG được chặn request AI thật — chỉ đơn giản là không lưu audit content lần này
+  }
+}
+
+function reportPrompt(entry) {
+  if (!INTERNAL_SERVICE_SECRET) return;
+  fetch(`${CONTROL_PLANE_URL}/internal/v1/gateway/prompts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` },
+    body: JSON.stringify(entry),
+  }).catch((err) => {
+    console.error('[adapter] reportPrompt failed (non-fatal):', err.message);
+  });
 }
 
 const server = http.createServer((req, res) => {
@@ -175,7 +215,7 @@ const server = http.createServer((req, res) => {
   // ---- Metadata enforcement: forward NGUYÊN VẸN, không sửa body ----
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
+  req.on('end', async () => {
     const rawBody = Buffer.concat(chunks);
 
     let modelForLog = undefined;
@@ -233,6 +273,12 @@ const server = http.createServer((req, res) => {
         });
       }
     }
+
+    // MVP3 tiếp theo · Q22 — Full Audit Mode: MẶC ĐỊNH (không có grant active) là KHÔNG lưu
+    // gì thêm ngoài hiện tại, hành vi y hệt trước đây. Chỉ khi có grant active mới redact +
+    // lưu — không bao giờ lưu bản thô dù chỉ tạm thời (redact() chạy trước reportPrompt(),
+    // không có bước nào gửi bodyText/tapText gốc đi đâu cả).
+    const activeGrant = await checkActiveGrant(employee_id, project_id);
 
     // Sửa lỗi thật phát hiện khi test với 9Router thật (bản Docker decolua/9router):
     // /v1/messages trả 401 "API key required for remote API access" nếu forward
@@ -305,6 +351,21 @@ const server = http.createServer((req, res) => {
               status: 'ok',
               http_status: httpStatus,
             });
+
+            // Full Audit Mode — chỉ tới đây khi có grant active (kiểm tra ở trên trước khi
+            // forward). Redact CẢ request lẫn response trước khi gửi đi — chưa từng có bước
+            // nào gửi bản gốc ra khỏi tiến trình Adapter.
+            if (activeGrant) {
+              reportPrompt({
+                gateway_request_id: gatewayRequestId,
+                employee_id,
+                work_session_id,
+                full_audit_grant_id: activeGrant.id,
+                prompt_redacted: redact(bodyText),
+                prompt_hash: crypto.createHash('sha256').update(bodyText).digest('hex'),
+                response_redacted: redact(tapText),
+              });
+            }
           }
         });
       }
