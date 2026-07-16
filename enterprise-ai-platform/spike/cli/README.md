@@ -6,11 +6,24 @@ qua HTTP, mở `claude`/`codex` thật như tiến trình con.
 
 ## Cài đặt (máy nhân viên)
 
-```bash
-cd cli
-npm install
-npm link   # để có lệnh `company-ai` toàn máy — bản thật sẽ publish npm registry nội bộ sau
+Dùng script cài — tự kiểm tra Node >= 18, tự cài Claude Code CLI nếu thiếu, cài lệnh
+`company-ai` toàn máy, và **xác nhận lệnh thật sự chạy được** trước khi báo thành công:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1   # Windows
 ```
+```bash
+bash install.sh                                        # Linux / macOS / VPS / Git Bash
+```
+
+Hướng dẫn đầy đủ cho nhân viên mới (kể cả phần quyền riêng tư): `ONBOARDING.md` ở thư mục gốc.
+
+> `install.ps1` **bắt buộc giữ UTF-8 BOM** — PowerShell 5.1 đọc `.ps1` không BOM theo ANSI, làm
+> hỏng ký tự tiếng Việt trong comment và vỡ luôn cú pháp script (bug thật, bắt được khi chạy thử
+> lần đầu). Nếu sửa file này bằng editor khác, kiểm tra BOM còn nguyên trước khi commit.
+
+Package vẫn để `private: true`, chưa publish npm registry nội bộ — cài trực tiếp từ repo bằng
+script trên là đủ cho pilot.
 
 ## Luồng dùng thật
 

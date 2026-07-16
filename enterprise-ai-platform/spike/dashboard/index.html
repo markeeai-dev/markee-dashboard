@@ -42,8 +42,12 @@
 <div id="loginScreen">
   <div class="panel">
     <h2>Đăng nhập Center AI</h2>
+    <!-- Mặc định "/api" = đường same-origin (nginx proxy sang Control Plane). Trước đây trỏ
+         thẳng https://cp.valeron.tech — request cross-origin, hay bị ad-blocker/extension/
+         firewall công ty chặn thẳng ở tầng mạng, báo "Failed to fetch" dù server hoàn toàn
+         bình thường (gặp thật). Vẫn sửa được thành URL tuyệt đối nếu cần trỏ Control Plane khác. -->
     <label>Control Plane URL</label>
-    <input id="cpUrl" value="https://cp.valeron.tech" />
+    <input id="cpUrl" value="/api" />
     <label>Email công ty</label>
     <input id="cpEmail" placeholder="thanh@company.local" />
     <label>Mã pilot access code</label>
