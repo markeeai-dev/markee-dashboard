@@ -73,6 +73,7 @@ const TABS = [
   { id: 'memory', label: 'Project Memory', render: renderMemory },
   { id: 'seats', label: 'Seats & Employees', render: renderSeats },
   { id: 'governance', label: 'Governance', render: renderGovernance, adminOnly: true },
+  { id: 'kpi', label: 'KPI', render: renderKpi, adminOnly: true },
 ];
 let state = { cpUrl: '', token: '', who: null, active: 'home' };
 
@@ -375,6 +376,50 @@ async function grantFullAuditMode() {
   } catch (e) {
     resultEl.textContent = 'Lỗi: ' + e.message;
   }
+}
+
+// KPI 4 lớp (Q22) — chỉ 3/4 lớp có dữ liệu thật, Outcome ghi rõ lý do chưa đo được thay vì bịa.
+async function renderKpi(root) {
+  const kpi = await api('/v1/kpi');
+  root.innerHTML = `
+    <div class="panel">
+      <h2>Adoption</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Ngày hoạt động AI</th><th>Tool đã dùng</th></tr></thead>
+      <tbody>${kpi.adoption.map((a) => `
+        <tr><td>${esc(a.full_name || a.employee_id)}</td><td>${esc(a.ai_active_days)}</td>
+        <td>${Object.entries(a.tool_adoption).map(([t, n]) => `${esc(t)}: ${esc(n)}`).join(', ') || '—'}</td></tr>`).join('') ||
+        '<tr><td colspan="3" class="empty">Chưa có dữ liệu.</td></tr>'}
+      </tbody></table>
+      <div class="empty" style="margin-top:8px;">Không có "tỷ lệ session classified" — schema hiện tại chưa track classified/unclassified.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Efficiency</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Cost TB / task đã đóng</th><th>Token TB / task đã đóng</th><th>Số task đã đóng</th></tr></thead>
+      <tbody>${kpi.efficiency.map((e) => `
+        <tr><td>${esc(e.full_name || e.employee_id)}</td>
+        <td>${e.avg_cost_per_closed_task !== null ? '$' + esc(e.avg_cost_per_closed_task) : '—'}</td>
+        <td>${e.avg_tokens_per_closed_task !== null ? esc(e.avg_tokens_per_closed_task) : '—'}</td>
+        <td>${esc(e.closed_task_count)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Chưa có dữ liệu.</td></tr>'}
+      </tbody></table>
+      <div class="empty" style="margin-top:8px;">"Task đã đóng" (status=closed) — proxy cho "accepted", schema chưa có trạng thái accepted riêng. Không có "time to first PR"/"retry rate" — hệ thống chưa track PR/số lần thử lại.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Collaboration</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Handoff đã tạo</th><th>% Handoff đầy đủ</th><th>TG tiếp quản TB (giờ)</th><th>Đóng góp context</th><th>ADR đã viết</th></tr></thead>
+      <tbody>${kpi.collaboration.map((c) => `
+        <tr><td>${esc(c.full_name || c.employee_id)}</td><td>${esc(c.handoffs_created)}</td>
+        <td>${c.handoff_completeness_rate !== null ? esc(c.handoff_completeness_rate) + '%' : '—'}</td>
+        <td>${c.avg_pickup_time_hours !== null ? esc(c.avg_pickup_time_hours) : '—'}</td>
+        <td>${esc(c.context_contributions)}</td><td>${esc(c.decisions_documented)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có dữ liệu.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Outcome</h2>
+      <div class="empty">${esc(kpi.outcome_note)}</div>
+    </div>`;
 }
 
 function renderTabs() {

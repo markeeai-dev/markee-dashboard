@@ -290,6 +290,112 @@ async function handleGetRiskScore(req, url) {
   return { status: 200, body: { scope: 'project', risk_scores: rows } };
 }
 
+// --- KPI 4 lớp (Q22) — chỉ 3/4 lớp có dữ liệu thật đủ tin cậy để tính. Outcome (task
+// accepted/PR merged/QA passed/bug sau merge) cần tích hợp CI/PR/QA thật — KHÔNG có trong hệ
+// thống, trả về null + lý do rõ ràng thay vì bịa số (đúng nguyên tắc "không tự động kết luận"
+// và "không dùng token thô làm điểm số" đã chốt từ đầu tài liệu). Chỉ admin xem được — dữ
+// liệu năng suất cá nhân nhạy cảm tương đương Risk Score.
+
+async function computeAdoption() {
+  const activeDaysRes = await query(
+    `SELECT e.id AS employee_id, e.full_name, COUNT(DISTINCT date_trunc('day', ws.started_at)) AS ai_active_days
+     FROM employees e LEFT JOIN work_sessions ws ON ws.employee_id = e.id
+     GROUP BY e.id, e.full_name ORDER BY e.full_name`
+  );
+  const toolRes = await query(
+    `SELECT ws.employee_id, ts.tool, COUNT(*) AS session_count
+     FROM tool_sessions ts JOIN work_sessions ws ON ws.id = ts.work_session_id
+     GROUP BY ws.employee_id, ts.tool`
+  );
+  const toolByEmployee = {};
+  for (const r of toolRes.rows) {
+    (toolByEmployee[r.employee_id] ||= {})[r.tool] = Number(r.session_count);
+  }
+  return activeDaysRes.rows.map((r) => ({
+    employee_id: r.employee_id,
+    full_name: r.full_name,
+    ai_active_days: Number(r.ai_active_days),
+    tool_adoption: toolByEmployee[r.employee_id] || {},
+  }));
+}
+
+async function computeEfficiency() {
+  // Proxy "closed" cho "accepted" — schema hiện chưa có trạng thái accepted riêng biệt, ghi
+  // rõ tên field để không ai đọc nhầm là khớp 100% định nghĩa "accepted" trong tài liệu gốc.
+  const { rows } = await query(
+    `WITH task_cost AS (
+       SELECT ws.employee_id, ws.task_id,
+              SUM(COALESCE(rs.estimated_cost_usd, 0)) AS cost,
+              SUM(COALESCE(rs.input_tokens, 0) + COALESCE(rs.output_tokens, 0)) AS tokens
+       FROM request_spans rs JOIN work_sessions ws ON ws.id = rs.work_session_id
+       GROUP BY ws.employee_id, ws.task_id
+     )
+     SELECT tc.employee_id, e.full_name,
+            ROUND(AVG(tc.cost) FILTER (WHERE t.status = 'closed')::numeric, 4) AS avg_cost_per_closed_task,
+            ROUND(AVG(tc.tokens) FILTER (WHERE t.status = 'closed')::numeric, 0) AS avg_tokens_per_closed_task,
+            COUNT(*) FILTER (WHERE t.status = 'closed') AS closed_task_count
+     FROM task_cost tc JOIN tasks t ON t.id = tc.task_id LEFT JOIN employees e ON e.id = tc.employee_id
+     GROUP BY tc.employee_id, e.full_name ORDER BY e.full_name`
+  );
+  return rows;
+}
+
+async function computeCollaboration() {
+  const completenessRes = await query(
+    `SELECT h.from_employee_id AS employee_id, e.full_name, COUNT(*) AS handoffs_created,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE length(trim(h.summary)) > 0 AND jsonb_array_length(h.next_steps) > 0) / NULLIF(COUNT(*), 0), 1) AS handoff_completeness_rate
+     FROM handoffs h LEFT JOIN employees e ON e.id = h.from_employee_id
+     GROUP BY h.from_employee_id, e.full_name`
+  );
+  // Thời gian tiếp quản: người KHÁC mở Work Session gần nhất cho cùng task, SAU thời điểm
+  // handoff — tái dùng đúng logic NOT EXISTS/so thời gian đã có ở Inbox (Q14), viết lại bằng
+  // LATERAL join cho gọn ở đây vì cần giá trị trung bình, không phải danh sách.
+  const pickupRes = await query(
+    `SELECT h.from_employee_id AS employee_id,
+            ROUND(AVG(EXTRACT(EPOCH FROM (pickup.started_at - h.created_at)) / 3600)::numeric, 1) AS avg_pickup_time_hours
+     FROM handoffs h
+     JOIN LATERAL (
+       SELECT ws.started_at FROM work_sessions ws
+       WHERE ws.task_id = h.task_id AND ws.employee_id != h.from_employee_id AND ws.started_at > h.created_at
+       ORDER BY ws.started_at ASC LIMIT 1
+     ) pickup ON true
+     GROUP BY h.from_employee_id`
+  );
+  const contextRes = await query(`SELECT created_by AS employee_id, COUNT(*) AS context_contributions FROM project_context GROUP BY created_by`);
+  const decisionRes = await query(
+    `SELECT pc.created_by AS employee_id, COUNT(dd.id) AS decisions_documented
+     FROM decision_detail dd JOIN project_context pc ON pc.id = dd.context_id
+     GROUP BY pc.created_by`
+  );
+
+  const pickupByEmployee = Object.fromEntries(pickupRes.rows.map((r) => [r.employee_id, r.avg_pickup_time_hours]));
+  const contextByEmployee = Object.fromEntries(contextRes.rows.map((r) => [r.employee_id, Number(r.context_contributions)]));
+  const decisionByEmployee = Object.fromEntries(decisionRes.rows.map((r) => [r.employee_id, Number(r.decisions_documented)]));
+
+  return completenessRes.rows.map((r) => ({
+    employee_id: r.employee_id,
+    full_name: r.full_name,
+    handoffs_created: Number(r.handoffs_created),
+    handoff_completeness_rate: r.handoff_completeness_rate === null ? null : Number(r.handoff_completeness_rate),
+    avg_pickup_time_hours: pickupByEmployee[r.employee_id] !== undefined ? Number(pickupByEmployee[r.employee_id]) : null,
+    context_contributions: contextByEmployee[r.employee_id] || 0,
+    decisions_documented: decisionByEmployee[r.employee_id] || 0,
+  }));
+}
+
+async function handleGetKpi(req, url) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const layer = url.searchParams.get('layer');
+
+  const body = { outcome: null, outcome_note: 'Cần tích hợp CI/PR/QA thật — chưa có trong hệ thống, không bịa số.' };
+  if (!layer || layer === 'adoption') body.adoption = await computeAdoption();
+  if (!layer || layer === 'efficiency') body.efficiency = await computeEfficiency();
+  if (!layer || layer === 'collaboration') body.collaboration = await computeCollaboration();
+
+  return { status: 200, body };
+}
+
 async function handleGrantFullAuditMode(req) {
   const emp = await requireEmployee(req);
   requireAdmin(emp);
@@ -1123,6 +1229,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/v1/governance/risk-score') {
       const result = await handleGetRiskScore(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/kpi') {
+      const result = await handleGetKpi(req, url);
       return sendJson(res, result.status, result.body);
     }
     if (req.method === 'GET' && url.pathname === '/internal/v1/governance/active-grant') {

@@ -158,8 +158,40 @@ dẫn tới việc lưu — không có đường nào khác).
 
 ## Chưa làm (đúng phạm vi plan đợt 2, không phải bỏ sót)
 
-KPI 4 lớp (chỉ 3/4 lớp có dữ liệu thật, Outcome cần tích hợp CI/PR/QA chưa có — bịa số là đúng
-thứ tài liệu cấm), Company Brain `scope_level` (cần bảng `departments` chưa có + Pattern
-Library chính tài liệu yêu cầu hoãn tới MVP4), Intent-centric Q12 (chỉ có ý nghĩa sau khi có dữ
-liệu prompt/response thật để gắn vào — vừa mới bắt đầu có ở đợt này), Policy engine, webhook
-Jira/Linear, workflow offboarding seat — đều cần domain/tích hợp bên thứ 3 chưa có.
+KPI 4 lớp (đã làm ở Đợt 3 bên dưới — 3/4 lớp), Company Brain `scope_level` (cần bảng
+`departments` chưa có + Pattern Library chính tài liệu yêu cầu hoãn tới MVP4), Intent-centric
+Q12 (chỉ có ý nghĩa sau khi có dữ liệu prompt/response thật để gắn vào — vừa mới bắt đầu có ở
+đợt này), Policy engine, webhook Jira/Linear, workflow offboarding seat — đều cần domain/tích
+hợp bên thứ 3 chưa có.
+
+---
+
+# Đợt 3 — KPI 4 lớp (Q22), chỉ 3/4 lớp có dữ liệu thật
+
+> Kế hoạch: xem plan đã duyệt lần 3. Người dùng xác nhận rõ: chỉ làm phần có dữ liệu sẵn
+> (Adoption/Efficiency/Collaboration), không đụng/không giả vờ có Outcome.
+
+**PASS — 74/74 test-harness (tăng từ 68).** Đọc-only, không migration mới, không đụng Gateway
+Adapter (rủi ro thấp hơn hẳn 2 đợt trước) — `GET /v1/kpi?scope=employee&layer=` (chỉ admin).
+
+- **Adoption**: `ai_active_days` (ngày lịch riêng biệt có Work Session), `tool_adoption` (số
+  Tool Session theo từng tool). Không làm "tỷ lệ session classified" — schema không có cột đó.
+- **Efficiency**: cost/token trung bình trên mỗi task `status='closed'` — đặt tên rõ là proxy
+  cho "accepted" (schema chưa có trạng thái accepted riêng), không overclaim khớp 100% định
+  nghĩa gốc. Không làm "time to first PR" (không có khái niệm PR) và "retry/rework rate" (không
+  track số lần thử lại, không có proxy đủ tin cậy — không ép số giả).
+- **Collaboration**: % handoff đầy đủ (có cả summary lẫn next_steps), thời gian tiếp quản trung
+  bình (tái dùng logic NOT EXISTS đã có ở Inbox — Q14), đóng góp context, số ADR đã viết.
+- **Outcome**: trả `null` kèm `outcome_note` giải thích rõ lý do ngay trong response — ai gọi
+  endpoint cũng thấy ngay đây là thiếu có chủ đích.
+
+**Test bằng dữ liệu thật đã tích luỹ** (không cần dựng kịch bản mới): Thanh —
+`ai_active_days >= 1`, `tool_adoption.claude_code > 0`, `handoffs_created >= 1` — đều khớp
+đúng khối lượng test thật đã chạy suốt các đợt trước. `closed_task_count = 0` cho cả 2 người
+(task demo `task_tng142` chưa từng được đóng status='closed' trong suốt quá trình test) — đúng
+là 0, không phải lỗi, hệ thống không bịa số khi chưa có dữ liệu.
+
+Dashboard thêm tab KPI (chỉ admin) — 4 bảng tương ứng, có ghi chú rõ giới hạn ngay dưới mỗi
+bảng (không giấu người xem việc metric nào là proxy/chưa đo được).
+
+Test-harness: 68 → **74/74 PASS**. Không đụng Gateway Adapter — không cần restart/test lại.

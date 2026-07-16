@@ -492,6 +492,45 @@ async function main() {
     auditLogsAfterView
   );
 
+  // --- KPI 4 lớp (Q22) — chỉ 3/4 lớp có dữ liệu thật ---
+  const kpiAsMember = await get(`${CP}/v1/kpi`, hoangToken);
+  check('Hoàng (member) xem KPI -> 403', kpiAsMember.status === 403, kpiAsMember);
+
+  const kpiFull = await get(`${CP}/v1/kpi`, thanhToken);
+  check(
+    'KPI đầy đủ: outcome:null kèm lý do rõ ràng, không bịa số',
+    kpiFull.status === 200 && kpiFull.json.outcome === null && typeof kpiFull.json.outcome_note === 'string' && kpiFull.json.outcome_note.length > 0,
+    kpiFull
+  );
+
+  const thanhAdoption = kpiFull.json.adoption?.find((a) => a.employee_id === 'emp_thanh');
+  check(
+    'Adoption: Thanh có ai_active_days >= 1 và tool_adoption.claude_code > 0 (dữ liệu thật đã tích luỹ)',
+    thanhAdoption && thanhAdoption.ai_active_days >= 1 && thanhAdoption.tool_adoption.claude_code > 0,
+    thanhAdoption
+  );
+
+  const thanhEfficiency = kpiFull.json.efficiency?.find((e) => e.employee_id === 'emp_thanh');
+  check(
+    'Efficiency: có dòng cho Thanh (closed_task_count >= 0, không lỗi khi chưa có task closed)',
+    thanhEfficiency && typeof thanhEfficiency.closed_task_count !== 'undefined',
+    thanhEfficiency
+  );
+
+  const thanhCollab = kpiFull.json.collaboration?.find((c) => c.employee_id === 'emp_thanh');
+  check(
+    'Collaboration: Thanh có handoffs_created >= 1 (đã publish nhiều handoff thật trong session này)',
+    thanhCollab && thanhCollab.handoffs_created >= 1,
+    thanhCollab
+  );
+
+  const kpiLayerFiltered = await get(`${CP}/v1/kpi?layer=adoption`, thanhToken);
+  check(
+    'layer=adoption chỉ trả về adoption, không trả efficiency/collaboration',
+    kpiLayerFiltered.status === 200 && Array.isArray(kpiLayerFiltered.json.adoption) && kpiLayerFiltered.json.efficiency === undefined && kpiLayerFiltered.json.collaboration === undefined,
+    kpiLayerFiltered
+  );
+
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);
 }
