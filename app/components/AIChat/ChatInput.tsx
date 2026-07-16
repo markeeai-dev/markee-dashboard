@@ -436,7 +436,7 @@ export default function ChatInput({
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
-              className="text-xs bg-slate-100 border-none rounded-xl p-2 text-slate-900 outline-none focus:ring-1 focus:ring-markee-primary cursor-pointer shrink-0 max-w-35 truncate"
+              className="text-base md:text-xs bg-slate-100 border-none rounded-xl p-2 text-slate-900 outline-none focus:ring-1 focus:ring-markee-primary cursor-pointer shrink-0 max-w-35 truncate"
             >
               {Object.entries(MODEL_CONFIG).map(([key, name]) => (
                 <option key={key} value={key} disabled={disabledModels.has(key)}>
