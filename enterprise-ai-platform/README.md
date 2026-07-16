@@ -20,6 +20,8 @@ Nền tảng quản trị seat AI hợp lệ, project continuity và company mem
 
 **KPI 4 lớp (Q22, chỉ 3/4 lớp có dữ liệu thật): PASS.** Theo đúng yêu cầu — chỉ làm Adoption/Efficiency/Collaboration, **không bịa số cho Outcome** (trả `null` kèm lý do rõ ràng ngay trong response: cần tích hợp CI/PR/QA thật, chưa có). Đọc-only trên dữ liệu đã có, không migration mới, không đụng Gateway Adapter. Test bằng dữ liệu thật đã tích luỹ suốt session (không dựng kịch bản giả) — số liệu khớp đúng thực tế, kể cả chỗ đúng ra phải là 0 (task demo chưa từng đóng status='closed', hệ thống báo đúng 0 thay vì bịa). Dashboard thêm tab KPI, ghi chú rõ giới hạn của từng metric ngay dưới bảng. Test-harness: 68 → 74/74 PASS. Chi tiết đầy đủ ở `MVP3-PROGRESS.md`.
 
+**Vá gap A (context/ingest + revoke Full Audit Mode sớm): PASS.** 2 gap tự phát hiện ở đợt trước, vá trước khi làm tính năng mới theo đúng lựa chọn của người dùng. `POST /v1/context/ingest` (mọi nhân viên, không riêng admin) — nay `company-ai context add` (CLI mới) và form trên dashboard đều tạo được `project_context` thật, không chỉ chạy trên dữ liệu seed như trước. `POST /v1/governance/full-audit-mode/:id/revoke` (chỉ admin, idempotent) + `GET /v1/governance/full-audit-grants` (list, cần để revoke có ý nghĩa qua dashboard) — dashboard Governance tab thêm bảng grant kèm nút Revoke. Không đụng Gateway Adapter, không migration mới. Test-harness: 74 → 87/87 PASS. Chi tiết đầy đủ ở `MVP3-PROGRESS.md`.
+
 ## Đọc theo thứ tự này
 
 1. **`MVP0-SPIKE.md`** — làm cái này trước tiên, trước khi đọc hết tài liệu kiến trúc. Đây là việc cần làm ngay hôm nay. Có checklist chuẩn bị, cách chạy, và tiêu chí PASS/FAIL rõ ràng.

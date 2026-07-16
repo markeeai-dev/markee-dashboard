@@ -272,10 +272,36 @@ async function renderTimeline(root) {
     </div>`;
 }
 
+const CONTEXT_TYPES = ['requirement', 'decision', 'ba_feedback', 'status', 'known_issue', 'next_step', 'handoff', 'code_context'];
+
 async function renderMemory(root) {
   const { projects } = await api('/v1/projects');
   const notesByProject = await Promise.all(projects.map((p) => api(`/v1/projects/${p.id}/context-notes`)));
-  root.innerHTML = projects.map((p, i) => `
+
+  const formHtml = `
+    <div class="panel">
+      <h2>+ Thêm ghi chú context</h2>
+      <div class="empty" style="margin-bottom:10px;">Vá gap thật: trước đây project_context không có cách nào tạo mới ngoài seed test.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select id="ctxProject" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Task ID (tuỳ chọn)</label><br/>
+          <input id="ctxTaskId" placeholder="task_tng142" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Loại</label><br/>
+          <select id="ctxType" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${CONTEXT_TYPES.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+          </select></div>
+        <div style="flex:1;min-width:240px;"><label style="font-size:12px;color:var(--muted);">Nội dung</label><br/>
+          <input id="ctxContent" placeholder="Nội dung ghi chú" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);"><input id="ctxApproved" type="checkbox" /> Đã duyệt (tự khai)</label></div>
+        <button class="btn" onclick="ingestContextFromForm()">Thêm</button>
+      </div>
+      <div id="ctxResult" class="empty" style="margin-top:8px;"></div>
+    </div>`;
+
+  const tablesHtml = projects.map((p, i) => `
     <div class="panel">
       <h2>Project Memory — ${esc(p.name)}</h2>
       ${notesByProject[i].context_notes.length ? `<table><thead><tr><th>Loại</th><th>Nội dung</th><th>Người tạo</th><th>Lúc</th><th>Confidence (Q15)</th></tr></thead>
@@ -285,6 +311,25 @@ async function renderMemory(root) {
         <td><span class="pill ${c.confidence >= 70 ? 'ok' : c.confidence >= 30 ? 'warn' : 'danger'}">${esc(c.confidence)}%</span></td></tr>`).join('')}</tbody></table>` :
       '<div class="empty">Chưa có ghi chú context nào cho project này.</div>'}
     </div>`).join('') || '<div class="panel empty">Chưa có project nào.</div>';
+
+  root.innerHTML = formHtml + tablesHtml;
+}
+
+async function ingestContextFromForm() {
+  const resultEl = document.getElementById('ctxResult');
+  const project_id = document.getElementById('ctxProject').value;
+  const task_id = document.getElementById('ctxTaskId').value.trim() || undefined;
+  const type = document.getElementById('ctxType').value;
+  const content = document.getElementById('ctxContent').value.trim();
+  const approved_by = document.getElementById('ctxApproved').checked;
+  if (!content) { resultEl.textContent = 'Cần nhập nội dung.'; return; }
+  try {
+    const res = await apiPost('/v1/context/ingest', { project_id, task_id, type, content, approved_by });
+    resultEl.textContent = `Đã tạo: ${res.context_id}`;
+    switchTab('memory');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
 }
 
 async function renderSeats(root) {
@@ -302,10 +347,11 @@ async function renderSeats(root) {
 // Governance (Q13/Q22) — chỉ admin thấy tab này (đã lọc ở renderTabs). Risk Score KHÔNG tự
 // động xử lý ai — chỉ hiển thị để quản lý tự xem xét, đúng nguyên tắc "không tự động kết luận".
 async function renderGovernance(root) {
-  const [riskScore, flagsRes, auditRes] = await Promise.all([
+  const [riskScore, flagsRes, auditRes, grantsRes] = await Promise.all([
     api('/v1/governance/risk-score'),
     api('/v1/flags'),
     api('/v1/audit-logs'),
+    api('/v1/governance/full-audit-grants'),
   ]);
 
   root.innerHTML = `
@@ -338,6 +384,19 @@ async function renderGovernance(root) {
         <button class="btn" onclick="grantFullAuditMode()">Bật</button>
       </div>
       <div id="faResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Full Audit Grants</h2>
+      <div class="empty" style="margin-bottom:10px;">Vá gap thật: trước đây grant chỉ tự hết hạn, không tắt sớm được.</div>
+      <table><thead><tr><th>Scope</th><th>Lý do</th><th>Cấp bởi</th><th>Hết hạn</th><th>Trạng thái</th><th></th></tr></thead>
+      <tbody>${grantsRes.grants.length ? grantsRes.grants.map((g) => `
+        <tr><td><code>${esc(g.scope)}:${esc(g.scope_id)}</code></td><td>${esc(g.reason)}</td>
+        <td>${esc(g.granted_by_name)}</td><td>${fmtDate(g.expires_at)}</td>
+        <td><span class="pill ${g.is_active ? 'warn' : 'ok'}">${g.is_active ? 'active' : 'hết hạn/đã revoke'}</span></td>
+        <td>${g.is_active ? `<a class="linkbtn" onclick="revokeGrant('${esc(g.id)}')">Revoke</a>` : ''}</td></tr>`).join('') :
+        '<tr><td colspan="6" class="empty">Chưa có grant nào.</td></tr>'}
+      </tbody></table>
     </div>
 
     <div class="panel">
@@ -375,6 +434,16 @@ async function grantFullAuditMode() {
     switchTab('governance');
   } catch (e) {
     resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function revokeGrant(grantId) {
+  if (!confirm('Revoke grant này ngay? (grant vẫn còn hiệu lực cho tới khi hết hạn nếu không revoke)')) return;
+  try {
+    await apiPost(`/v1/governance/full-audit-mode/${encodeURIComponent(grantId)}/revoke`, {});
+    switchTab('governance');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
   }
 }
 

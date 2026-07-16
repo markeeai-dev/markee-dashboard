@@ -195,3 +195,67 @@ Dashboard thêm tab KPI (chỉ admin) — 4 bảng tương ứng, có ghi chú r
 bảng (không giấu người xem việc metric nào là proxy/chưa đo được).
 
 Test-harness: 68 → **74/74 PASS**. Không đụng Gateway Adapter — không cần restart/test lại.
+
+---
+
+# Vá gap A — Context ingest (Q5/mục 12) + Revoke Full Audit Mode sớm
+
+> Kế hoạch: xem plan đã duyệt "Vá gap A". 2 gap tự phát hiện ở Đợt 2 (`project_context` chưa
+> từng có endpoint tạo mới; `full_audit_grants` không revoke sớm được, chỉ tự hết hạn), người
+> dùng chọn vá TRƯỚC khi làm tính năng mới. Không đụng Gateway Adapter, không migration mới
+> (dùng lại cột/bảng đã có từ Đợt 2) — rủi ro thấp hơn 3 đợt trước.
+
+## Bước 1-2 — Control Plane: 3 endpoint mới
+
+**PASS — 87/87 test-harness (tăng từ 74)**, test khép kín cả vòng (tạo → đọc lại) thay vì chỉ
+test riêng lẻ, đúng yêu cầu plan.
+
+- `POST /v1/context/ingest` — mở cho mọi nhân viên (không giới hạn admin, giống bản chất cộng
+  tác của `checkpoints`/`handoffs`), validate `type` đúng 1/8 giá trị CHECK constraint, 400 nếu
+  thiếu field/sai type. `approved_by` là tự khai (hệ thống chưa có Approval workflow thật —
+  ghi rõ giới hạn này, không ép "người duyệt khác người tạo" vì đó là quy tắc riêng của Pattern
+  Library ở Q16, không áp dụng chung).
+- `POST /v1/governance/full-audit-mode/:id/revoke` (chỉ admin) — set `expires_at = now()`,
+  không cần cột mới vì `findActiveFullAuditGrant` đã lọc theo `expires_at > now()`. Idempotent
+  (revoke lại grant đã hết hạn/đã revoke vẫn 200), 404 nếu `grant_id` không tồn tại. Ghi
+  `audit_logs` action `full_audit_mode_revoked`.
+- `GET /v1/governance/full-audit-grants` (chỉ admin) — list kèm `is_active` tính từ
+  `expires_at > now()`, cần để biết `grant_id` mà revoke (không có cách nào revoke nếu không
+  list được).
+
+## Bước 2 — CLI: `company-ai context add`
+
+**PASS, test thật.** Lệnh mới hỏi project_id (mặc định lấy từ `project.yaml`)/task_id (tuỳ
+chọn)/type (chọn từ danh sách)/content/có duyệt luôn không. Test thật: tạo 1 context mới qua
+CLI, chạy lại `company-ai claude` — `checkpoint.md` hiện đúng ghi chú vừa tạo kèm
+`(Requirement — approved, 100% confidence)`, xác nhận đường CLI → Control Plane → Context
+Confidence (Q15) khép kín thật, không chỉ dừng ở API.
+
+## Bước 3 — Dashboard
+
+**PASS.** Project Memory tab: thêm form "+ Thêm ghi chú context" (project/task_id/type/nội
+dung/checkbox đã duyệt) ngay trên bảng context-notes đã có, gọi `POST /v1/context/ingest`.
+Governance tab: thêm bảng "Full Audit Grants" (scope, lý do, cấp bởi, hết hạn, trạng thái, nút
+Revoke trên dòng đang active), gọi `POST /v1/governance/full-audit-mode/:id/revoke`.
+
+Deploy `/srv/center-ai-dashboard/index.html` qua droplet, xác nhận qua curl: HTML trả về khớp
+byte-for-byte với bản local (`diff` rỗng), chứa đủ `ingestContextFromForm`/`revokeGrant`/
+"Full Audit Grants"/"Thêm ghi chú context". Không có công cụ browser trong môi trường này nên
+không tự xem giao diện render được — xác nhận ở tầng HTTP/nội dung HTML, không phải tầng UI
+hiển thị, đúng giới hạn đã ghi ở các đợt trước.
+
+## Verification cuối
+
+- Test-harness: 74 → **87/87 PASS** (chạy trực tiếp trên droplet, sourcing đúng
+  `/etc/center-ai/control-plane.env`), không regression.
+- Không đụng Gateway Adapter — không cần restart/test lại service đó, đúng theo plan.
+- Backup file cũ (`index.html.bak-<timestamp>`) giữ lại trên droplet trước khi ghi đè, chưa
+  cần dùng tới (rollback tức thời nếu cần).
+
+## Tác dụng phụ tốt của việc vá gap này
+
+Giới hạn đã ghi ở Đợt 2 ("không test được đường 'không có grant active → không lưu gì' bằng
+traffic thật vì Thanh/Hoàng đều có grant tồn đọng, chưa có endpoint revoke") nay đã có thể vá —
+endpoint revoke vừa xây cho phép dọn sạch grant tồn đọng rồi test lại đường đó bằng traffic
+thật. Chưa thực hiện lại test đó trong đợt này (ngoài phạm vi "vá gap A" đã chốt), để dành cho
+lần sau nếu cần xác nhận thêm.
