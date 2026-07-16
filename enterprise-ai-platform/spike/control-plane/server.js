@@ -750,6 +750,47 @@ async function handleOffboardSeat(req, params) {
   return { status: 200, body: { seat_id: params.id, status: 'revoked' } };
 }
 
+// Nửa "gán" đối xứng với offboard — mục cuối của "Workflow duyệt gán/thu hồi seat" (mục 14).
+// Admin trực tiếp thực hiện (không phải luồng 2 bên nhân viên-xin/admin-duyệt — team hiện chỉ
+// 2 người đã có seat sẵn, không có kịch bản thật để test luồng xin seat, giống lý do đã hoãn
+// policy theo department). KHÔNG cho gán seat đã `revoked` — seat đó cần provision lại thật
+// trong 9Router (OAuth account mới) trước, Center AI không sở hữu vòng đời kết nối provider ở
+// MVP1 (xem comment đầu schema.sql).
+async function handleAssignSeat(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const body = await readJsonBody(req);
+  if (!body.reason) throw new ApiError(400, 'missing_reason');
+  if (!body.employee_id) throw new ApiError(400, 'missing_employee_id');
+
+  const { rows } = await query('SELECT id, status FROM seats WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'seat_not_found');
+  if (rows[0].status === 'revoked') throw new ApiError(400, 'seat_revoked_needs_reprovisioning');
+
+  const { rows: empRows } = await query('SELECT id FROM employees WHERE id = $1', [body.employee_id]);
+  if (!empRows.length) throw new ApiError(400, 'assignee_not_found');
+
+  // Await, KHÔNG fire-and-forget — cùng nguyên tắc offboard: không báo thành công nếu chưa xác
+  // nhận enforcement thật đã xảy ra.
+  let adapterRes;
+  try {
+    adapterRes = await fetch(`${ADAPTER_INTERNAL_URL}/internal/v1/seats/${encodeURIComponent(params.id)}/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` },
+      body: JSON.stringify({ status: 'healthy', employee_id: body.employee_id }),
+    });
+  } catch (err) {
+    throw new ApiError(502, 'adapter_unreachable', { detail: err.message });
+  }
+  if (!adapterRes.ok) throw new ApiError(502, 'adapter_rejected_status_update');
+
+  await query(`UPDATE seats SET status = 'active' WHERE id = $1`, [params.id]);
+  await query(`UPDATE seat_runtime_registry SET employee_id = $1, status = 'healthy', updated_at = now() WHERE seat_id = $2`, [body.employee_id, params.id]);
+  await writeAuditLog(emp.id, 'seat_assigned', 'seat', params.id, { employee_id: body.employee_id, reason: body.reason });
+
+  return { status: 200, body: { seat_id: params.id, employee_id: body.employee_id, status: 'active' } };
+}
+
 async function handleListAuditLogs(req) {
   const emp = await requireEmployee(req);
   requireAdmin(emp);
@@ -1578,6 +1619,11 @@ const routes = [
     method: 'POST',
     pattern: /^\/v1\/seats\/([^/]+)\/offboard$/,
     handler: (req, m) => handleOffboardSeat(req, { id: m[1] }),
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/seats\/([^/]+)\/assign$/,
+    handler: (req, m) => handleAssignSeat(req, { id: m[1] }),
   },
   { method: 'GET', pattern: /^\/v1\/audit-logs$/, handler: (req) => handleListAuditLogs(req) },
   { method: 'GET', pattern: /^\/v1\/flags$/, handler: (req) => handleListFlags(req) },

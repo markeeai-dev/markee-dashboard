@@ -393,7 +393,7 @@ async function renderSeats(root) {
       <td><span class="pill ${e.status === 'active' ? 'ok' : 'danger'}">${esc(e.status)}</span></td>
       <td>${e.seat_id ? `<code>${esc(e.seat_id)}</code>` : '<span class="empty">chưa gán seat</span>'}</td>
       <td>${e.seat_status ? `<span class="pill ${e.seat_status === 'healthy' ? 'ok' : 'danger'}">${esc(e.seat_status)}</span>` : '—'}</td>
-      ${isAdmin ? `<td>${e.seat_id && e.seat_status !== 'destroyed' ? `<a class="linkbtn" onclick="offboardSeat('${esc(e.seat_id)}')">Offboard</a>` : ''}</td>` : ''}</tr>`).join('')}
+      ${isAdmin ? `<td>${e.seat_id && e.seat_status !== 'destroyed' ? `<a class="linkbtn" onclick="assignSeat('${esc(e.seat_id)}')">Gán/Đổi người</a> · <a class="linkbtn" onclick="offboardSeat('${esc(e.seat_id)}')">Offboard</a>` : ''}</td>` : ''}</tr>`).join('')}
     </tbody></table></div>`;
 }
 
@@ -403,6 +403,23 @@ async function offboardSeat(seatId) {
   if (!confirm(`Xác nhận offboard ${seatId}? Không thể hoàn tác qua dashboard.`)) return;
   try {
     await apiPost(`/v1/seats/${encodeURIComponent(seatId)}/offboard`, { reason });
+    switchTab('seats');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+// Nửa "gán" đối xứng với offboardSeat — mục cuối "Workflow duyệt gán/thu hồi seat" (mục 14).
+async function assignSeat(seatId) {
+  const { employees } = await api('/v1/employees');
+  const list = employees.map((e) => `${e.id} — ${e.full_name}`).join('\n');
+  const employeeId = prompt(`Gán seat ${seatId} cho nhân viên nào? Gõ đúng employee_id:\n${list}`);
+  if (!employeeId) return;
+  if (!employees.some((e) => e.id === employeeId)) { alert('employee_id không hợp lệ.'); return; }
+  const reason = prompt(`Lý do gán seat ${seatId} cho ${employeeId}?`);
+  if (!reason) return;
+  try {
+    await apiPost(`/v1/seats/${encodeURIComponent(seatId)}/assign`, { employee_id: employeeId, reason });
     switchTab('seats');
   } catch (e) {
     alert('Lỗi: ' + e.message);

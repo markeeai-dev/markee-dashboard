@@ -177,10 +177,12 @@ const server = http.createServer((req, res) => {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
-  // MVP3 Đợt 5 — Seat Offboarding: đường ghi DUY NHẤT vào registry.json, xác thực bằng
-  // INTERNAL_SERVICE_SECRET (KHÔNG phải token nghiệp vụ ký cho AI request) — Control Plane gọi
-  // sau khi admin xác nhận offboard, để enforcement thật xảy ra ngay (Adapter đọc lại file này
-  // mỗi request, xem registry.js). Phải xử lý và return TRƯỚC toàn bộ logic proxy AI bên dưới.
+  // MVP3 Đợt 5 (offboard) + đợt seat gán (assign) — đường ghi DUY NHẤT vào registry.json, xác
+  // thực bằng INTERNAL_SERVICE_SECRET (KHÔNG phải token nghiệp vụ ký cho AI request) — Control
+  // Plane gọi sau khi admin xác nhận offboard/assign, để enforcement thật xảy ra ngay (Adapter
+  // đọc lại file này mỗi request, xem registry.js). Nhận cả `status` (offboard) lẫn
+  // `employee_id` (assign — đổi ai sở hữu seat) độc lập nhau, ít nhất 1 trong 2. Phải xử lý và
+  // return TRƯỚC toàn bộ logic proxy AI bên dưới.
   if (req.method === 'POST' && /^\/internal\/v1\/seats\/[^/]+\/status$/.test(req.url)) {
     if (!INTERNAL_SERVICE_SECRET || token !== INTERNAL_SERVICE_SECRET) {
       return sendJson(res, 401, { error: 'invalid_internal_secret' });
@@ -195,13 +197,14 @@ const server = http.createServer((req, res) => {
       } catch {
         return sendJson(res, 400, { error: 'invalid_json_body' });
       }
-      if (!body.status) return sendJson(res, 400, { error: 'missing_status' });
+      if (!body.status && !body.employee_id) return sendJson(res, 400, { error: 'missing_status_or_employee_id' });
       try {
         const registry = loadRegistry();
         if (!registry[seatId]) return sendJson(res, 404, { error: 'seat_not_found' });
-        registry[seatId].status = body.status;
+        if (body.status) registry[seatId].status = body.status;
+        if (body.employee_id) registry[seatId].employee_id = body.employee_id;
         fs.writeFileSync(REGISTRY_PATH, JSON.stringify(registry, null, 2));
-        return sendJson(res, 200, { seat_id: seatId, status: body.status });
+        return sendJson(res, 200, { seat_id: seatId, status: registry[seatId].status, employee_id: registry[seatId].employee_id });
       } catch (err) {
         return sendJson(res, 500, { error: 'registry_write_failed', detail: err.message });
       }

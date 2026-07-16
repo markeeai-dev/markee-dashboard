@@ -472,3 +472,54 @@ có ý nghĩa), Pattern Library "reuse" tự động giữa project (tài liệu
 theo department, webhook Jira/Linear, Intent-centric (Q12), mở rộng Knowledge Graph, toàn bộ
 MVP4 — tất cả đều bị chặn bởi thiếu dữ liệu thật/tích hợp bên thứ ba, hoặc chính tài liệu khoá
 ghi rõ lý do hoãn, không phải bỏ sót đợt này.
+
+---
+
+# Seat gán qua duyệt — khép nốt "Workflow duyệt gán/thu hồi seat" (mục 14)
+
+> Mục cuối cùng của MVP3 còn làm được ngay không bị chặn bởi thiếu dữ liệu thật/tích hợp bên thứ
+> ba. Đợt 5 đã làm xong nửa **thu hồi** (offboard, enforcement thật). Đợt này làm nốt nửa
+> **gán**, đối xứng y hệt — sau đợt này MVP3 khép lại đúng phạm vi khả thi hiện tại.
+
+**Quyết định thiết kế**: "gán" là hành động admin trực tiếp (không phải luồng nhân viên-xin/
+admin-duyệt qua `approval_requests` — bảng đó có shape cho policy chặn AI theo classification,
+không khớp với "admin chủ động gán seat"; team hiện chỉ 2 người đã có seat sẵn, không có kịch
+bản thật "nhân viên mới xin seat" để test — giống lý do đã hoãn policy theo department).
+
+**PASS — 154/154 test-harness (tăng từ 149).**
+
+- Gateway Adapter: mở rộng `POST /internal/v1/seats/:id/status` (trước chỉ nhận `status`) nhận
+  thêm `employee_id` optional — cần cả 2 để đổi ai sở hữu seat trong `registry.json`, không chỉ
+  đổi trạng thái khoẻ/hỏng. Vẫn là đường ghi DUY NHẤT vào file này.
+- Control Plane: `POST /v1/seats/:id/assign` (chỉ admin, đối xứng `handleOffboardSeat`) — gọi
+  Adapter thật (await, không fire-and-forget) trước khi cập nhật DB, cùng nguyên tắc "không báo
+  thành công nếu chưa xác nhận enforcement thật". **Chặn** (400
+  `seat_revoked_needs_reprovisioning`) nếu seat đang `revoked` — seat đó cần provision lại thật
+  trong 9Router (OAuth account mới) trước, Center AI không sở hữu vòng đời kết nối provider ở
+  MVP1 (giới hạn đã ghi từ đầu, không đổi ở đợt này).
+- Dashboard: nút "Gán/Đổi người" cạnh Offboard trên Seats tab (chỉ admin).
+
+**Test thật đầu-cuối** (KHÔNG đụng seat thật của Thanh/Hoàng — dùng seat giả lập, đúng kỹ thuật
+đã dùng ở Đợt 5): tạo seat test gán sẵn cho `emp_thanh` → gọi `assign` đổi sang `emp_hoang` →
+xác nhận cả 3 tầng đổi đúng (`registry.json` employee_id+status, DB `seats`/
+`seat_runtime_registry`, `audit_logs` có `seat_assigned`) → offboard seat test để dọn sạch →
+thử assign lại seat vừa offboard → xác nhận đúng bị chặn 400
+`seat_revoked_needs_reprovisioning`. `company-ai claude` thật của Thanh sau cùng xác nhận không
+bị ảnh hưởng.
+
+## Verification cuối
+
+- Test-harness: 149 → **154/154 PASS**, không regression.
+- Mock Adapter suite: 7/7 PASS (phát hiện 1 lần FAIL do token test hết hạn 6h TTL — không phải
+  regression thật, xác nhận lại bằng cách sinh token mới, PASS lại ngay).
+- Seat thật của Thanh/Hoàng không bị đụng trong suốt quá trình test.
+
+## MVP3 — kết luận phạm vi khả thi hiện tại
+
+Với đợt này, **toàn bộ mục MVP3 làm được ngay (không bị chặn bởi thiếu dữ liệu thật/tích hợp bên
+thứ ba/chính tài liệu khoá hoãn tới MVP4) đã hoàn tất**: Governance, 2-mode Audit, Context
+Confidence/ADR, KPI 4 lớp (3/4), Policy Engine cơ bản (Data Classification + Approval, scope
+company/project), Company Brain `scope_level` (3/5 tầng), Pattern Library (gate, chưa reuse tự
+động), Workflow gán/thu hồi seat (đủ cả 2 nửa). Phần còn lại của MVP3 (policy/Company Brain theo
+department, Pattern Library reuse, mở rộng Knowledge Graph, Intent-centric Q12, webhook
+Jira/Linear) đều có lý do hoãn cụ thể đã ghi rõ, không phải bỏ sót.

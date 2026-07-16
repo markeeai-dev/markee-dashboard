@@ -894,6 +894,23 @@ async function main() {
     kpiAfterClose
   );
 
+  // --- Seat gán qua duyệt — nửa "gán" đối xứng với offboard (mục cuối MVP3 còn làm được ngay) ---
+
+  const assignAsMember = await post(`${CP}/v1/seats/seat_claude_thanh/assign`, { employee_id: 'emp_hoang', reason: 'test' }, hoangToken);
+  check('Hoàng (member) assign seat -> 403', assignAsMember.status === 403, assignAsMember);
+
+  const assignMissingReason = await post(`${CP}/v1/seats/seat_claude_thanh/assign`, { employee_id: 'emp_hoang' }, thanhToken);
+  check('assign thiếu reason -> 400', assignMissingReason.status === 400, assignMissingReason);
+
+  const assignMissingEmployee = await post(`${CP}/v1/seats/seat_claude_thanh/assign`, { reason: 'test' }, thanhToken);
+  check('assign thiếu employee_id -> 400', assignMissingEmployee.status === 400, assignMissingEmployee);
+
+  const assignSeatNotFound = await post(`${CP}/v1/seats/seat_khong_ton_tai/assign`, { employee_id: 'emp_hoang', reason: 'test' }, thanhToken);
+  check('assign seat không tồn tại -> 404', assignSeatNotFound.status === 404, assignSeatNotFound);
+
+  const assignBadEmployee = await post(`${CP}/v1/seats/seat_claude_thanh/assign`, { employee_id: 'emp_khong_ton_tai', reason: 'test' }, thanhToken);
+  check('assign employee_id không tồn tại -> 400', assignBadEmployee.status === 400, assignBadEmployee);
+
   console.log(`\n${passed} PASS / ${failed} FAIL`);
   process.exit(failed > 0 ? 1 : 0);
 }
