@@ -18,7 +18,7 @@ function getSupabaseAdmin() {
   });
 }
 
-// 1. GET: Lấy danh sách apps và tính toán lượng sử dụng thực tế từ bảng api_logs
+// 1. GET: Lấy danh sách apps từ bảng apps
 export async function GET() {
   try {
     const supabaseAdmin = getSupabaseAdmin();
@@ -34,34 +34,17 @@ export async function GET() {
       return NextResponse.json({ error: appsError.message }, { status: 500 });
     }
 
-    // Lấy thông tin sử dụng từ bảng api_logs
-    const { data: logsData, error: logsError } = await supabaseAdmin
-      .from("api_logs")
-      .select("app_id, total_tokens, cost");
-
-    if (logsError) {
-      console.error("Lỗi khi lấy logs sử dụng:", logsError);
-    }
-
-    // Gộp dữ liệu apps với lượng sử dụng thực tế
-    const appsWithStats = (appsData || []).map((app) => {
-      const appLogs = (logsData || []).filter((log) => log.app_id === app.id);
-      const tokens_used = appLogs.reduce((sum, log) => sum + (log.total_tokens || 0), 0);
-      const requests = appLogs.length;
-      const cost = appLogs.reduce((sum, log) => sum + (log.cost || 0), 0);
-
-      return {
-        id: app.id,
-        name: app.name,
-        secret_key: app.secret_key,
-        status: "active",
-        tokens_used,
-        token_limit: 5000000, // Định mức mặc định 5,000,000 tokens
-        requests,
-        cost,
-        created_at: app.created_at ? app.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
-      };
-    });
+    const appsWithStats = (appsData || []).map((app) => ({
+      id: app.id,
+      name: app.name,
+      secret_key: app.secret_key || "",
+      app_url: app.app_url || null,
+      status: app.status || "active",
+      total_granted: Number(app.total_granted || 0),
+      total_used: Number(app.total_used || 0),
+      balance: Number(app.balance || 0),
+      created_at: app.created_at ? app.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
+    }));
 
     return NextResponse.json(appsWithStats);
   } catch (error: any) {
@@ -70,19 +53,19 @@ export async function GET() {
   }
 }
 
-// 2. POST: Tạo mới API Key/App
+// 2. POST: Tạo mới App (nhận secret_key thủ công từ client)
 export async function POST(request: Request) {
   try {
     const payload = await request.json();
-    const { name } = payload;
+    const { name, app_url, secret_key } = payload;
 
     if (!name || !name.trim()) {
       return NextResponse.json({ error: "Tên ứng dụng là bắt buộc" }, { status: 400 });
     }
 
-    // Sinh secret_key ngẫu nhiên sk_markee_[random_string]
-    const randomPart = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
-    const secret_key = `sk_markee_${randomPart}`;
+    if (!secret_key || !secret_key.trim()) {
+      return NextResponse.json({ error: "Secret Key là bắt buộc" }, { status: 400 });
+    }
 
     const supabaseAdmin = getSupabaseAdmin();
 
@@ -90,7 +73,12 @@ export async function POST(request: Request) {
       .from("apps")
       .insert({
         name: name.trim(),
-        secret_key,
+        app_url: app_url ? app_url.trim() : null,
+        secret_key: secret_key.trim(),
+        total_granted: 0,
+        total_used: 0,
+        balance: 0,
+        status: "active"
       })
       .select("*")
       .single();
@@ -102,16 +90,15 @@ export async function POST(request: Request) {
 
     console.log("Đã tạo app mới:", newApp);
 
-    // Trả về app mới kèm theo các metrics sử dụng bằng 0
     return NextResponse.json({
       id: newApp.id,
       name: newApp.name,
       secret_key: newApp.secret_key,
-      status: "active",
-      tokens_used: 0,
-      token_limit: 5000000,
-      requests: 0,
-      cost: 0.0,
+      app_url: newApp.app_url,
+      status: newApp.status,
+      total_granted: 0,
+      total_used: 0,
+      balance: 0,
       created_at: newApp.created_at ? newApp.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
     });
   } catch (error: any) {
@@ -120,11 +107,11 @@ export async function POST(request: Request) {
   }
 }
 
-// 3. PUT: Sửa tên ứng dụng
+// 3. PUT: Sửa tên ứng dụng, link web, và secret_key (nếu có)
 export async function PUT(request: Request) {
   try {
     const payload = await request.json();
-    const { id, name } = payload;
+    const { id, name, app_url, secret_key } = payload;
 
     if (!id || !name || !name.trim()) {
       return NextResponse.json({ error: "Thiếu id ứng dụng hoặc tên mới" }, { status: 400 });
@@ -132,9 +119,20 @@ export async function PUT(request: Request) {
 
     const supabaseAdmin = getSupabaseAdmin();
 
+    // Chuẩn bị dữ liệu update
+    const updateData: any = {
+      name: name.trim(),
+      app_url: app_url ? app_url.trim() : null,
+    };
+
+    // Chỉ cập nhật secret_key mới nếu admin có cung cấp (không bỏ trống)
+    if (secret_key && secret_key.trim()) {
+      updateData.secret_key = secret_key.trim();
+    }
+
     const { data: updatedApp, error: updateError } = await supabaseAdmin
       .from("apps")
-      .update({ name: name.trim() })
+      .update(updateData)
       .eq("id", id)
       .select("*")
       .single();
@@ -144,7 +142,17 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
-    return NextResponse.json(updatedApp);
+    return NextResponse.json({
+      id: updatedApp.id,
+      name: updatedApp.name,
+      secret_key: updatedApp.secret_key,
+      app_url: updatedApp.app_url,
+      status: updatedApp.status,
+      total_granted: Number(updatedApp.total_granted || 0),
+      total_used: Number(updatedApp.total_used || 0),
+      balance: Number(updatedApp.balance || 0),
+      created_at: updatedApp.created_at ? updatedApp.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
+    });
   } catch (error: any) {
     console.error("Lỗi PUT /api/apps:", error);
     return NextResponse.json({ error: error.message || "Internal Server Error" }, { status: 500 });
@@ -164,6 +172,12 @@ export async function DELETE(request: Request) {
     const supabaseAdmin = getSupabaseAdmin();
 
     const parsedId = isNaN(Number(id)) ? id : Number(id);
+
+    // Xóa tất cả lịch sử biến động số dư liên quan trước khi xóa app để tránh lỗi foreign key constraint
+    await supabaseAdmin
+      .from("balance_history")
+      .delete()
+      .eq("app_id", parsedId);
 
     // Thực hiện xóa dòng trong bảng apps
     const { error: deleteError } = await supabaseAdmin

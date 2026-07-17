@@ -50,16 +50,13 @@ Vai trò của bạn:
 
 export async function POST(req: Request) {
   try {
-    const origin = new URL(req.url).origin;
     let user: { id: string; email: string } | null = null;
     let supabase: any = null;
 
-    let secretKey = "";
     const authHeader = req.headers.get("authorization");
 
     if (authHeader && authHeader.startsWith("Bearer ")) {
       // 1. APP BÊN NGOÀI: Bắt buộc check Auth đầy đủ
-      secretKey = authHeader.split(" ")[1];
       const authResult = await authenticateRequest(req);
       user = authResult.user;
       supabase = authResult.supabase;
@@ -69,7 +66,7 @@ export async function POST(req: Request) {
       }
     } else {
       // 2. DASHBOARD NỘI BỘ: Cấp quyền tuyệt đối dựa vào ENV Key
-      secretKey = process.env.MARKEE_INTERNAL_API_KEY || "";
+      const secretKey = process.env.MARKEE_INTERNAL_API_KEY || "";
       if (!secretKey) {
         return NextResponse.json({ error: "Missing Internal API Key" }, { status: 500 });
       }
@@ -78,7 +75,7 @@ export async function POST(req: Request) {
       user = { id: "admin-internal", email: "admin@markee.io" };
 
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY; // Fallback anon key if service role is empty
+      const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
       if (supabaseUrl && supabaseServiceKey) {
         supabase = createClient(supabaseUrl, supabaseServiceKey);
       } else {
@@ -170,30 +167,6 @@ export async function POST(req: Request) {
         }
 
         const data = await response.json();
-
-        // Ghi log ngầm cho Gemini (is_free = true)
-        const usage = data?.usageMetadata;
-        if (usage) {
-          console.log("=== SERVER: ĐÃ BẮT ĐƯỢC USAGE (Gemini) ===", usage);
-          try {
-            await fetch(`${origin}/api/log-usage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                secret_key: process.env.MARKEE_INTERNAL_API_KEY,
-                model: modelName,
-                input_tokens: usage.promptTokenCount || 0,
-                output_tokens: usage.candidatesTokenCount || 0,
-                total_tokens: usage.totalTokenCount || 0,
-                is_free: true,
-              }),
-            });
-            console.log("=== SERVER: GHI LOG WEBHOOK SUCCESS (Gemini) ===");
-          } catch (err) {
-            console.error("=== SERVER: LỖI GHI LOG (Gemini) ===", err);
-          }
-        }
-
         return NextResponse.json(data);
       }
 
@@ -205,7 +178,7 @@ export async function POST(req: Request) {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
-            "HTTP-Referer": origin,
+            "HTTP-Referer": new URL(req.url).origin,
             "X-Title": "Markee AI",
           },
           body: JSON.stringify({
@@ -220,28 +193,6 @@ export async function POST(req: Request) {
         }
 
         const data = await response.json();
-        const usage = data?.usage;
-        if (usage) {
-          console.log("=== SERVER: ĐÃ BẮT ĐƯỢC USAGE (OpenRouter) ===", usage);
-          try {
-            await fetch(`${origin}/api/log-usage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                secret_key: process.env.MARKEE_INTERNAL_API_KEY,
-                model: data.model || modelName,
-                input_tokens: usage.prompt_tokens || usage.input_tokens || 0,
-                output_tokens: usage.completion_tokens || usage.output_tokens || 0,
-                total_tokens: usage.total_tokens || 0,
-                is_free: true,
-              }),
-            });
-            console.log("=== SERVER: GHI LOG WEBHOOK SUCCESS (OpenRouter) ===");
-          } catch (err) {
-            console.error("=== SERVER: LỖI GHI LOG (OpenRouter) ===", err);
-          }
-        }
-
         return NextResponse.json(data);
       }
 
@@ -265,28 +216,6 @@ export async function POST(req: Request) {
       }
 
       const data = await response.json();
-      const usage = data?.usage;
-      if (usage) {
-        console.log("=== SERVER: ĐÃ BẮT ĐƯỢC USAGE (ShopAIKey) ===", usage);
-        try {
-          await fetch(`${origin}/api/log-usage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              secret_key: process.env.MARKEE_INTERNAL_API_KEY,
-              model: data.model || modelName,
-              input_tokens: usage.prompt_tokens || usage.input_tokens || 0,
-              output_tokens: usage.completion_tokens || usage.output_tokens || 0,
-              total_tokens: usage.total_tokens || 0,
-              is_free: false,
-            }),
-          });
-          console.log("=== SERVER: GHI LOG WEBHOOK SUCCESS (ShopAIKey) ===");
-        } catch (err) {
-          console.error("=== SERVER: LỖI GHI LOG (ShopAIKey) ===", err);
-        }
-      }
-
       return NextResponse.json(data);
     }
 
@@ -302,8 +231,7 @@ export async function POST(req: Request) {
         },
       },
       onFinish: async (event) => {
-        const { text, usage } = event;
-        console.log("=== USAGE DEBUG ===", JSON.stringify(usage, null, 2));
+        const { text } = event;
 
         if (text) {
           if (sessionId) {
@@ -319,30 +247,6 @@ export async function POST(req: Request) {
               content: text,
             });
             await supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
-          }
-        }
-
-        if (usage) {
-          try {
-            const rawUsage = usage as any;
-            const input_tokens = rawUsage.promptTokens || 0;
-            const output_tokens = rawUsage.completionTokens || 0;
-            const total_tokens = rawUsage.totalTokens || (input_tokens + output_tokens);
-
-            await fetch(`${origin}/api/log-usage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                secret_key: process.env.MARKEE_INTERNAL_API_KEY,
-                model: modelName,
-                input_tokens,
-                output_tokens,
-                total_tokens,
-                is_free: name.includes("gemini") || name.includes("free") || name.includes("auto"),
-              }),
-            });
-          } catch (e) {
-            console.error("=== LỖI GHI LOG ===", e);
           }
         }
       },

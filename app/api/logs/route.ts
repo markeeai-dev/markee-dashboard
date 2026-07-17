@@ -18,11 +18,12 @@ function getSupabaseAdmin() {
   });
 }
 
-// GET: Lấy lịch sử sử dụng logs của một app cụ thể
+// GET: Lấy lịch sử biến động số dư của một app cụ thể từ bảng balance_history kèm theo bộ lọc days
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const appId = searchParams.get("app_id");
+    const days = searchParams.get("days") || "all";
 
     if (!appId) {
       return NextResponse.json({ error: "Thiếu tham số app_id" }, { status: 400 });
@@ -30,18 +31,36 @@ export async function GET(request: Request) {
 
     const supabaseAdmin = getSupabaseAdmin();
 
-    // 1. Kiểm tra ID xem là số hay UUID
     const parsedAppId = isNaN(Number(appId)) ? appId : Number(appId);
 
-    // 2. Truy vấn bảng api_logs lọc theo app_id, sắp xếp created_at desc
-    const { data: logs, error: logsError } = await supabaseAdmin
-      .from("api_logs")
+    // 1. Khởi tạo query truy vấn bảng balance_history
+    let query = supabaseAdmin
+      .from("balance_history")
       .select("*")
       .eq("app_id", parsedAppId)
-      .order("created_at", { ascending: false });
+      .order("synced_at", { ascending: false });
+
+    // 2. Áp dụng bộ lọc thời gian
+    if (days !== "all") {
+      const now = new Date();
+      if (days === "today") {
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        query = query.gte("synced_at", startOfToday.toISOString());
+      } else if (days === "7days") {
+        const limitDate = new Date();
+        limitDate.setDate(now.getDate() - 7);
+        query = query.gte("synced_at", limitDate.toISOString());
+      } else if (days === "30days") {
+        const limitDate = new Date();
+        limitDate.setDate(now.getDate() - 30);
+        query = query.gte("synced_at", limitDate.toISOString());
+      }
+    }
+
+    const { data: logs, error: logsError } = await query;
 
     if (logsError) {
-      console.error("Lỗi khi lấy log từ api_logs:", logsError);
+      console.error("Lỗi khi lấy log từ balance_history:", logsError);
       return NextResponse.json({ error: logsError.message }, { status: 500 });
     }
 
