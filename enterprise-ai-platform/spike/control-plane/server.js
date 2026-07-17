@@ -143,6 +143,51 @@ async function handleListEmployees(req) {
   return { status: 200, body: { employees: rows } };
 }
 
+// Trước đây chưa có đường nào tạo nhân viên mới qua sản phẩm — phải sửa tay DB (`seed.js`) mỗi
+// lần tuyển người, đúng gap thật vừa phát hiện. Chỉ admin (tạo tài khoản là hành động quản trị),
+// email duy nhất (đã có UNIQUE constraint ở schema — bắt lỗi rõ ràng thay vì để rớt xuống lỗi DB
+// thô). Role mặc định 'member' — không cho tự phong admin qua chính API này, muốn nâng quyền thì
+// admin khác sửa tay hoặc làm endpoint riêng sau (chưa cần ở quy mô hiện tại).
+async function handleCreateEmployee(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const body = await readJsonBody(req);
+  if (!body.email || !body.full_name) throw new ApiError(400, 'missing_fields');
+
+  const { rows: existing } = await query('SELECT id FROM employees WHERE email = $1', [body.email]);
+  if (existing.length) throw new ApiError(400, 'email_already_exists');
+
+  const employeeId = id('emp');
+  await query(`INSERT INTO employees (id, email, full_name) VALUES ($1,$2,$3)`, [employeeId, body.email, body.full_name]);
+  await writeAuditLog(emp.id, 'employee_created', 'employee', employeeId, { email: body.email });
+  return { status: 201, body: { employee_id: employeeId } };
+}
+
+// Xoá nhân viên — chỉ admin. Cần cho test-harness tự dọn nhân viên nó tạo (cùng lớp với dọn
+// task/context/grant). CHẶN xoá nếu đã có dữ liệu làm việc thật gắn vào — xoá 1 nhân viên đang
+// có lịch sử là mất dữ liệu thật, không phải dọn rác.
+async function handleDeleteEmployee(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query('SELECT id FROM employees WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'employee_not_found');
+
+  const { rows: deps } = await query(
+    `SELECT (SELECT count(*) FROM work_sessions WHERE employee_id = $1) AS ws,
+            (SELECT count(*) FROM seat_runtime_registry WHERE employee_id = $1) AS seat,
+            (SELECT count(*) FROM tasks WHERE assignee_employee_id = $1) AS task`,
+    [params.id]
+  );
+  const d = deps[0];
+  if (Number(d.ws) > 0 || Number(d.seat) > 0 || Number(d.task) > 0) {
+    throw new ApiError(400, 'employee_has_history', { work_sessions: Number(d.ws), seat_assigned: Number(d.seat), tasks_assigned: Number(d.task) });
+  }
+
+  await query('DELETE FROM employees WHERE id = $1', [params.id]);
+  await writeAuditLog(emp.id, 'employee_deleted', 'employee', params.id, {});
+  return { status: 200, body: { deleted: true } };
+}
+
 async function handleListActiveWorkSessions(req) {
   await requireEmployee(req);
   const { rows } = await query(
@@ -1849,6 +1894,8 @@ const routes = [
     handler: (req, m) => handleListProjectContext(req, { projectId: m[1] }),
   },
   { method: 'GET', pattern: /^\/v1\/employees$/, handler: (req) => handleListEmployees(req) },
+  { method: 'POST', pattern: /^\/v1\/employees$/, handler: (req) => handleCreateEmployee(req) },
+  { method: 'DELETE', pattern: /^\/v1\/employees\/([^/]+)$/, handler: (req, m) => handleDeleteEmployee(req, { id: m[1] }) },
   { method: 'GET', pattern: /^\/v1\/settings$/, handler: (req) => handleGetSettings(req) },
   { method: 'POST', pattern: /^\/v1\/settings$/, handler: (req) => handleUpdateSettings(req) },
   {

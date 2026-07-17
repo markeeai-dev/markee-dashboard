@@ -92,6 +92,9 @@ function trackTask(res) {
   return res;
 }
 
+// Nhân viên do test tạo cũng phải dọn — cùng lý do.
+const createdEmployeeIds = [];
+
 async function main() {
   // --- Login ---
   const wrongCode = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local', access_code: 'sai-ma' });
@@ -895,6 +898,24 @@ async function main() {
   // của file này. Đường enforcement thật đầu-cuối (registry.json thật đổi + DB đổi + audit_logs)
   // đã xác nhận THỦ CÔNG bằng 1 seat giả lập tạo tạm qua SQL trực tiếp trên droplet, xem
   // MVP3-PROGRESS.md — không phải bỏ sót, ghi rõ giới hạn thật của bộ test tự động này.
+  // Gap thật: trước đây chưa có cách tạo nhân viên mới qua sản phẩm, phải sửa tay DB mỗi lần
+  // tuyển người.
+  const empMissingFields = await post(`${CP}/v1/employees`, { email: 'x@test.local' }, thanhToken);
+  check('tạo nhân viên thiếu full_name -> 400', empMissingFields.status === 400, empMissingFields);
+
+  const empAsMember = await post(`${CP}/v1/employees`, { email: 'test-harness-emp@test.local', full_name: 'Test Harness Emp' }, hoangToken);
+  check('member tạo nhân viên -> 403 (tạo tài khoản là hành động quản trị)', empAsMember.status === 403, empAsMember);
+
+  const empCreated = await post(`${CP}/v1/employees`, { email: 'test-harness-emp@test.local', full_name: 'Test Harness Emp' }, thanhToken);
+  check('admin tạo nhân viên mới -> 201', empCreated.status === 201 && !!empCreated.json.employee_id, empCreated);
+  if (empCreated.json.employee_id) createdEmployeeIds.push(empCreated.json.employee_id);
+
+  const empDuplicate = await post(`${CP}/v1/employees`, { email: 'test-harness-emp@test.local', full_name: 'Trung' }, thanhToken);
+  check('tạo nhân viên trùng email -> 400', empDuplicate.status === 400 && empDuplicate.json.error === 'email_already_exists', empDuplicate);
+
+  const empListAfter = await get(`${CP}/v1/employees`, thanhToken);
+  check('nhân viên vừa tạo xuất hiện trong danh sách, role mặc định member', empListAfter.json.employees.some((e) => e.id === empCreated.json.employee_id), empListAfter);
+
   const seatsAsMember = await get(`${CP}/v1/seats`, hoangToken);
   check('Hoàng (member) xem seats -> 403', seatsAsMember.status === 403, seatsAsMember);
 
@@ -1123,6 +1144,17 @@ async function main() {
     `test-harness tự dọn ${tasksDeleted}/${createdTaskIds.length} task nó tạo — danh sách task không lẫn task test`,
     tasksDeleted === createdTaskIds.length,
     { created: createdTaskIds.length, deleted: tasksDeleted }
+  );
+
+  let employeesDeleted = 0;
+  for (const eid of createdEmployeeIds) {
+    const r = await del(`${CP}/v1/employees/${encodeURIComponent(eid)}`, thanhToken);
+    if (r.status === 200) employeesDeleted++;
+  }
+  check(
+    `test-harness tự dọn ${employeesDeleted}/${createdEmployeeIds.length} nhân viên nó tạo`,
+    employeesDeleted === createdEmployeeIds.length,
+    { created: createdEmployeeIds.length, deleted: employeesDeleted }
   );
 
   console.log(`\n${passed} PASS / ${failed} FAIL`);

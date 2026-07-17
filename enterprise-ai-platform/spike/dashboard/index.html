@@ -741,7 +741,21 @@ ${esc(extractReadable(p.response_redacted, 1500))}</pre>
 async function renderSeats(root) {
   const { employees } = await api('/v1/employees');
   const isAdmin = state.who?.role === 'admin';
-  root.innerHTML = `<div class="panel"><h2>Seats & Employees</h2>
+  const formHtml = isAdmin ? `
+    <div class="panel">
+      <h2>+ Nhân viên mới</h2>
+      <div class="empty" style="margin-bottom:10px;">Trước đây phải sửa tay CSDL mỗi lần tuyển người — nay tạo qua đây, vai trò mặc định là member.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Họ tên</label><br/>
+          <input id="empName" placeholder="Nguyễn Văn A" /></div>
+        <div style="flex:1;min-width:220px;"><label style="font-size:12px;color:var(--muted);">Email công ty</label><br/>
+          <input id="empEmail" placeholder="a@company.local" style="width:100%;" /></div>
+        <button class="btn" onclick="createEmployee()">Thêm</button>
+      </div>
+      <div id="empResult" class="empty" style="margin-top:8px;"></div>
+    </div>` : '';
+
+  root.innerHTML = formHtml + `<div class="panel"><h2>Seats & Employees</h2>
     <table><thead><tr><th>Nhân viên</th><th>Email</th><th>Trạng thái</th><th>Seat</th><th>Trạng thái seat</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
     <tbody>${employees.map((e) => `
       <tr><td>${esc(e.full_name)}</td><td>${esc(e.email)}</td>
@@ -750,6 +764,20 @@ async function renderSeats(root) {
       <td>${e.seat_status ? `<span class="pill ${e.seat_status === 'healthy' ? 'ok' : 'danger'}">${esc(e.seat_status)}</span>` : '—'}</td>
       ${isAdmin ? `<td>${e.seat_id && e.seat_status !== 'destroyed' ? `<a class="linkbtn" onclick="assignSeat('${esc(e.seat_id)}')">Gán/Đổi người</a> · <a class="linkbtn" onclick="offboardSeat('${esc(e.seat_id)}')">Offboard</a>` : ''}</td>` : ''}</tr>`).join('')}
     </tbody></table></div>`;
+}
+
+async function createEmployee() {
+  const el = document.getElementById('empResult');
+  const full_name = document.getElementById('empName').value.trim();
+  const email = document.getElementById('empEmail').value.trim();
+  if (!full_name || !email) { el.textContent = 'Cần nhập đủ họ tên và email.'; return; }
+  try {
+    const res = await apiPost('/v1/employees', { full_name, email });
+    el.textContent = `Đã tạo: ${res.employee_id}. Nhắc nhân viên chạy company-ai login với email này + access code công ty.`;
+    switchTab('seats');
+  } catch (e) {
+    el.textContent = 'Lỗi: ' + e.message;
+  }
 }
 
 async function offboardSeat(seatId) {
