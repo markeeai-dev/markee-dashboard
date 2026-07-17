@@ -92,19 +92,23 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-// MVP3 tiếp theo · Q22 — Full Audit Mode: kiểm tra có grant active không TRƯỚC KHI quyết định
-// lưu nội dung. Cache trong process (TTL ngắn) để đỡ round-trip Control Plane trên MỌI request
-// — mặc định (không có grant) là đường đi phổ biến nhất, phải rẻ. Cache sai lệch vài chục giây
-// chấp nhận được (không phải cơ chế bảo mật chặn cứng như Secret Scan, chỉ ảnh hưởng việc có
-// bắt đầu/dừng lưu audit content sớm/muộn vài giây quanh lúc bật/tắt Full Audit Mode).
-const activeGrantCache = new Map(); // key: `${employee_id}:${project_id}` -> { grant, fetchedAt }
-const ACTIVE_GRANT_CACHE_TTL_MS = 30_000;
+// Q22 — quyết định CÓ LƯU nội dung request này hay không, TRƯỚC KHI forward.
+// 2 lý do được lưu:
+//   - company_policy: công ty bật audit_mode='full' (ghi toàn thời gian — hệ thống công ty, dự
+//     án công ty, tiền token công ty, chủ hệ thống chọn kiểm được nội dung)
+//   - grant: công ty ở chế độ metadata nhưng admin cấp Full Audit Mode có hạn cho 1 người/dự án
+// Cache trong process (TTL ngắn) để đỡ round-trip Control Plane trên MỌI request. Cache lệch vài
+// chục giây chấp nhận được (không phải cơ chế chặn cứng như Secret Scan — chỉ ảnh hưởng việc bắt
+// đầu/dừng lưu sớm/muộn vài giây quanh lúc admin đổi chế độ).
+const captureCache = new Map(); // key: `${employee_id}:${project_id}` -> { result, fetchedAt }
+const CAPTURE_CACHE_TTL_MS = 30_000;
 
-async function checkActiveGrant(employeeId, projectId) {
-  if (!INTERNAL_SERVICE_SECRET) return null;
+async function checkCapture(employeeId, projectId) {
+  const NO_CAPTURE = { capture: false, grant_id: null, reason: null };
+  if (!INTERNAL_SERVICE_SECRET) return NO_CAPTURE;
   const key = `${employeeId}:${projectId}`;
-  const cached = activeGrantCache.get(key);
-  if (cached && Date.now() - cached.fetchedAt < ACTIVE_GRANT_CACHE_TTL_MS) return cached.grant;
+  const cached = captureCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CAPTURE_CACHE_TTL_MS) return cached.result;
 
   try {
     const res = await fetch(
@@ -112,12 +116,18 @@ async function checkActiveGrant(employeeId, projectId) {
       { headers: { Authorization: `Bearer ${INTERNAL_SERVICE_SECRET}` } }
     );
     const json = await res.json().catch(() => ({}));
-    const grant = res.ok ? json.grant || null : null;
-    activeGrantCache.set(key, { grant, fetchedAt: Date.now() });
-    return grant;
+    let result = NO_CAPTURE;
+    if (res.ok) {
+      if (json.audit_mode === 'full') result = { capture: true, grant_id: null, reason: 'company_policy' };
+      else if (json.grant) result = { capture: true, grant_id: json.grant.id, reason: 'grant' };
+    }
+    captureCache.set(key, { result, fetchedAt: Date.now() });
+    return result;
   } catch (err) {
-    console.error('[adapter] checkActiveGrant failed (non-fatal, coi như không có grant):', err.message);
-    return null; // lỗi mạng KHÔNG được chặn request AI thật — chỉ đơn giản là không lưu audit content lần này
+    // Lỗi mạng KHÔNG được chặn request AI thật (Q23 — uptime P0). Hệ quả: lần này không lưu nội
+    // dung. Chọn fail-closed cho việc LƯU (không lưu khi không chắc) chứ không chặn người dùng.
+    console.error('[adapter] checkCapture failed (non-fatal, lần này không lưu nội dung):', err.message);
+    return NO_CAPTURE;
   }
 }
 
@@ -133,7 +143,7 @@ function reportPrompt(entry) {
 }
 
 // MVP3 Đợt 4 — Policy Engine cơ bản (Q13): Data Classification (tầng Project) + Approval.
-// Cùng kiểu cache/fail-open với checkActiveGrant — mặc định (không có policy nào) là đường đi
+// Cùng kiểu cache/fail-open với checkCapture — mặc định (không có policy nào) là đường đi
 // phổ biến nhất, phải rẻ và không bao giờ chặn request AI thật vì lỗi hạ tầng nội bộ (Q23: P0
 // uptime, gateway không được là SPOF chặn cả việc code).
 const accessCheckCache = new Map(); // key: `${employee_id}:${project_id}` -> { result, fetchedAt }
@@ -371,11 +381,12 @@ const server = http.createServer((req, res) => {
       });
     }
 
-    // MVP3 tiếp theo · Q22 — Full Audit Mode: MẶC ĐỊNH (không có grant active) là KHÔNG lưu
-    // gì thêm ngoài hiện tại, hành vi y hệt trước đây. Chỉ khi có grant active mới redact +
-    // lưu — không bao giờ lưu bản thô dù chỉ tạm thời (redact() chạy trước reportPrompt(),
-    // không có bước nào gửi bodyText/tapText gốc đi đâu cả).
-    const activeGrant = await checkActiveGrant(employee_id, project_id);
+    // Q22 — quyết định có lưu nội dung không (company_policy hoặc grant). Dù lưu hay không,
+    // nội dung LUÔN được redact secret/CCCD/thẻ trước khi rời khỏi tiến trình này — không bao
+    // giờ lưu bản thô dù chỉ tạm thời (redact() chạy trước reportPrompt(), không có bước nào gửi
+    // bodyText/tapText gốc đi đâu). Redact bảo vệ CÔNG TY (DB rò rỉ thì đừng có AWS key thật
+    // trong đó), không phải để giấu nhân viên: sếp vẫn đọc nguyên văn dev nhắn gì.
+    const capture = await checkCapture(employee_id, project_id);
 
     // Sửa lỗi thật phát hiện khi test với 9Router thật (bản Docker decolua/9router):
     // /v1/messages trả 401 "API key required for remote API access" nếu forward
@@ -449,15 +460,16 @@ const server = http.createServer((req, res) => {
               http_status: httpStatus,
             });
 
-            // Full Audit Mode — chỉ tới đây khi có grant active (kiểm tra ở trên trước khi
-            // forward). Redact CẢ request lẫn response trước khi gửi đi — chưa từng có bước
-            // nào gửi bản gốc ra khỏi tiến trình Adapter.
-            if (activeGrant) {
+            // Lưu nội dung — chỉ tới đây khi được phép (chính sách công ty hoặc grant, kiểm tra
+            // ở trên trước khi forward). Redact CẢ request lẫn response trước khi gửi đi — chưa
+            // từng có bước nào gửi bản gốc ra khỏi tiến trình Adapter.
+            if (capture.capture) {
               reportPrompt({
                 gateway_request_id: gatewayRequestId,
                 employee_id,
                 work_session_id,
-                full_audit_grant_id: activeGrant.id,
+                full_audit_grant_id: capture.grant_id, // null khi ghi theo chính sách công ty
+                capture_reason: capture.reason,
                 prompt_redacted: redact(bodyText),
                 prompt_hash: crypto.createHash('sha256').update(bodyText).digest('hex'),
                 response_redacted: redact(tapText),

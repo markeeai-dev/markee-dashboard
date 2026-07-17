@@ -588,3 +588,65 @@ Jira/Linear) đều có lý do hoãn cụ thể đã ghi rõ, không phải bỏ
 biết nên curate theo tiêu chí gì, làm bây giờ là đoán. Đồng bộ realtime giữa phiên đang mở và
 context mới cũng chưa có (context kéo lúc mở phiên — đúng thiết kế Q18 "chứng minh đã cấp phát,
 không chứng minh đã đọc", cần nói rõ với khách chứ không phải bug).
+
+---
+
+# Quản lý được thật: xem lịch sử chat AI + Definition of Done + vá lỗ hổng riêng tư
+
+> Người dùng đặt 4 câu hỏi về quy trình vận hành thật và chốt 1 quyết định kinh doanh: đây là hệ
+> thống công ty, dự án công ty, tiền token công ty — **sếp phải xem được dev nhắn gì** (nhìn KPI
+> thấy hoạt động ít → dev có nhắn linh tinh đốt token không, ai kiểm được).
+
+**PASS — 182/182 test-harness (tăng từ 167).**
+
+## Lỗ hổng riêng tư nghiêm trọng do chính test-harness gây ra — đã vá
+
+Khảo sát phát hiện: test-harness **tạo Full Audit Mode grant THẬT mỗi lần chạy và không bao giờ
+revoke** — 8 grant sống cùng lúc, âm thầm ghi nội dung làm việc thật của Thanh/Hoàng 1-2 tiếng
+sau mỗi lần chạy test, **95 prompt đã lưu**. Đúng thứ mà thiết kế 2-mode audit sinh ra để ngăn
+(ghi nội dung phải là hành động admin có chủ đích, có lý do, có hạn) — bộ test lách qua bằng cách
+tạo grant thật. Cùng lớp lỗi với rác context nhưng **nặng hơn vì đụng quyền riêng tư**.
+
+Đã vá: test-harness gom `grant_id` nó tạo → revoke hết ở cuối lần chạy; dọn 8 grant tồn đọng;
+thêm dọn cả task test (2 task/lần chạy cũng lọt vào danh sách task thật).
+
+**Bằng chứng**: chạy 2 lần liên tiếp — grant đang sống **0 → 0 → 0**, task **14 → 14 → 14**.
+
+## Đã làm
+
+- **Migration 011**: `company_settings` (audit_mode: metadata|full — **cấu hình chứ không
+  hard-code**, vì khách khác như EVN có thể yêu cầu metadata-only; công ty này seed `full`),
+  `prompts.full_audit_grant_id` bỏ NOT NULL + thêm `capture_reason`, `tasks.acceptance_criteria`.
+- **Adapter**: `checkActiveGrant` → `checkCapture` — lưu khi `audit_mode='full'` (chính sách
+  công ty, không cần grant) HOẶC có grant. Giữ nguyên cache 30s + fail-open (Q23 uptime P0).
+- **`GET/POST /v1/settings`**: đọc mở cho **mọi nhân viên** (có quyền biết mình có bị ghi hay
+  không), ghi chỉ admin + ghi `audit_logs`.
+- **`GET /v1/prompts`** (admin, tự ghi audit_logs mỗi lần xem) + **tab "Lịch sử AI"** trên
+  dashboard: xem dev nhắn gì, AI trả gì, lọc theo nhân viên.
+- **Definition of Done**: dùng đúng 4 status sẵn có — `done` (dev tự báo xong, mọi nhân viên) →
+  `closed` (**chỉ admin/leader duyệt chốt**). Trước đây ai cũng bấm dropdown thành closed là
+  xong, không ai duyệt. Thêm `acceptance_criteria` **vào thẳng task.md** → chính AI cũng biết
+  "xong" nghĩa là gì, không chỉ biết tên task.
+
+## Nguyên tắc giữ lại dù bật ghi toàn thời gian
+
+- **Vẫn redact secret/CCCD/thẻ trước khi lưu** — bảo vệ **công ty** (DB rò rỉ thì đừng có AWS
+  key thật trong đó), không cản sếp đọc nguyên văn dev nhắn gì.
+- **Mỗi lần admin xem vẫn ghi `audit_logs`** — minh bạch 2 chiều.
+- **`ONBOARDING.md` viết lại cho đúng sự thật**: trước đây ghi *"Mặc định hệ thống KHÔNG lưu nội
+  dung bạn chat với AI"* — bật ghi mà giữ dòng đó là **sản phẩm nói dối nhân viên**. Nay nói
+  thẳng: công ty bật ghi toàn thời gian, vì sao, nhân viên tự kiểm tra chế độ được, và việc riêng
+  tư thì dùng `claude` cá nhân (chạy song song, tách biệt hoàn toàn). Đúng cảnh báo trong chính
+  tài liệu đã khoá: *"cần công bố chính sách trước khi triển khai, không triển khai âm thầm rồi
+  giải thích sau"*.
+
+## Verification (bằng chứng thật)
+
+- Traffic thật qua `valeron.tech`: prompt mới lưu với `capture_reason='company_policy'`,
+  `full_audit_grant_id` NULL, **0 grant đang sống** → ghi theo chính sách công ty, không cần
+  grant giả. Admin xem qua `GET /v1/prompts` thấy đúng nội dung + `audit_logs` có dòng mới.
+- Mock Adapter suite 7/7 trước và sau khi đổi; `company-ai claude` thật chạy đúng.
+- 3 test cũ FAIL sau khi đổi — **không phải bug**, là test đang mã hoá hành vi cũ. Sửa cho đúng
+  và **mạnh hơn**: test bảo mật "grant hết hạn → không lưu" nay tự đặt `audit_mode=metadata` để
+  kiểm đúng tính chất đó, thêm case "metadata + không grant → 403 capture_not_allowed", rồi trả
+  lại chế độ thật của công ty. Không hạ chuẩn test chỉ vì mặc định đổi.

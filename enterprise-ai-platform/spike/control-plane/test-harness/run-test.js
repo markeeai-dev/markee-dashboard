@@ -66,6 +66,32 @@ async function cleanupCreatedContexts(token) {
   return deleted;
 }
 
+// LỖ HỔNG RIÊNG TƯ THẬT do chính bộ test này gây ra: mỗi lần chạy nó tạo Full Audit Mode grant
+// THẬT và không bao giờ revoke — 8 grant từng sống cùng lúc, ghi âm nội dung làm việc thật của
+// Thanh/Hoàng 1-2 tiếng sau mỗi lần chạy, 95 prompt đã lưu. Đúng thứ mà thiết kế 2-mode audit
+// sinh ra để ngăn (ghi nội dung phải là hành động admin có chủ đích, có lý do, có hạn) — bộ test
+// lách qua bằng cách tạo grant thật. Từ nay mọi grant do test tạo phải revoke ở cuối lần chạy.
+const createdGrantIds = [];
+function trackGrant(res) {
+  if (res && res.json && res.json.grant_id) createdGrantIds.push(res.json.grant_id);
+  return res;
+}
+async function cleanupCreatedGrants(token) {
+  let revoked = 0;
+  for (const id of createdGrantIds) {
+    const r = await post(`${CP}/v1/governance/full-audit-mode/${encodeURIComponent(id)}/revoke`, {}, token);
+    if (r.status === 200) revoked++;
+  }
+  return revoked;
+}
+
+// Task do test tạo cũng phải dọn (2 dòng TEST-HARNESS đã lọt vào danh sách task thật).
+const createdTaskIds = [];
+function trackTask(res) {
+  if (res && res.json && res.json.task_id) createdTaskIds.push(res.json.task_id);
+  return res;
+}
+
 async function main() {
   // --- Login ---
   const wrongCode = await post(`${CP}/v1/auth/login`, { email: 'thanh@company.local', access_code: 'sai-ma' });
@@ -380,11 +406,11 @@ async function main() {
   const grantAsMember = await post(`${CP}/v1/governance/full-audit-mode`, { scope: 'employee', scope_id: 'emp_hoang', reason: 'test' }, hoangToken);
   check('Hoàng (member) bật Full Audit Mode -> 403', grantAsMember.status === 403, grantAsMember);
 
-  const grantAsAdmin = await post(
+  const grantAsAdmin = trackGrant(await post(
     `${CP}/v1/governance/full-audit-mode`,
     { scope: 'employee', scope_id: 'emp_hoang', reason: 'điều tra rò rỉ secret nghi vấn', duration_hours: 2 },
     thanhToken
-  );
+  ));
   check('Thanh (admin) bật Full Audit Mode có lý do -> 201', grantAsAdmin.status === 201 && !!grantAsAdmin.json.grant_id, grantAsAdmin);
 
   const auditLogsAsMember = await get(`${CP}/v1/audit-logs`, hoangToken);
@@ -492,11 +518,11 @@ async function main() {
   );
 
   // --- Vá gap A: revoke Full Audit Mode sớm ---
-  const grantToRevoke = await post(
+  const grantToRevoke = trackGrant(await post(
     `${CP}/v1/governance/full-audit-mode`,
     { scope: 'employee', scope_id: 'emp_hoang', reason: 'test revoke som (vá gap A)', duration_hours: 4 },
     thanhToken
-  );
+  ));
   const revokeAsMember = await post(`${CP}/v1/governance/full-audit-mode/${grantToRevoke.json.grant_id}/revoke`, {}, hoangToken);
   check('Hoàng (member) revoke grant -> 403', revokeAsMember.status === 403, revokeAsMember);
 
@@ -540,11 +566,11 @@ async function main() {
   const activeGrantNone = await get(`${CP}/internal/v1/governance/active-grant?employee_id=emp_khong_ton_tai&project_id=proj_khong_ton_tai`, INTERNAL_SECRET);
   check('active-grant khi không có grant nào khớp -> grant:null', activeGrantNone.status === 200 && activeGrantNone.json.grant === null, activeGrantNone);
 
-  const grantForThanh = await post(
+  const grantForThanh = trackGrant(await post(
     `${CP}/v1/governance/full-audit-mode`,
     { scope: 'employee', scope_id: 'emp_thanh', reason: 'test luu noi dung tho co redact', duration_hours: 1 },
     thanhToken
-  );
+  ));
   check('tạo grant cho Thanh (test hạng mục 1) -> 201', grantForThanh.status === 201, grantForThanh);
   const thanhGrantId = grantForThanh.json.grant_id;
 
@@ -554,12 +580,28 @@ async function main() {
   const ingestPromptWrongSecret = await post(`${CP}/internal/v1/gateway/prompts`, { gateway_request_id: 'x' }, 'sai-secret-hoan-toan');
   check('ingest prompt sai internal secret -> 401', ingestPromptWrongSecret.status === 401, ingestPromptWrongSecret);
 
+  // Tính chất bảo mật "grant hết hạn/giả -> KHÔNG được lưu nội dung" CHỈ có nghĩa ở chế độ
+  // metadata (ở chế độ full, chính sách công ty cho phép ghi nên không cần grant). Test này
+  // trước đây chạy đúng vì hệ thống luôn ở metadata; nay phải tự đặt chế độ để kiểm cho đúng —
+  // KHÔNG hạ chuẩn test chỉ vì mặc định đổi.
+  const savedMode = (await get(`${CP}/v1/settings`, thanhToken)).json.audit_mode;
+  await post(`${CP}/v1/settings`, { audit_mode: 'metadata' }, thanhToken);
+
   const ingestPromptFakeGrant = await post(
     `${CP}/internal/v1/gateway/prompts`,
     { gateway_request_id: 'x', full_audit_grant_id: 'fag_khong_ton_tai', prompt_redacted: 'test', prompt_hash: 'abc' },
     INTERNAL_SECRET
   );
-  check('ingest prompt với grant_id giả/hết hạn -> 403', ingestPromptFakeGrant.status === 403 && ingestPromptFakeGrant.json.error === 'grant_expired_or_not_found', ingestPromptFakeGrant);
+  check('[metadata mode] ingest prompt với grant_id giả/hết hạn -> 403', ingestPromptFakeGrant.status === 403 && ingestPromptFakeGrant.json.error === 'grant_expired_or_not_found', ingestPromptFakeGrant);
+
+  const ingestPromptNoGrant = await post(
+    `${CP}/internal/v1/gateway/prompts`,
+    { gateway_request_id: 'x', prompt_redacted: 'test', prompt_hash: 'abc' },
+    INTERNAL_SECRET
+  );
+  check('[metadata mode] ingest prompt KHÔNG có grant -> 403 capture_not_allowed (không có ngoại lệ)', ingestPromptNoGrant.status === 403 && ingestPromptNoGrant.json.error === 'capture_not_allowed', ingestPromptNoGrant);
+
+  await post(`${CP}/v1/settings`, { audit_mode: savedMode }, thanhToken); // trả lại chế độ thật của công ty
 
   const ingestPromptOk = await post(
     `${CP}/internal/v1/gateway/prompts`,
@@ -881,7 +923,7 @@ async function main() {
   const taskBadAssignee = await post(`${CP}/v1/projects/proj_trungnguyen/tasks`, { title: 'Task test', assignee_employee_id: 'emp_khong_ton_tai' }, thanhToken);
   check('tạo task assignee không tồn tại -> 400', taskBadAssignee.status === 400, taskBadAssignee);
 
-  const taskCreated = await post(`${CP}/v1/projects/proj_trungnguyen/tasks`, { title: 'Task test đầy đủ - Đợt task mgmt', assignee_employee_id: 'emp_hoang' }, thanhToken);
+  const taskCreated = trackTask(await post(`${CP}/v1/projects/proj_trungnguyen/tasks`, { title: 'TEST-HARNESS task day du', assignee_employee_id: 'emp_hoang' }, thanhToken));
   check('Thanh tạo task mới -> 201', taskCreated.status === 201 && !!taskCreated.json.task_id, taskCreated);
 
   const tasksAfterCreate = await get(`${CP}/v1/projects/proj_trungnguyen/tasks`, thanhToken);
@@ -901,8 +943,18 @@ async function main() {
   const updateBadStatus = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'khong-hop-le' }, thanhToken);
   check('update task status sai -> 400', updateBadStatus.status === 400, updateBadStatus);
 
-  const updateToClosed = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'closed' }, hoangToken);
-  check('Hoàng (member, không cần admin) đóng task -> 200', updateToClosed.status === 200, updateToClosed);
+  // Definition of Done — 2 bước, dùng đúng 4 status sẵn có:
+  //   done   = dev tự báo đã làm xong (mọi nhân viên)
+  //   closed = leader duyệt và chốt (CHỈ admin)
+  // Trước đây member đóng thẳng được -> "dev nói xong là xong", không ai duyệt.
+  const updateToDone = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'done' }, hoangToken);
+  check('Hoàng (member) báo task done -> 200 (dev tự báo xong được)', updateToDone.status === 200, updateToDone);
+
+  const memberTriesClose = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'closed' }, hoangToken);
+  check('Hoàng (member) tự đóng task -> 403 (phải leader duyệt mới chốt)', memberTriesClose.status === 403, memberTriesClose);
+
+  const adminCloses = await post(`${CP}/v1/tasks/${taskCreated.json.task_id}/update`, { status: 'closed' }, thanhToken);
+  check('Thanh (admin/leader) đóng task -> 200', adminCloses.status === 200, adminCloses);
 
   const tasksAfterClose = await get(`${CP}/v1/projects/proj_trungnguyen/tasks`, thanhToken);
   const closedTask = tasksAfterClose.json.tasks.find((t) => t.id === taskCreated.json.task_id);
@@ -988,6 +1040,61 @@ async function main() {
   const delNotFound = await del(`${CP}/v1/context/ctx_khong_ton_tai`, thanhToken);
   check('xoá context không tồn tại -> 404', delNotFound.status === 404, delNotFound);
 
+  // --- Chế độ ghi nội dung (audit_mode) + xem lịch sử chat + Definition of Done ---
+
+  const settingsAsMember = await get(`${CP}/v1/settings`, hoangToken);
+  check(
+    'mọi nhân viên đọc được audit_mode (có quyền biết mình có bị ghi hay không)',
+    settingsAsMember.status === 200 && ['full', 'metadata'].includes(settingsAsMember.json.audit_mode),
+    settingsAsMember
+  );
+
+  const settingsWriteAsMember = await post(`${CP}/v1/settings`, { audit_mode: 'metadata' }, hoangToken);
+  check('member đổi audit_mode -> 403 (chỉ admin)', settingsWriteAsMember.status === 403, settingsWriteAsMember);
+
+  const settingsBadValue = await post(`${CP}/v1/settings`, { audit_mode: 'khong-hop-le' }, thanhToken);
+  check('audit_mode sai giá trị -> 400', settingsBadValue.status === 400, settingsBadValue);
+
+  const modeNow = (await get(`${CP}/v1/settings`, thanhToken)).json.audit_mode;
+  check('công ty này đang bật ghi nội dung toàn thời gian (audit_mode=full)', modeNow === 'full', { audit_mode: modeNow });
+
+  // Ghi được nội dung mà KHÔNG cần grant nào — đúng chính sách công ty đã bật.
+  const ingestByPolicy = await post(
+    `${CP}/internal/v1/gateway/prompts`,
+    { gateway_request_id: 'gw_policy_test', employee_id: 'emp_thanh', work_session_id: wsId,
+      prompt_redacted: 'noi dung test theo chinh sach cong ty', prompt_hash: 'hash_policy', response_redacted: 'tra loi test' },
+    INTERNAL_SECRET
+  );
+  check('[full mode] ghi nội dung KHÔNG cần grant -> 201', ingestByPolicy.status === 201, ingestByPolicy);
+
+  const browseAsMember = await get(`${CP}/v1/prompts?limit=5`, hoangToken);
+  check('member xem lịch sử chat -> 403 (chỉ admin)', browseAsMember.status === 403, browseAsMember);
+
+  const browseAsAdmin = await get(`${CP}/v1/prompts?employee_id=emp_thanh&limit=5`, thanhToken);
+  check(
+    'admin xem lịch sử chat -> 200, thấy đúng nội dung vừa ghi kèm capture_reason=company_policy',
+    browseAsAdmin.status === 200 && browseAsAdmin.json.prompts.some((p) => p.capture_reason === 'company_policy'),
+    browseAsAdmin.json && browseAsAdmin.json.prompts && browseAsAdmin.json.prompts.slice(0, 1)
+  );
+
+  const auditAfterBrowse = await get(`${CP}/v1/audit-logs`, thanhToken);
+  check(
+    'admin xem lịch sử chat tự ghi audit_logs (minh bạch 2 chiều — sếp xem cũng để lại vết)',
+    auditAfterBrowse.json.audit_logs.some((a) => a.action === 'full_audit_content_viewed' && a.target_type === 'prompts_browse'),
+    auditAfterBrowse.json && auditAfterBrowse.json.audit_logs.slice(0, 2)
+  );
+
+  const taskWithAC = trackTask(await post(`${CP}/v1/projects/proj_trungnguyen/tasks`,
+    { title: 'TEST-HARNESS task co tieu chi', acceptance_criteria: 'Pagination chay dung; co test; khong hardcode secret' }, thanhToken));
+  check('tạo task kèm acceptance_criteria -> 201', taskWithAC.status === 201, taskWithAC);
+
+  const bundleWithAC = await get(`${CP}/v1/context/bundle?task_id=${taskWithAC.json.task_id}`, thanhToken);
+  check(
+    'acceptance_criteria vào thẳng task.md -> chính AI cũng biết "xong" nghĩa là gì',
+    bundleWithAC.json.files.task_md.includes('Định nghĩa') || bundleWithAC.json.files.task_md.includes('Pagination chay dung'),
+    bundleWithAC.json.files.task_md
+  );
+
   // --- Dọn sạch dữ liệu test-harness tự tạo ---
   // Trước đây bước này KHÔNG tồn tại: mỗi lần chạy đổ thêm rác vào bộ tri thức thật và không
   // bao giờ dọn (36/41 dòng là rác test, bơm thẳng vào thứ AI đọc). Đây là chỗ chặn gốc.
@@ -996,6 +1103,26 @@ async function main() {
     `test-harness tự dọn ${deleted}/${createdContextIds.length} context nó tạo — rác không tích luỹ qua các lần chạy`,
     deleted === createdContextIds.length,
     { created: createdContextIds.length, deleted }
+  );
+
+  // Revoke mọi Full Audit grant do test tạo — VÁ LỖ HỔNG RIÊNG TƯ: trước đây grant test sống
+  // 1-4 tiếng sau mỗi lần chạy, âm thầm ghi nội dung làm việc thật của Thanh/Hoàng.
+  const revoked = await cleanupCreatedGrants(thanhToken);
+  check(
+    `test-harness tự revoke ${revoked}/${createdGrantIds.length} Full Audit grant nó tạo — không còn âm thầm ghi nội dung thật sau khi test xong`,
+    revoked === createdGrantIds.length,
+    { created: createdGrantIds.length, revoked }
+  );
+
+  let tasksDeleted = 0;
+  for (const tid of createdTaskIds) {
+    const r = await del(`${CP}/v1/tasks/${encodeURIComponent(tid)}`, thanhToken);
+    if (r.status === 200) tasksDeleted++;
+  }
+  check(
+    `test-harness tự dọn ${tasksDeleted}/${createdTaskIds.length} task nó tạo — danh sách task không lẫn task test`,
+    tasksDeleted === createdTaskIds.length,
+    { created: createdTaskIds.length, deleted: tasksDeleted }
   );
 
   console.log(`\n${passed} PASS / ${failed} FAIL`);

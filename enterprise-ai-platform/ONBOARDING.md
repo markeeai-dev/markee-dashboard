@@ -94,16 +94,28 @@ Sếp/admin thấy thêm 2 tab: **Governance** (bảo mật, phân loại dữ l
 
 ---
 
-## Điều cần biết về quyền riêng tư (nói thẳng, không giấu)
+## Điều cần biết trước khi dùng (nói thẳng, không giấu)
 
-- **Mặc định hệ thống KHÔNG lưu nội dung bạn chat với AI.** Chỉ lưu metadata: dùng model gì,
-  bao nhiêu token, thuộc task nào, hết bao nhiêu tiền.
-- Chỉ khi admin **bật Full Audit Mode** (bắt buộc có lý do + thời hạn, tự hết hạn, ghi log vĩnh
-  viễn) thì nội dung mới được lưu — và **luôn được che secret/CCCD/thẻ trước khi lưu**.
-- **Mỗi lần admin xem nội dung đã lưu đều bị ghi log** — xem là hành động có dấu vết, không phải
-  xem tự do.
-- Nội dung có secret thật (AWS key, private key...) sẽ **bị chặn thẳng, không gửi lên AI** — đây
-  là bảo vệ bạn lẫn công ty.
+> Đọc kỹ mục này. Công ty chọn cấu hình này một cách có chủ đích và thông báo trước — không phải
+> bật âm thầm rồi giải thích sau.
+
+- **Công ty đang bật ghi nội dung toàn thời gian (`audit_mode = full`).** Nghĩa là: **mọi nội
+  dung bạn nhắn với AI và AI trả lời qua `company-ai` đều được lưu lại**, và admin xem được.
+- **Vì sao**: đây là seat AI của công ty, dùng cho dự án công ty, chi phí công ty trả. Quản lý
+  cần kiểm được chi phí thực sự đi vào việc gì. Bạn có thể tự kiểm tra chế độ hiện tại bất cứ
+  lúc nào: dashboard → Governance, hoặc gọi `GET /v1/settings` (mọi nhân viên đều đọc được — bạn
+  có quyền biết mình có đang bị ghi hay không).
+- **Secret/CCCD/số thẻ luôn được che trước khi lưu.** Cái này bảo vệ cả bạn lẫn công ty: nếu cơ
+  sở dữ liệu rò rỉ thì không có key/CCCD thật nằm trong đó.
+- **Mỗi lần admin xem nội dung đều bị ghi vào Audit Logs** — minh bạch 2 chiều: sếp xem được bạn,
+  nhưng việc sếp xem cũng để lại dấu vết vĩnh viễn, không ai xem lén được.
+- Nội dung có secret thật (AWS key, private key...) sẽ **bị chặn thẳng, không gửi lên AI**.
+- **Việc riêng tư cá nhân thì đừng dùng `company-ai`** — dùng `claude` bản cá nhân của bạn (chạy
+  song song, hoàn toàn tách biệt, công ty không thấy gì). `company-ai` là công cụ cho việc công
+  ty; hệ thống không đụng tới phiên cá nhân của bạn.
+
+*(Ghi chú kỹ thuật: hệ thống hỗ trợ 2 chế độ — `metadata` chỉ ghi model/token/chi phí, `full` ghi
+cả nội dung. Công ty này chọn `full`. Mỗi lần đổi chế độ đều ghi Audit Logs vĩnh viễn.)*
 
 ---
 

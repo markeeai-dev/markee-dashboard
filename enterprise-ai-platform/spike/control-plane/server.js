@@ -832,6 +832,38 @@ async function findActiveFullAuditGrant(employeeId, projectId) {
   return rows[0] || null;
 }
 
+// Chế độ ghi nội dung cấp công ty. Cố ý là CẤU HÌNH chứ không hard-code: công ty này chọn ghi
+// toàn thời gian (hệ thống công ty, dự án công ty, tiền token công ty — sếp phải kiểm được), còn
+// khách hàng khác có thể yêu cầu metadata-only. Hard-code là tự đóng cửa khả năng bán.
+async function getAuditMode() {
+  const { rows } = await query(`SELECT audit_mode FROM company_settings WHERE id = 'default'`);
+  return rows.length ? rows[0].audit_mode : 'metadata'; // thiếu row -> mặc định an toàn nhất
+}
+
+// Nhân viên có quyền BIẾT mình có đang bị ghi nội dung hay không -> mở cho mọi nhân viên đọc,
+// không giới hạn admin. Giấu chuyện này với chính người bị ghi là sai, và tài liệu đã khoá cũng
+// ghi rõ: "cần công bố chính sách trước khi triển khai, không triển khai âm thầm".
+async function handleGetSettings(req) {
+  await requireEmployee(req);
+  const { rows } = await query(
+    `SELECT s.audit_mode, s.updated_at, e.full_name AS updated_by_name
+     FROM company_settings s LEFT JOIN employees e ON e.id = s.updated_by WHERE s.id = 'default'`
+  );
+  return { status: 200, body: rows[0] || { audit_mode: 'metadata' } };
+}
+
+async function handleUpdateSettings(req) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const body = await readJsonBody(req);
+  if (!['metadata', 'full'].includes(body.audit_mode)) throw new ApiError(400, 'invalid_audit_mode');
+
+  await query(`UPDATE company_settings SET audit_mode = $1, updated_by = $2, updated_at = now() WHERE id = 'default'`, [body.audit_mode, emp.id]);
+  // Đổi chế độ ghi là hành động phải có dấu vết vĩnh viễn — cả lúc bật lẫn lúc tắt.
+  await writeAuditLog(emp.id, 'audit_mode_changed', 'company_settings', 'default', { audit_mode: body.audit_mode });
+  return { status: 200, body: { audit_mode: body.audit_mode } };
+}
+
 async function handleCheckActiveGrant(req, url) {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -839,8 +871,9 @@ async function handleCheckActiveGrant(req, url) {
 
   const employeeId = url.searchParams.get('employee_id');
   const projectId = url.searchParams.get('project_id');
-  const grant = await findActiveFullAuditGrant(employeeId, projectId);
-  return { status: 200, body: { grant } };
+  const [grant, auditMode] = await Promise.all([findActiveFullAuditGrant(employeeId, projectId), getAuditMode()]);
+  // Adapter tự quyết định capture: audit_mode='full' (chính sách công ty) HOẶC có grant riêng.
+  return { status: 200, body: { grant, audit_mode: auditMode } };
 }
 
 async function handleIngestPrompt(req) {
@@ -849,20 +882,35 @@ async function handleIngestPrompt(req) {
   if (!token || token !== INTERNAL_SERVICE_SECRET) throw new ApiError(401, 'invalid_internal_secret');
 
   const body = await readJsonBody(req);
-  if (!body.gateway_request_id || !body.full_audit_grant_id || !body.prompt_redacted || !body.prompt_hash) {
+  if (!body.gateway_request_id || !body.prompt_redacted || !body.prompt_hash) {
     throw new ApiError(400, 'missing_fields');
   }
 
-  // Kiểm tra lại grant còn hiệu lực NGAY LÚC GHI — không chỉ tin Adapter đã kiểm tra trước đó
-  // (grant có thể vừa hết hạn giữa lúc Adapter check và lúc request AI trả lời xong).
-  const { rows: grantRows } = await query(`SELECT id FROM full_audit_grants WHERE id = $1 AND expires_at > now()`, [body.full_audit_grant_id]);
-  if (!grantRows.length) throw new ApiError(403, 'grant_expired_or_not_found');
+  // Vẫn TỰ KIỂM TRA LẠI quyền ghi ngay lúc INSERT, không chỉ tin Adapter đã kiểm tra trước đó
+  // (defense in depth — grant có thể vừa hết hạn, hoặc admin vừa tắt audit_mode, giữa lúc Adapter
+  // check và lúc request AI trả lời xong).
+  const auditMode = await getAuditMode();
+  let captureReason = null;
+  let grantId = null;
+
+  if (auditMode === 'full') {
+    // Chính sách công ty: ghi toàn thời gian, không cần grant nào.
+    captureReason = 'company_policy';
+  } else if (body.full_audit_grant_id) {
+    const { rows: grantRows } = await query(`SELECT id FROM full_audit_grants WHERE id = $1 AND expires_at > now()`, [body.full_audit_grant_id]);
+    if (!grantRows.length) throw new ApiError(403, 'grant_expired_or_not_found');
+    captureReason = 'grant';
+    grantId = body.full_audit_grant_id;
+  } else {
+    // metadata mode + không có grant hợp lệ -> KHÔNG được lưu nội dung, không có ngoại lệ.
+    throw new ApiError(403, 'capture_not_allowed');
+  }
 
   const promptId = id('pr');
   await query(
-    `INSERT INTO prompts (id, gateway_request_id, employee_id, work_session_id, content_redacted, content_hash, full_audit_grant_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [promptId, body.gateway_request_id, body.employee_id || null, body.work_session_id || null, body.prompt_redacted, body.prompt_hash, body.full_audit_grant_id]
+    `INSERT INTO prompts (id, gateway_request_id, employee_id, work_session_id, content_redacted, content_hash, full_audit_grant_id, capture_reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [promptId, body.gateway_request_id, body.employee_id || null, body.work_session_id || null, body.prompt_redacted, body.prompt_hash, grantId, captureReason]
   );
   if (body.response_redacted) {
     await query(`INSERT INTO responses (id, prompt_id, content_redacted) VALUES ($1,$2,$3)`, [id('rs'), promptId, body.response_redacted]);
@@ -884,6 +932,40 @@ async function handleListPrompts(req, params) {
     [params.id]
   );
   await writeAuditLog(emp.id, 'full_audit_content_viewed', 'work_session', params.id, { row_count: rows.length });
+  return { status: 200, body: { prompts: rows } };
+}
+
+// Duyệt lịch sử chat AI theo nhân viên/task — dashboard cần đường này (endpoint trên chỉ lọc
+// được đúng 1 work_session_id, không duyệt được). Cùng nguyên tắc: chỉ admin, và MỖI LẦN XEM
+// TỰ GHI audit_logs — xem là hành động có dấu vết, kể cả khi công ty đã bật ghi toàn thời gian.
+// Đây là minh bạch 2 chiều: sếp xem được dev, nhưng việc sếp xem cũng để lại vết.
+async function handleBrowsePrompts(req, url) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const employeeId = url.searchParams.get('employee_id');
+  const taskId = url.searchParams.get('task_id');
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 200);
+
+  const conds = [];
+  const params = [];
+  if (employeeId) { params.push(employeeId); conds.push(`p.employee_id = $${params.length}`); }
+  if (taskId) { params.push(taskId); conds.push(`ws.task_id = $${params.length}`); }
+  params.push(limit);
+
+  const { rows } = await query(
+    `SELECT p.id, p.employee_id, e.full_name AS employee_name, p.content_redacted, p.created_at,
+            p.capture_reason, ws.task_id, t.title AS task_title,
+            r.content_redacted AS response_redacted
+     FROM prompts p
+       LEFT JOIN employees e ON e.id = p.employee_id
+       LEFT JOIN work_sessions ws ON ws.id = p.work_session_id
+       LEFT JOIN tasks t ON t.id = ws.task_id
+       LEFT JOIN responses r ON r.prompt_id = p.id
+     ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''}
+     ORDER BY p.created_at DESC LIMIT $${params.length}`,
+    params
+  );
+  await writeAuditLog(emp.id, 'full_audit_content_viewed', 'prompts_browse', employeeId || taskId || 'all', { row_count: rows.length });
   return { status: 200, body: { prompts: rows } };
 }
 
@@ -1046,6 +1128,32 @@ async function handleIngestContext(req) {
   return { status: 201, body: { context_id: contextId } };
 }
 
+// Xoá task — chỉ admin. Cần cho test-harness tự dọn task nó tạo (cùng lớp lỗi rác với context),
+// và cũng là năng lực thật admin cần khi tạo nhầm task. CHẶN xoá nếu task đã có dữ liệu làm việc
+// thật gắn vào (work session/handoff): xoá task đang có lịch sử là mất dữ liệu thật, không phải
+// dọn rác — thà báo lỗi rõ còn hơn xoá nhầm.
+async function handleDeleteTask(req, params) {
+  const emp = await requireEmployee(req);
+  requireAdmin(emp);
+  const { rows } = await query('SELECT id FROM tasks WHERE id = $1', [params.id]);
+  if (!rows.length) throw new ApiError(404, 'task_not_found');
+
+  const { rows: deps } = await query(
+    `SELECT (SELECT count(*) FROM work_sessions WHERE task_id = $1) AS ws,
+            (SELECT count(*) FROM handoffs WHERE task_id = $1) AS ho,
+            (SELECT count(*) FROM project_context WHERE task_id = $1) AS ctx`,
+    [params.id]
+  );
+  const d = deps[0];
+  if (Number(d.ws) > 0 || Number(d.ho) > 0 || Number(d.ctx) > 0) {
+    throw new ApiError(400, 'task_has_history', { work_sessions: Number(d.ws), handoffs: Number(d.ho), context_notes: Number(d.ctx) });
+  }
+
+  await query('DELETE FROM tasks WHERE id = $1', [params.id]);
+  await writeAuditLog(emp.id, 'task_deleted', 'task', params.id, {});
+  return { status: 200, body: { deleted: true } };
+}
+
 // Cần cho test-harness tự dọn dữ liệu nó tạo ra (trước đây mỗi lần chạy đổ thêm 3 dòng rác vào
 // bộ tri thức thật và không bao giờ dọn — 36/41 dòng là rác test, đẩy nội dung thật ra khỏi
 // giới hạn hiển thị). Chỉ admin, và ghi audit_logs vì xoá tri thức là hành động cần dấu vết.
@@ -1078,6 +1186,7 @@ async function handleListTasks(req, params) {
   await requireEmployee(req);
   const { rows } = await query(
     `SELECT t.id, t.project_id, t.title, t.status, t.assignee_employee_id, a.full_name AS assignee_name,
+            t.acceptance_criteria,
             t.claim_mode, t.claimed_by_employee_id, t.lease_until, e.full_name AS claimed_by_name,
             t.external_source, t.external_issue_id, t.last_synced_at
      FROM tasks t
@@ -1112,21 +1221,30 @@ async function handleCreateTask(req, params) {
 
   const taskId = id('task');
   await query(
-    `INSERT INTO tasks (id, project_id, title, assignee_employee_id) VALUES ($1,$2,$3,$4)`,
-    [taskId, params.projectId, body.title, body.assignee_employee_id || null]
+    `INSERT INTO tasks (id, project_id, title, assignee_employee_id, acceptance_criteria) VALUES ($1,$2,$3,$4,$5)`,
+    [taskId, params.projectId, body.title, body.assignee_employee_id || null, body.acceptance_criteria || null]
   );
   return { status: 201, body: { task_id: taskId } };
 }
 
 async function handleUpdateTask(req, params) {
-  await requireEmployee(req);
+  const emp = await requireEmployee(req);
   const body = await readJsonBody(req);
-  if (!body.title && !body.status && !body.assignee_employee_id) throw new ApiError(400, 'no_fields_to_update');
+  if (!body.title && !body.status && !body.assignee_employee_id && body.acceptance_criteria === undefined) {
+    throw new ApiError(400, 'no_fields_to_update');
+  }
 
   const { rows } = await query('SELECT id, status FROM tasks WHERE id = $1', [params.id]);
   if (!rows.length) throw new ApiError(404, 'task_not_found');
 
   if (body.status && !TASK_STATUSES.includes(body.status)) throw new ApiError(400, 'invalid_status');
+
+  // Definition of Done — gate thật sự. Trước đây ai cũng bấm dropdown thành 'closed' là xong,
+  // không ai duyệt: dev tự nói xong là xong. Dùng đúng 4 status sẵn có để tách 2 bước:
+  //   done   = dev tự báo đã làm xong (mọi nhân viên đổi được)
+  //   closed = leader đã duyệt và chốt (CHỈ admin)
+  if (body.status === 'closed') requireAdmin(emp);
+
   if (body.assignee_employee_id) {
     const { rows: empRows } = await query('SELECT id FROM employees WHERE id = $1', [body.assignee_employee_id]);
     if (!empRows.length) throw new ApiError(400, 'assignee_not_found');
@@ -1135,6 +1253,7 @@ async function handleUpdateTask(req, params) {
   const sets = [];
   const values = [];
   if (body.title) { values.push(body.title); sets.push(`title = $${values.length}`); }
+  if (body.acceptance_criteria !== undefined) { values.push(body.acceptance_criteria || null); sets.push(`acceptance_criteria = $${values.length}`); }
   if (body.assignee_employee_id) { values.push(body.assignee_employee_id); sets.push(`assignee_employee_id = $${values.length}`); }
   if (body.status) {
     values.push(body.status);
@@ -1666,6 +1785,7 @@ const routes = [
   { method: 'GET', pattern: /^\/v1\/governance\/full-audit-grants$/, handler: (req) => handleListFullAuditGrants(req) },
   { method: 'POST', pattern: /^\/v1\/context\/ingest$/, handler: (req) => handleIngestContext(req) },
   { method: 'DELETE', pattern: /^\/v1\/context\/([^/]+)$/, handler: (req, m) => handleDeleteContext(req, { id: m[1] }) },
+  { method: 'DELETE', pattern: /^\/v1\/tasks\/([^/]+)$/, handler: (req, m) => handleDeleteTask(req, { id: m[1] }) },
   {
     method: 'POST',
     pattern: /^\/v1\/projects\/([^/]+)\/classification$/,
@@ -1729,6 +1849,8 @@ const routes = [
     handler: (req, m) => handleListProjectContext(req, { projectId: m[1] }),
   },
   { method: 'GET', pattern: /^\/v1\/employees$/, handler: (req) => handleListEmployees(req) },
+  { method: 'GET', pattern: /^\/v1\/settings$/, handler: (req) => handleGetSettings(req) },
+  { method: 'POST', pattern: /^\/v1\/settings$/, handler: (req) => handleUpdateSettings(req) },
   {
     method: 'GET',
     pattern: /^\/v1\/work-sessions$/,
@@ -1862,6 +1984,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/v1/pattern-library') {
       const result = await handleListPatterns(req, url);
+      return sendJson(res, result.status, result.body);
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/prompts') {
+      const result = await handleBrowsePrompts(req, url);
       return sendJson(res, result.status, result.body);
     }
 

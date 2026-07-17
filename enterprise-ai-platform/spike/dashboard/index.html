@@ -221,6 +221,7 @@ const TABS = [
   { id: 'memory', label: 'Project Memory', ico: '◫', group: 'Tri thức', hint: 'Requirement, quyết định kỹ thuật, ghi chú BA', render: renderMemory },
   { id: 'patterns', label: 'Pattern Library', ico: '✦', group: 'Tri thức', hint: 'Giải pháp tổng quát đã ẩn danh hoá, dùng lại cho dự án khác', render: renderPatternLibrary },
   { id: 'seats', label: 'Seats & Employees', ico: '◉', group: 'Quản trị', hint: 'Cấp/thu hồi seat AI cho nhân viên', render: renderSeats },
+  { id: 'aihistory', label: 'Lịch sử AI', ico: '❝', group: 'Quản trị', hint: 'Dev đã nhắn gì với AI, AI trả lời gì — mỗi lần xem đều được ghi log', render: renderAiHistory, adminOnly: true },
   { id: 'governance', label: 'Governance', ico: '◆', group: 'Quản trị', hint: 'Bảo mật, phân loại dữ liệu, duyệt truy cập', render: renderGovernance, adminOnly: true },
   { id: 'kpi', label: 'KPI', ico: '▲', group: 'Quản trị', hint: 'Adoption / Efficiency / Collaboration', render: renderKpi, adminOnly: true },
 ];
@@ -378,7 +379,12 @@ async function renderProjects(root) {
   const [{ projects }, { employees }] = await Promise.all([api('/v1/projects'), api('/v1/employees')]);
   const taskLists = await Promise.all(projects.map((p) => api(`/v1/projects/${p.id}/tasks`)));
   const employeeOptions = (selected) => employees.map((e) => `<option value="${esc(e.id)}" ${e.id === selected ? 'selected' : ''}>${esc(e.full_name)}</option>`).join('');
-  const statusOptions = (selected) => TASK_STATUSES.map((s) => `<option value="${esc(s)}" ${s === selected ? 'selected' : ''}>${esc(s)}</option>`).join('');
+  const isAdmin = state.who?.role === 'admin';
+  // Definition of Done: 'closed' = leader đã duyệt chốt -> chỉ admin đổi được (gate thật ở API,
+  // đây chỉ là UX để member không bấm vào rồi nhận lỗi vô nghĩa). 'done' = dev tự báo xong.
+  const statusOptions = (selected) => TASK_STATUSES
+    .filter((s) => s !== 'closed' || isAdmin || selected === 'closed')
+    .map((s) => `<option value="${esc(s)}" ${s === selected ? 'selected' : ''}>${esc(s)}${s === 'closed' ? ' (leader duyệt)' : s === 'done' ? ' (dev báo xong)' : ''}</option>`).join('');
 
   root.innerHTML = projects.map((p, i) => `
     <div class="panel">
@@ -394,10 +400,12 @@ async function renderProjects(root) {
             : `<span class="empty">${t.claim_mode === 'shared' ? 'shared' : 'chưa ai giữ'}</span>`}</td></tr>`).join('') || `<tr><td colspan="5" class="empty">Chưa có task</td></tr>`}
       </tbody></table>
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;">
-        <div style="flex:1;min-width:220px;"><label style="font-size:12px;color:var(--muted);">Tiêu đề task mới</label><br/>
-          <input id="taskTitle-${esc(p.id)}" placeholder="Tiêu đề task" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
-        <div><label style="font-size:12px;color:var(--muted);">Người phụ trách (tuỳ chọn)</label><br/>
-          <select id="taskAssignee-${esc(p.id)}" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+        <div style="flex:1;min-width:200px;"><label style="font-size:12px;color:var(--muted);">Tiêu đề task mới</label><br/>
+          <input id="taskTitle-${esc(p.id)}" placeholder="Tiêu đề task" style="width:100%;" /></div>
+        <div style="flex:1;min-width:220px;"><label style="font-size:12px;color:var(--muted);">Tiêu chí hoàn thành (vào thẳng context của AI)</label><br/>
+          <input id="taskAC-${esc(p.id)}" placeholder="VD: Pagination chạy đúng; có test; không hardcode secret" style="width:100%;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Người phụ trách</label><br/>
+          <select id="taskAssignee-${esc(p.id)}">
             <option value="">— chưa gán —</option>${employeeOptions()}</select></div>
         <button class="btn" onclick="createTaskFromForm('${esc(p.id)}')">+ Task mới</button>
       </div>
@@ -408,10 +416,11 @@ async function renderProjects(root) {
 async function createTaskFromForm(projectId) {
   const resultEl = document.getElementById(`taskResult-${projectId}`);
   const title = document.getElementById(`taskTitle-${projectId}`).value.trim();
+  const acceptance_criteria = document.getElementById(`taskAC-${projectId}`).value.trim() || undefined;
   const assignee_employee_id = document.getElementById(`taskAssignee-${projectId}`).value || undefined;
   if (!title) { resultEl.textContent = 'Cần nhập tiêu đề.'; return; }
   try {
-    const res = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, { title, assignee_employee_id });
+    const res = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, { title, acceptance_criteria, assignee_employee_id });
     resultEl.textContent = `Đã tạo: ${res.task_id}`;
     switchTab('projects');
   } catch (e) {
@@ -671,6 +680,64 @@ async function ingestContextFromForm() {
   }
 }
 
+// Xem dev đã nhắn gì với AI. Quyết định của chủ hệ thống: đây là hệ thống công ty, dự án công
+// ty, tiền token công ty — sếp phải kiểm được (vd KPI thấp thì có phải dev nhắn linh tinh đốt
+// token không). Vẫn giữ 2 nguyên tắc: (1) secret/CCCD được che trước khi lưu — bảo vệ công ty
+// nếu DB rò rỉ, không cản sếp đọc nội dung; (2) MỖI LẦN XEM đều ghi audit_logs — minh bạch 2
+// chiều, sếp xem được dev nhưng việc sếp xem cũng để lại vết.
+function extractReadable(raw, max) {
+  if (!raw) return '(không có)';
+  // Body thật là JSON/SSE của Anthropic API — moi các đoạn text người/AI thực sự viết ra để
+  // đọc cho dễ, nhưng KHÔNG giấu: có nút xem nguyên văn bên dưới.
+  const parts = [...String(raw).matchAll(/"(?:text|content)"\s*:\s*"((?:[^"\\]|\\.){4,})"/g)]
+    .map((m) => m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'))
+    .filter((t) => !t.startsWith('<system-reminder>'));
+  const joined = parts.join('\n---\n').trim();
+  const out = joined || String(raw);
+  return out.length > max ? out.slice(0, max) + '…' : out;
+}
+
+async function renderAiHistory(root) {
+  const [{ employees }, settings] = await Promise.all([api('/v1/employees'), api('/v1/settings')]);
+  const qs = state.aiHistEmployee ? `?employee_id=${encodeURIComponent(state.aiHistEmployee)}&limit=30` : '?limit=30';
+  const { prompts } = await api(`/v1/prompts${qs}`);
+
+  const modeNote = settings.audit_mode === 'full'
+    ? '<b>Chế độ hiện tại: ghi toàn thời gian (full).</b> Mọi request AI đều được lưu nội dung (đã che secret/CCCD). Nhân viên được thông báo điều này trong tài liệu onboarding.'
+    : '<b>Chế độ hiện tại: chỉ metadata.</b> Nội dung KHÔNG được lưu, trừ khi admin bật Full Audit Mode có thời hạn cho một người/dự án cụ thể.';
+
+  root.innerHTML = `
+    <div class="notice">
+      ${modeNote}<br/>
+      Secret/CCCD/số thẻ được che trước khi lưu — bảo vệ công ty nếu CSDL rò rỉ, không ảnh hưởng việc bạn đọc nội dung.
+      <b>Mỗi lần bạn mở trang này đều được ghi vào Audit Logs.</b>
+    </div>
+
+    <div class="panel">
+      <h2>Lọc</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Nhân viên</label><br/>
+          <select onchange="state.aiHistEmployee=this.value; switchTab('aihistory')">
+            <option value="">— tất cả —</option>
+            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === state.aiHistEmployee ? 'selected' : ''}>${esc(e.full_name)}</option>`).join('')}
+          </select></div>
+      </div>
+    </div>
+
+    ${prompts.length ? prompts.map((p) => `
+      <div class="mdfile">
+        <div class="mdfile-head">
+          <span class="mdfile-name">${esc(p.employee_name || p.employee_id || '—')}${p.task_title ? ' · ' + esc(p.task_title) : ''}</span>
+          <span class="mdfile-desc">${fmtDate(p.created_at)} · <span class="pill ${p.capture_reason === 'company_policy' ? 'ok' : 'warn'}">${esc(p.capture_reason || '—')}</span></span>
+        </div>
+        <pre><b style="color:var(--accent-hi)">DEV NHẮN:</b>
+${esc(extractReadable(p.content_redacted, 1500))}
+
+<b style="color:var(--ok)">AI TRẢ LỜI:</b>
+${esc(extractReadable(p.response_redacted, 1500))}</pre>
+      </div>`).join('') : '<div class="panel empty">Chưa có nội dung nào được lưu.</div>'}`;
+}
+
 async function renderSeats(root) {
   const { employees } = await api('/v1/employees');
   const isAdmin = state.who?.role === 'admin';
@@ -794,7 +861,7 @@ async function approvePattern(id) {
 const CLASSIFICATIONS = ['unclassified', 'public', 'internal', 'customer_data'];
 
 async function renderGovernance(root) {
-  const [riskScore, flagsRes, auditRes, grantsRes, projectsRes, policiesRes, approvalRes] = await Promise.all([
+  const [riskScore, flagsRes, auditRes, grantsRes, projectsRes, policiesRes, approvalRes, settings] = await Promise.all([
     api('/v1/governance/risk-score'),
     api('/v1/flags'),
     api('/v1/audit-logs'),
@@ -802,9 +869,28 @@ async function renderGovernance(root) {
     api('/v1/projects'),
     api('/v1/policies'),
     api('/v1/governance/approval-requests'),
+    api('/v1/settings'),
   ]);
 
   root.innerHTML = `
+    <div class="panel">
+      <h2>Chế độ ghi nội dung AI</h2>
+      <div class="empty" style="margin-bottom:10px;">Quyết định ở cấp công ty. Dù ở chế độ nào, secret/CCCD luôn được che trước khi lưu, và mỗi lần admin xem nội dung đều ghi Audit Logs.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Chế độ</label><br/>
+          <select id="auditMode">
+            <option value="full" ${settings.audit_mode === 'full' ? 'selected' : ''}>full — ghi nội dung toàn thời gian</option>
+            <option value="metadata" ${settings.audit_mode === 'metadata' ? 'selected' : ''}>metadata — chỉ ghi model/token/chi phí, KHÔNG ghi nội dung</option>
+          </select></div>
+        <button class="btn" onclick="saveAuditMode()">Lưu</button>
+        <div style="flex:1;min-width:200px;font-size:12px;color:var(--faint);">
+          Đang là <b style="color:${settings.audit_mode === 'full' ? 'var(--warn)' : 'var(--ok)'}">${esc(settings.audit_mode)}</b>${settings.updated_by_name ? ` — đổi lần cuối bởi ${esc(settings.updated_by_name)}` : ''}.
+          Đổi chế độ là hành động được ghi vĩnh viễn vào Audit Logs.
+        </div>
+      </div>
+      <div id="auditModeResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
     <div class="panel">
       <h2>Risk Score theo nhân viên</h2>
       <div class="empty" style="margin-bottom:10px;">Chỉ để tham khảo — không tự động xử lý ai, quản lý tự xem xét.</div>
@@ -931,6 +1017,18 @@ async function renderGovernance(root) {
         <td>${fmtDate(a.created_at)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">Chưa có log nào.</td></tr>'}
       </tbody></table>
     </div>`;
+}
+
+async function saveAuditMode() {
+  const el = document.getElementById('auditModeResult');
+  const audit_mode = document.getElementById('auditMode').value;
+  if (audit_mode === 'full' && !confirm('Bật ghi nội dung TOÀN THỜI GIAN cho mọi nhân viên?\n\nNhân viên cần được thông báo về việc này (xem ONBOARDING.md) — triển khai âm thầm rồi giải thích sau là cách làm sai.')) return;
+  try {
+    await apiPost('/v1/settings', { audit_mode });
+    switchTab('governance');
+  } catch (e) {
+    el.textContent = 'Lỗi: ' + e.message;
+  }
 }
 
 async function grantFullAuditMode() {
