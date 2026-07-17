@@ -27,6 +27,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const profile = await getCurrentUserProfile();
       setUser(profile);
+      if (profile && typeof window !== 'undefined') {
+        const redirectUrl = sessionStorage.getItem('login_redirect_url');
+        if (redirectUrl) {
+          sessionStorage.removeItem('login_redirect_url');
+          window.location.href = redirectUrl;
+          return;
+        }
+      }
     } catch (e) {
       console.error('Error loadProfile in AuthProvider:', e);
     } finally {
@@ -60,7 +68,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      setIsShareRoute(window.location.pathname.startsWith('/share/'));
+      const path = window.location.pathname;
+      setIsShareRoute(path.startsWith('/share/') || path.startsWith('/shared/'));
     }
   }, []);
 

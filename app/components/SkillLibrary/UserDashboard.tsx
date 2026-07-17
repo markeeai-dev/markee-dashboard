@@ -19,6 +19,7 @@ import {
   type Project,
 } from '@/lib/dashboard-supabase';
 import { supabase } from '@/lib/supabase';
+import FilePreviewModal from '@/app/components/Shared/FilePreviewModal';
 
 const PAGE_SIZE = 6;
 const WIP_PAGE_SIZE = 8;
@@ -388,6 +389,14 @@ export default function UserDashboard({
   const [wips, setWips] = useState<AISession[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [wipPage, setWipPage] = useState(0);
+
+  // File preview state
+  const [previewFile, setPreviewFile] = useState<{
+    file_name: string;
+    storage_path: string;
+    mime_type: string;
+    source_url: string;
+  } | null>(null);
 
   const [activeEditWip, setActiveEditWip] = useState<AISession | null>(null);
   const [editWipTitle, setEditWipTitle] = useState('');
@@ -1114,14 +1123,12 @@ export default function UserDashboard({
                                   <div className="flex items-center gap-2 shrink-0">
                                     <button
                                       type="button"
-                                      onClick={() => window.dispatchEvent(new CustomEvent('markee_open_file_preview', {
-                                        detail: {
-                                          file_name: parsedAttachedFile.file_name,
-                                          storage_path: parsedAttachedFile.storage_path,
-                                          mime_type: parsedAttachedFile.mime_type || '',
-                                          source_url: `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsedAttachedFile.storage_path}`
-                                        }
-                                      }))}
+                                      onClick={() => setPreviewFile({
+                                        file_name: parsedAttachedFile.file_name,
+                                        storage_path: parsedAttachedFile.storage_path,
+                                        mime_type: parsedAttachedFile.mime_type || '',
+                                        source_url: `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${parsedAttachedFile.storage_path}`
+                                      })}
                                       className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 hover:text-slate-800 font-bold rounded text-[11px] transition-colors flex items-center gap-1 cursor-pointer"
                                     >
                                       👁️ Xem trước
@@ -1839,6 +1846,12 @@ export default function UserDashboard({
           <span>{wipToast.message}</span>
         </div>
       )}
+
+      <FilePreviewModal
+        isOpen={!!previewFile}
+        onClose={() => setPreviewFile(null)}
+        file={previewFile}
+      />
     </main>
   );
 }

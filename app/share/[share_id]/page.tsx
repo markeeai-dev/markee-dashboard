@@ -84,21 +84,24 @@ export default function ShareChatPage() {
   // Clone/Copy chat to current user's session list
   const handleCloneChat = async () => {
     if (!profile?.authUser?.id) {
-      alert('Vui lòng đăng nhập để nhân bản đoạn chat này và tiếp tục trò chuyện.');
-      router.push('/');
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('pending_clone_token', share_id);
+      }
+      router.push(`/?show_login=true`);
       return;
     }
 
     try {
       setCloning(true);
-      const res = await fetch('/api/share/clone', {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/chat/clone', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
-          share_id,
-          user_id: profile.authUser.id,
+          token: share_id,
         }),
       });
 

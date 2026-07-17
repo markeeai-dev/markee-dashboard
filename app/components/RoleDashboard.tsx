@@ -4,7 +4,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -28,6 +28,7 @@ import {
   type UserProfile,
 } from '@/lib/dashboard-supabase';
 import { useAuth } from '@/app/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 
 import UserGuideModal from './Shared/UserGuideModal';
 import AIChat from './AIChat/AIChat';
@@ -306,14 +307,17 @@ export default function RoleDashboard() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const { user: profile, logout } = useAuth();
+  const { user: profile, logout, login } = useAuth();
+  const isCloningRef = useRef(false);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
+  const [isCloningChat, setIsCloningChat] = useState(false);
   const [previewFile, setPreviewFile] = useState<{
     file_name: string;
     storage_path: string;
     mime_type: string;
     source_url: string;
   } | null>(null);
+
   const [activeTab, _setActiveTab] = useState<'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file' | 'quan-ly-vps' | 'giam-sat-vps' | 'skill_approval' | 'api_management'>(() => {
     if (typeof window !== 'undefined') {
       const searchParams = new URLSearchParams(window.location.search);
@@ -330,6 +334,10 @@ export default function RoleDashboard() {
     }
     return 'overview';
   });
+
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const setActiveTab = (tab: 'overview' | 'library' | 'projects' | 'users' | 'assets' | 'knowledge_hub' | 'ai_chat' | 'chat-folders' | 'quan-ly-file' | 'quan-ly-vps' | 'giam-sat-vps' | 'skill_approval' | 'api_management') => {
     _setActiveTab(tab);
@@ -355,6 +363,51 @@ export default function RoleDashboard() {
   }, [searchParams, profile?.role]);
 
   useEffect(() => {
+    if (!profile) return; // Chỉ chạy khi đã login
+
+    if (typeof window !== 'undefined') {
+      const pendingToken = localStorage.getItem('pending_clone_token');
+      if (pendingToken && !isCloningRef.current) {
+        // A. Đóng khóa ngay lập tức
+        isCloningRef.current = true;
+        setIsCloningChat(true);
+
+        // B. Xóa token ngay lập tức khỏi storage trước khi gọi fetch
+        localStorage.removeItem('pending_clone_token');
+
+        // C. Gọi API
+        async function triggerStorageClone() {
+          try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const res = await fetch('/api/chat/clone', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+              },
+              body: JSON.stringify({ token: pendingToken }),
+            });
+
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error || 'Lỗi khi nhân bản cuộc trò chuyện');
+            }
+
+            // Nhân bản thành công -> chuyển sang tab chat và mở thẳng session vừa clone
+            router.replace(`/?tab=ai_chat&session_id=${data.new_session_id}`);
+          } catch (err: any) {
+            console.error("Lỗi clone chat từ localStorage:", err);
+            alert(err.message || "Lỗi khi nhân bản cuộc trò chuyện");
+          } finally {
+            setIsCloningChat(false);
+          }
+        }
+        triggerStorageClone();
+      }
+    }
+  }, [profile, router]);
+
+  useEffect(() => {
     const handleOpenPreview = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (customEvent.detail) {
@@ -367,10 +420,6 @@ export default function RoleDashboard() {
     };
   }, []);
 
-  const [isGuideOpen, setIsGuideOpen] = useState(false);
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
   // Auto redirect user to library tab if their role is user
   useEffect(() => {
     if (profile && profile.role === 'user') {
@@ -378,8 +427,26 @@ export default function RoleDashboard() {
     }
   }, [profile?.role]);
 
+  // ==========================================
+  // 2. EARLY RETURN CHO UI ĐẶT Ở DƯỚI CÙNG
+  // ==========================================
   if (!profile) {
-    return null;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f8fafc] p-5 text-[#1e293b]">
+        <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 text-center shadow-lg">
+          <img src="https://markeeai.com/logo.svg" alt="Markee Logo" className="w-12 h-12 mx-auto mb-4" />
+          <h1 className="text-xl font-bold bg-linear-to-r from-slate-900 via-red-600 to-rose-600 bg-clip-text text-transparent">Markee AI Ops</h1>
+          <p className="mt-2 text-sm text-[#64748b]">Đăng nhập Google để mở dashboard theo role.</p>
+          <button
+            type="button"
+            onClick={login}
+            className="mt-5 w-full rounded-lg bg-[#E3000F] px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 transition-colors cursor-pointer border-0 shadow-sm"
+          >
+            Đăng nhập Google
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -727,6 +794,18 @@ export default function RoleDashboard() {
         file={previewFile}
         onSelectForChat={() => setActiveTab('ai_chat')}
       />
+
+      {isCloningChat && (
+        <div className="fixed inset-0 z-100 flex flex-col items-center justify-center bg-slate-900/60 backdrop-blur-xs text-white animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-2xl flex flex-col items-center gap-4 text-slate-800 animate-in zoom-in-95 duration-200">
+            <div className="w-10 h-10 border-4 border-markee-primary border-t-transparent rounded-full animate-spin" />
+            <div className="text-center">
+              <h3 className="font-bold text-sm md:text-base">Đang sao chép cuộc trò chuyện...</h3>
+              <p className="text-xs text-slate-400 mt-1 font-semibold">Quá trình này có thể mất vài giây.</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

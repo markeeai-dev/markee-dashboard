@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Search, Plus, SlidersHorizontal, Folder, Edit3, Trash2, MoreVertical } from 'lucide-react';
+import { Search, Plus, SlidersHorizontal, Folder, Edit3, Trash2, MoreVertical, Share2, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
 interface FolderItem {
@@ -34,6 +34,33 @@ export default function ChatFolderGrid({
   const [selectedFolder, setSelectedFolder] = useState<FolderItem | null>(null);
   const [folderNameInput, setFolderNameInput] = useState('');
   const [activeMenuId, setActiveMenuId] = useState<number | null>(null);
+  const [sharingId, setSharingId] = useState<number | null>(null);
+
+  const handleShare = async (projectId: number) => {
+    try {
+      setSharingId(projectId);
+      const response = await fetch('/api/share/project', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ projectId }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Lỗi khi tạo link chia sẻ');
+      }
+
+      await navigator.clipboard.writeText(data.shareUrl);
+      alert('Đã copy link chia sẻ dự án vào clipboard!');
+    } catch (err: any) {
+      console.error('Lỗi chia sẻ dự án:', err);
+      alert(err.message || 'Lỗi khi tạo liên kết chia sẻ.');
+    } finally {
+      setSharingId(null);
+    }
+  };
 
   const currentFolders = activeTab === 'global' ? globalProjects : personalProjects;
 
@@ -186,6 +213,21 @@ export default function ChatFolderGrid({
                       <>
                         <div className="fixed inset-0 z-40" onClick={() => setActiveMenuId(null)} />
                         <div className="absolute right-0 mt-1 z-50 w-28 bg-white border border-slate-200 rounded-xl shadow-lg py-1.5 text-xs text-slate-700 font-semibold animate-in fade-in slide-in-from-top-1 duration-100">
+                          <button
+                            onClick={() => {
+                              handleShare(folder.id);
+                              setActiveMenuId(null);
+                            }}
+                            disabled={sharingId === folder.id}
+                            className="w-full text-left px-3.5 py-1.5 hover:bg-slate-50 transition-colors flex items-center gap-1.5 cursor-pointer bg-transparent border-0 font-semibold text-slate-700 disabled:opacity-50"
+                          >
+                            {sharingId === folder.id ? (
+                              <Loader2 className="w-3.5 h-3.5 text-slate-500 animate-spin" />
+                            ) : (
+                              <Share2 className="w-3.5 h-3.5 text-slate-500" />
+                            )}
+                            <span>Chia sẻ</span>
+                          </button>
                           <button
                             onClick={() => {
                               setSelectedFolder(folder);
