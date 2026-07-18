@@ -310,6 +310,43 @@ export default function RoleDashboard() {
   const { user: profile, logout, login } = useAuth();
   const isCloningRef = useRef(false);
   const [libraryRefreshKey, setLibraryRefreshKey] = useState(0);
+
+  // Center AI (ops.markeeai.com) giờ gộp chung domain, chạy ở /dev. Nút chuyển qua chỉ hiện cho
+  // đúng những acc đã được add làm nhân viên bên Center AI — kiểm tra thật bằng cách đổi thử
+  // token Google đang có sang employee_token của Center AI, không hard-code danh sách email ở
+  // đây (Center AI's "employees" table mới là nguồn dữ liệu đúng, tự thêm/bớt người không cần
+  // sửa code bên này).
+  const [centerAiSession, setCenterAiSession] = useState<{ employee_token: string; employee_id: string; full_name: string; role: string } | null>(null);
+  useEffect(() => {
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) return;
+      try {
+        const res = await fetch('/dev/api/v1/auth/google-exchange', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ supabase_access_token: session.access_token }),
+        });
+        if (!res.ok) return;
+        setCenterAiSession(await res.json());
+      } catch {
+        /* im lặng bỏ qua — acc không thuộc Center AI hoặc tính năng chưa cấu hình xong */
+      }
+    })();
+  }, []);
+
+  function switchToCenterAi() {
+    if (!centerAiSession) return;
+    localStorage.setItem(
+      'centerai_dashboard_session',
+      JSON.stringify({
+        cpUrl: '/dev/api',
+        token: centerAiSession.employee_token,
+        who: { employee_id: centerAiSession.employee_id, full_name: centerAiSession.full_name, role: centerAiSession.role },
+      })
+    );
+    window.location.href = '/dev';
+  }
   const [isCloningChat, setIsCloningChat] = useState(false);
   const [previewFile, setPreviewFile] = useState<{
     file_name: string;
@@ -712,6 +749,17 @@ export default function RoleDashboard() {
           </button>
 
           <div className="flex items-center gap-3 ml-auto">
+            {centerAiSession && (
+              <button
+                type="button"
+                onClick={switchToCenterAi}
+                className="bg-markee-primary text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer hover:bg-red-700"
+                title="Mở dashboard vận hành Center AI"
+              >
+                <span>🚀</span>
+                <span>Chuyển sang Center AI</span>
+              </button>
+            )}
             <button
               onClick={() => setIsGuideOpen(true)}
               className="text-markee-primary border border-markee-primary hover:bg-markee-primary/10 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer"
