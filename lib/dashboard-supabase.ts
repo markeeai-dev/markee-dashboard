@@ -667,7 +667,7 @@ export interface Project {
   type?: 'WIP_GLOBAL' | 'PERSONAL';
   department_id?: number;
   team_id?: number;
-  customer_id?: number | null;
+  customer_id?: string | null;
 }
 
 export interface AISession {

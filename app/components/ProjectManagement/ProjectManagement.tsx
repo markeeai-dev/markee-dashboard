@@ -335,14 +335,14 @@ export default function ProjectManagement({ profile }: { profile: UserProfile })
       setProjects(prev => prev.map(p => p.id === activeEditProject.id ? { 
         ...p, 
         name: trimmed,
-        customer_id: targetCustomerId ? Number(targetCustomerId) : null
+        customer_id: targetCustomerId
       } : p));
       
       if (selectedProject?.id === activeEditProject.id) {
         setSelectedProject(prev => prev ? { 
           ...prev, 
           name: trimmed,
-          customer_id: targetCustomerId ? Number(targetCustomerId) : null
+          customer_id: targetCustomerId
         } : null);
       }
       setActiveEditProject(null);
@@ -526,7 +526,9 @@ export default function ProjectManagement({ profile }: { profile: UserProfile })
         throw new Error(data.error || 'Lỗi khi tạo liên kết chia sẻ');
       }
 
-      await navigator.clipboard.writeText(data.shareUrl);
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+      const shareUrl = `${baseUrl}/shared/project/${data.share_token}`;
+      await navigator.clipboard.writeText(shareUrl);
       showToast('Đã copy link chia sẻ', 'success');
     } catch (err: any) {
       console.error('Lỗi chia sẻ dự án:', err);
@@ -856,7 +858,7 @@ export default function ProjectManagement({ profile }: { profile: UserProfile })
                           {project.name}
                         </h3>
                         <p className="text-xs text-markee-muted truncate mt-1">
-                          Dự án theo dõi hoạt động AI. Tạo bởi {project.authorName}
+                          Dự án được tạo bởi {project.authorName}
                         </p>
                       </div>
 
