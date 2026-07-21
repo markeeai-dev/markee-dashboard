@@ -70,12 +70,15 @@ export async function POST(request: Request) {
 }
 
 async function handleSync(request: Request) {
+  const authHeader = request.headers.get('authorization');
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response(JSON.stringify({ success: false, message: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
   try {
-    // 1. Kiểm tra header Authorization bảo mật
-    const authHeader = request.headers.get("Authorization");
-    if (!authHeader || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json({ error: "Unauthorized: Invalid cron secret" }, { status: 401 });
-    }
 
     const supabaseAdmin = getSupabaseAdmin();
 

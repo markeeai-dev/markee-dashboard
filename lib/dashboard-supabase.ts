@@ -93,7 +93,7 @@ function getGoogleName(user: User) {
   return metadata.full_name || metadata.name || metadata.preferred_username || (user.email ? getEmailName(user.email) : "User");
 }
 
-function normalizeSkill(row: SkillLibraryRow, authorMap: Map<string, string>, likedSkillIds = new Set<number>()): SkillCard {
+function normalizeSkill(row: SkillLibraryRow, authorMap: Map<string, string>): SkillCard {
   const likes = row.likes_count ?? 0;
   const downloads = row.downloads_count ?? 0;
 
@@ -103,27 +103,8 @@ function normalizeSkill(row: SkillLibraryRow, authorMap: Map<string, string>, li
     downloads_count: downloads,
     authorName: authorMap.get(row.author_id) || getEmailName(row.author_id),
     score: likes + downloads,
-    likedByCurrentUser: likedSkillIds.has(row.id),
+    likedByCurrentUser: false,
   };
-}
-
-async function getLikedSkillIds(userEmail: string | undefined, skillIds: number[]) {
-  const likedSkillIds = new Set<number>();
-
-  if (!userEmail || skillIds.length === 0) return likedSkillIds;
-
-  const { data, error } = await supabase.from("user_likes").select("skill_id").eq("user_email", userEmail).in("skill_id", skillIds);
-
-  if (error) {
-    console.error("Error fetching liked skills:", error);
-    return likedSkillIds;
-  }
-
-  data?.forEach((row) => {
-    if (typeof row.skill_id === "number") likedSkillIds.add(row.skill_id);
-  });
-
-  return likedSkillIds;
 }
 
 async function getAuthorNameMap(authorEmails: string[]) {
@@ -258,14 +239,10 @@ export async function fetchApprovedSkills(
 
     const rows = (data || []) as SkillLibraryRow[];
     const authorMap = await getAuthorNameMap(rows.map((skill) => skill.author_id));
-    const likedSkillIds = await getLikedSkillIds(
-      userEmail,
-      rows.map((skill) => skill.id),
-    );
     const total = count || 0;
 
     return {
-      items: rows.map((row) => normalizeSkill(row, authorMap, likedSkillIds)),
+      items: rows.map((row) => normalizeSkill(row, authorMap)),
       total,
       hasMore: to + 1 < total,
       nextPage: page + 1,
@@ -282,12 +259,8 @@ export async function fetchApprovedSkills(
 
   const rows = (data || []) as SkillLibraryRow[];
   const authorMap = await getAuthorNameMap(rows.map((skill) => skill.author_id));
-  const likedSkillIds = await getLikedSkillIds(
-    userEmail,
-    rows.map((skill) => skill.id),
-  );
 
-  const normalizedItems = rows.map((row) => normalizeSkill(row, authorMap, likedSkillIds));
+  const normalizedItems = rows.map((row) => normalizeSkill(row, authorMap));
   const cleanSearch = removeVietnameseTones(normalizedSearch);
 
   const filteredItems = normalizedItems.filter((item) => {
@@ -324,13 +297,9 @@ export async function fetchTrendingSkills(limit = 5, userEmail?: string): Promis
 
   const rows = (data || []) as SkillLibraryRow[];
   const authorMap = await getAuthorNameMap(rows.map((skill) => skill.author_id));
-  const likedSkillIds = await getLikedSkillIds(
-    userEmail,
-    rows.map((skill) => skill.id),
-  );
 
   return rows
-    .map((row) => normalizeSkill(row, authorMap, likedSkillIds))
+    .map((row) => normalizeSkill(row, authorMap))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 }
@@ -357,11 +326,7 @@ export async function fetchMyWorkspaceSkills(email: string): Promise<SkillCard[]
 
   const rows = (data || []) as SkillLibraryRow[];
   const authorMap = await getAuthorNameMap(rows.map((skill) => skill.author_id));
-  const likedSkillIds = await getLikedSkillIds(
-    email,
-    rows.map((skill) => skill.id),
-  );
-  return rows.map((row) => normalizeSkill(row, authorMap, likedSkillIds));
+  return rows.map((row) => normalizeSkill(row, authorMap));
 }
 
 export interface LibraryCounts {

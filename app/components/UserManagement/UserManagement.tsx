@@ -406,7 +406,9 @@ export default function UserManagement({ profile }: { profile: UserProfile }) {
   const getLicenseStatus = (lic: AILicense) => {
     const isCanceled = localStorage.getItem(`license_status_${lic.id}`) === 'Canceled';
     if (isCanceled) return 'Canceled';
-    const isExpired = new Date(lic.expiration_date) < new Date();
+    const expDate = new Date(lic.expiration_date);
+    expDate.setHours(23, 59, 59, 999);
+    const isExpired = expDate < new Date();
     return isExpired ? 'Expired' : 'Active';
   };
 

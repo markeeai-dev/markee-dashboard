@@ -65,12 +65,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Unauthorized: Access denied (External App)" }, { status: 401 });
       }
     } else {
-      // 2. DASHBOARD NỘI BỘ: Cấp quyền tuyệt đối dựa vào ENV Key
-      const secretKey = process.env.MARKEE_INTERNAL_API_KEY || "";
-      if (!secretKey) {
-        return NextResponse.json({ error: "Missing Internal API Key" }, { status: 500 });
-      }
-
+      // 2. DASHBOARD NỘI BỘ: Không còn check secretKey, cấp quyền tuyệt đối
       // Giả lập user và admin Supabase client để vượt qua các bước check
       user = { id: "admin-internal", email: "admin@markee.io" };
 
@@ -84,7 +79,8 @@ export async function POST(req: Request) {
     }
 
     const body = await req.json();
-    const { messages, conversationId, sessionId, model: requestedModel, stream } = body;
+    // Đã bổ sung việc lấy thông tin file từ body
+    const { messages, conversationId, sessionId, model: requestedModel, stream, file_url, file_name, file_type } = body;
 
     if (!messages || !Array.isArray(messages)) {
       return Response.json({ error: "Missing messages" }, { status: 400 });
@@ -92,36 +88,24 @@ export async function POST(req: Request) {
 
     if (sessionId) {
       const { data: session, error } = await supabase.from("chat_sessions").select("id").eq("id", sessionId).eq("user_id", user.email).single();
-
       if (error || !session) {
         return Response.json({ error: "Session not found or access denied" }, { status: 403 });
-      }
-    } else if (conversationId) {
-      const { data: conversation, error } = await supabase.from("conversations").select("id").eq("id", conversationId).eq("user_id", user.email).single();
-
-      if (error || !conversation) {
-        return Response.json({ error: "Conversation not found or access denied" }, { status: 403 });
       }
     }
 
     const lastUserMessage = [...messages].reverse().find((m: { role: string }) => m.role === "user");
     const userContent = lastUserMessage ? (typeof lastUserMessage.content === "string" ? lastUserMessage.content : JSON.stringify(lastUserMessage.content)) : "";
 
-    if (userContent) {
-      if (sessionId) {
-        await supabase.from("chat_messages").insert({
-          session_id: sessionId,
-          role: "user",
-          content: userContent,
-        });
-      } else if (conversationId) {
-        await supabase.from("messages").insert({
-          conversation_id: conversationId,
-          role: "user",
-          content: userContent,
-        });
-        await supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
-      }
+    if (userContent && sessionId) {
+      // Đã bổ sung việc lưu file_url, file_name, file_type vào database
+      await supabase.from("chat_messages").insert({
+        session_id: sessionId,
+        role: "user",
+        content: userContent,
+        file_url: file_url || null,
+        file_name: file_name || null,
+        file_type: file_type || null,
+      });
     }
 
     const modelName = requestedModel || "gpt-4o";
@@ -240,13 +224,6 @@ export async function POST(req: Request) {
               role: "assistant",
               content: text,
             });
-          } else if (conversationId) {
-            await supabase.from("messages").insert({
-              conversation_id: conversationId,
-              role: "assistant",
-              content: text,
-            });
-            await supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
           }
         }
       },

@@ -24,6 +24,9 @@ interface Message {
   content: string;
   created_at?: string;
   attached_knowledge?: { id: string; title: string } | null;
+  file_url?: string | null;
+  file_name?: string | null;
+  file_type?: string | null;
 }
 
 interface AIChatProps {
@@ -709,11 +712,27 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
     setInputValue(prompt);
   };
 
-  const handleSendMessage = async () => {
-    const content = inputValue.trim();
-    if (!content) return;
+  const handleSendMessage = async (content: string) => {
+    const trimmed = content.trim();
+    if (!trimmed) return;
     setInputValue('');
-    await sendMessageContent(content);
+    await sendMessageContent(trimmed);
+  };
+
+  const uploadAttachment = async (file: File): Promise<{ url: string; name: string; type: string } | null> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/chat/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) throw new Error('Upload failed');
+      return await res.json();
+    } catch (err) {
+      console.error('Lỗi upload file đính kèm:', err);
+      return null;
+    }
   };
 
   const sendMessageContent = async (content: string) => {
@@ -730,6 +749,12 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
     setPendingKnowledgeProjectName(null);
     setHiddenContext(null);
     setStagedFile(null);  // Dọn dẹp ngay, không chờ API
+
+    // Upload file đính kèm lên backend storage (nếu có)
+    let uploadResult: { url: string; name: string; type: string } | null = null;
+    if (localStagedFile) {
+      uploadResult = await uploadAttachment(localStagedFile);
+    }
 
     // Đọc nội dung file (nếu có) bằng FileReader trước khi gửi
     let enrichedContent = content;
@@ -792,7 +817,10 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
         session_id: currentSessionId,
         role: 'user',
         content: dbContent,
-        attached_knowledge: hiddenContext ? { id: hiddenContext.id || '', title: hiddenContext.title } : null
+        attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null,
+        file_url: uploadResult?.url || null,
+        file_name: uploadResult?.name || null,
+        file_type: uploadResult?.type || null
       });
       if (userMsgErr) throw userMsgErr;
 
@@ -800,7 +828,10 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
       const newUserMsg: Message = { 
         role: 'user', 
         content: dbContent,
-        attached_knowledge: hiddenContext ? { id: hiddenContext.id || '', title: hiddenContext.title } : null
+        attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null,
+        file_url: uploadResult?.url || null,
+        file_name: uploadResult?.name || null,
+        file_type: uploadResult?.type || null
       };
       setMessages((prev) => [...prev, newUserMsg]);
 
@@ -926,6 +957,12 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
     setHiddenContext(null);
     setStagedFile(null);  // Dọn dẹp ngay lập tức
 
+    // Upload file đính kèm lên backend storage (nếu có)
+    let uploadResult: { url: string; name: string; type: string } | null = null;
+    if (localStagedFile && content !== 'Đoạn chat mới') {
+      uploadResult = await uploadAttachment(localStagedFile);
+    }
+
     // Đọc nội dung file (nếu có) bằng FileReader trước khi gửi
     let enrichedContent = content;
     if (localStagedFile && content !== 'Đoạn chat mới') {
@@ -975,14 +1012,20 @@ Liệt kê theo thứ tự ưu tiên những việc nên làm ngay khi mở lạ
           session_id: newSessionId,
           role: 'user',
           content: dbContent,
-          attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null
+          attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null,
+          file_url: uploadResult?.url || null,
+          file_name: uploadResult?.name || null,
+          file_type: uploadResult?.type || null
         });
         if (userMsgErr) throw userMsgErr;
 
         const newUserMsg: Message = { 
           role: 'user', 
           content: dbContent,
-          attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null
+          attached_knowledge: localHiddenContext ? { id: localHiddenContext.id || '', title: localHiddenContext.title } : null,
+          file_url: uploadResult?.url || null,
+          file_name: uploadResult?.name || null,
+          file_type: uploadResult?.type || null
         };
         setMessages([newUserMsg]);
 

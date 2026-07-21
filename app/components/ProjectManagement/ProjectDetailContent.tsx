@@ -1246,8 +1246,7 @@ export default function ProjectDetailContent({
                 type="button"
                 onClick={handleDeleteWIP}
                 disabled={isDeletingWIP}
-                className="px-4 py-2 bg-red-650 text-white rounded-lg cursor-pointer animate-pulse"
-              >
+                className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg cursor-pointer transition-colors duration-200"              >
                 {isDeletingWIP ? 'Đang xóa...' : 'Đồng ý xóa'}
               </button>
             </div>

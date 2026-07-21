@@ -111,8 +111,8 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
   const [loading, setLoading] = useState(true);
 
   // Sorting States
-  const [sortField, setSortField] = useState<'name' | 'total_granted' | 'usage_percent' | null>(null);
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [sortField, setSortField] = useState<'name' | 'total_granted' | 'usage_percent' | null>('usage_percent');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   // Modal & Form States
   const [isSyncing, setIsSyncing] = useState(false);
@@ -561,7 +561,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
             </div>
           </div>
 
-          <div className="overflow-x-auto overflow-y-auto max-h-[500px] pb-48 min-h-[220px] relative">
+          <div className="overflow-x-auto overflow-y-auto max-h-125 pb-48 min-h-55 relative">
             {loading ? (
               <div className="flex flex-col items-center justify-center py-16 gap-2">
                 <div className="w-6 h-6 border-2 border-markee-primary border-t-transparent rounded-full animate-spin" />
@@ -654,7 +654,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                             const usagePercent = app.total_granted > 0 ? Math.min(100, (app.total_used / app.total_granted) * 100) : 0;
                             const barColorClass = usagePercent < 75 ? 'bg-emerald-500' : usagePercent <= 90 ? 'bg-amber-500' : 'bg-red-500';
                             return (
-                              <div className="flex flex-col w-full min-w-[150px] sm:min-w-[200px]">
+                              <div className="flex flex-col w-full min-w-37.5 sm:min-w-50">
                                 <div className="flex items-center justify-between text-sm font-extrabold text-slate-900">
                                   <span>
                                     {(app.total_used * 3250).toLocaleString('vi-VN')}đ / {(app.total_granted * 3250).toLocaleString('vi-VN')}đ
@@ -692,10 +692,10 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                           </button>
                           {activeMenuId === app.id && isMounted && createPortal(
                             <>
-                              <div className="fixed inset-0 z-[9998] bg-transparent" onClick={() => setActiveMenuId(null)} />
+                              <div className="fixed inset-0 z-9998 bg-transparent" onClick={() => setActiveMenuId(null)} />
                               <div 
                                 style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }}
-                                className="fixed z-[9999] w-40 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 text-left animate-in fade-in duration-150"
+                                className="fixed z-9999 w-40 bg-white border border-slate-200 rounded-xl shadow-xl py-1.5 text-left animate-in fade-in duration-150"
                               >
                                 <button
                                   onClick={() => {

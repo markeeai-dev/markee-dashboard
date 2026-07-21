@@ -260,14 +260,13 @@ export default function MyAssetsView({ profile }: { profile: UserProfile }) {
 
             // Calculate expiration days
             const expDate = new Date(lic.expiration_date);
+            expDate.setHours(23, 59, 59, 999);
             const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            expDate.setHours(0, 0, 0, 0);
+            
+            const isExpired = expDate < today;
             const diffTime = expDate.getTime() - today.getTime();
             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-            const isExpired = diffDays < 0;
-            const isExpiringSoon = diffDays >= 0 && diffDays <= 3;
+            const isExpiringSoon = !isExpired && diffDays >= 0 && diffDays <= 3;
             const showWarning = (isExpired || isExpiringSoon) && !isCanceled;
 
             const match = getLatestUsageStat(lic.email, lic.ai_tool);

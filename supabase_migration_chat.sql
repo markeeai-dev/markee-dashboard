@@ -62,3 +62,12 @@ CREATE POLICY "Admins can read all messages" ON messages
       SELECT 1 FROM users WHERE email = auth.jwt() ->> 'email' AND role = 'admin'
     )
   );
+
+-- Alter tables to add file attachment support if they exist
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS file_url TEXT;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS file_name TEXT;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS file_type TEXT;
+
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_url TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_name TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_type TEXT;

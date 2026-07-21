@@ -1,7 +1,9 @@
+/* eslint-disable @next/next/no-img-element */
 'use client';
 
 import React, { useRef, useEffect, useState } from 'react';
-import { Send, Sparkles, User, Laptop, Menu, Plus, X, Folder, BookOpen, Search } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Sparkles, User, Laptop, Menu, X, BookOpen, Search } from 'lucide-react';
 import ChatInput from './ChatInput';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
@@ -39,6 +41,98 @@ function renderUserContent(content: string) {
   return <p className="whitespace-pre-wrap wrap-break-word">{content.replace(/\n{3,}/g, '\n\n')}</p>;
 }
 
+const ChatMessageItem = React.memo(function ChatMessageItem({ msg, onPreview }: { msg: Message; onPreview: (url: string) => void }) {
+  const isUser = msg.role === 'user';
+  return (
+    <div className={`flex gap-3.5 w-full min-w-0 ${isUser ? 'justify-end' : 'justify-start'}`}>
+      {!isUser && (
+        <div className="w-8 h-8 rounded-full bg-red-50 border border-red-100 flex items-center justify-center text-markee-primary shrink-0 select-none shadow-3xs">
+          <Laptop className="h-4 w-4" />
+        </div>
+      )}
+
+      <div className={`max-w-[88%] md:max-w-[75%] min-w-0 overflow-hidden rounded-2xl px-3.5 py-3 text-xs leading-relaxed ${isUser
+        ? 'bg-red-50/50 border border-red-100 text-slate-800 rounded-tr-none'
+        : 'bg-slate-50/50 border border-slate-200 text-slate-800 rounded-tl-none shadow-3xs'
+        }`}>
+        {isUser ? (
+          <div className="space-y-2">
+            {msg.file_url ? (
+              <>
+                {/* Render clean text content (without attachment footer) */}
+                {(() => {
+                  const cleanContent = msg.content.replace(/\n\n📎 Đính kèm: .+$/, '').trim();
+                  return cleanContent ? <p className="whitespace-pre-wrap wrap-break-word">{cleanContent}</p> : null;
+                })()}
+                
+                {/* Render physical file link / image thumbnail */}
+                {(() => {
+                  const isImage = msg.file_type?.startsWith('image/') || 
+                    /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(msg.file_name || '');
+                  
+                  if (isImage) {
+                    return (
+                      <div 
+                        onClick={() => msg.file_url && onPreview(msg.file_url)}
+                        className="mt-2 rounded-lg overflow-hidden max-w-sm max-h-64 border border-slate-200 bg-slate-50 flex items-center justify-center cursor-pointer"
+                      >
+                        <img 
+                          src={msg.file_url} 
+                          alt={msg.file_name || 'Attachment'} 
+                          className="w-24 h-24 object-cover rounded-2xl cursor-pointer hover:opacity-95 transition-opacity border border-gray-200 shadow-sm"
+                        />
+                      </div>
+                    );
+                  } else {
+                    return (
+                      <a href={msg.file_url} target="_blank" rel="noopener noreferrer" className="block mt-2 w-fit decoration-none">
+                        <FileCard fileName={msg.file_name || 'File'} />
+                      </a>
+                    );
+                  }
+                })()}
+              </>
+            ) : (
+              // Fallback to legacy parser if no file_url is present (for old database records)
+              renderUserContent(msg.content)
+            )}
+            {msg.attached_knowledge && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-lg shadow-3xs max-w-full w-fit">
+                <span>📎</span>
+                <span className="font-semibold text-[10px] select-none text-slate-500">Đính kèm:</span>
+                <span className="font-bold text-[10px] truncate max-w-45 md:max-w-60 text-slate-700" title={msg.attached_knowledge.title}>
+                  {msg.attached_knowledge.title}
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="w-full min-w-0 wrap-break-word text-xs">
+            <MarkdownRenderer content={msg.content.replace(/\n{3,}/g, '\n\n')} />
+          </div>
+        )}
+      </div>
+
+      {isUser && (
+        <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0 select-none shadow-3xs">
+          <User className="h-4 w-4" />
+        </div>
+      )}
+    </div>
+  );
+}, (prev, next) => {
+  return (
+    prev.msg.content === next.msg.content &&
+    prev.msg.role === next.msg.role &&
+    prev.msg.id === next.msg.id &&
+    prev.msg.attached_knowledge?.id === next.msg.attached_knowledge?.id &&
+    prev.msg.file_url === next.msg.file_url &&
+    prev.msg.file_name === next.msg.file_name &&
+    prev.msg.file_type === next.msg.file_type &&
+    prev.onPreview === next.onPreview
+  );
+});
+
 // --- Component Chính ChatWindow ---
 interface Message {
   id?: string;
@@ -46,13 +140,16 @@ interface Message {
   content: string;
   created_at?: string;
   attached_knowledge?: { id: string; title: string } | null;
+  file_url?: string | null;
+  file_name?: string | null;
+  file_type?: string | null;
 }
 
 interface ChatWindowProps {
   messages: Message[];
   inputValue: string;
   setInputValue: (val: string) => void;
-  onSendMessage: () => void;
+  onSendMessage: (content: string) => void;
   isGenerating: boolean;
   selectedModel: string;
   setSelectedModel: (model: string) => void;
@@ -105,6 +202,7 @@ export default function ChatWindow({
 }: ChatWindowProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isSkillModalOpen, setIsSkillModalOpen] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   const [selectedDeptId, setSelectedDeptId] = useState<number | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
@@ -113,6 +211,18 @@ export default function ChatWindow({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isGenerating]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPreviewImage(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-white min-w-0 relative z-10">
@@ -150,48 +260,9 @@ export default function ChatWindow({
           </div>
         ) : (
           <div className="space-y-4 md:space-y-6 w-full min-w-0">
-            {messages.map((msg, index) => {
-              const isUser = msg.role === 'user';
-              return (
-                <div key={index} className={`flex gap-3.5 w-full min-w-0 ${isUser ? 'justify-end' : 'justify-start'}`}>
-                  {!isUser && (
-                    <div className="w-8 h-8 rounded-full bg-red-50 border border-red-100 flex items-center justify-center text-markee-primary shrink-0 select-none shadow-3xs">
-                      <Laptop className="h-4 w-4" />
-                    </div>
-                  )}
-
-                  <div className={`max-w-[88%] md:max-w-[75%] min-w-0 overflow-hidden rounded-2xl px-3.5 py-3 text-xs leading-relaxed ${isUser
-                    ? 'bg-red-50/50 border border-red-100 text-slate-800 rounded-tr-none'
-                    : 'bg-slate-50/50 border border-slate-200 text-slate-800 rounded-tl-none shadow-3xs'
-                    }`}>
-                    {isUser ? (
-                      <div className="space-y-2">
-                        {renderUserContent(msg.content)}
-                        {msg.attached_knowledge && (
-                          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-lg shadow-3xs max-w-full w-fit">
-                            <span>📎</span>
-                            <span className="font-semibold text-[10px] select-none text-slate-500">Đính kèm:</span>
-                            <span className="font-bold text-[10px] truncate max-w-[180px] md:max-w-[240px] text-slate-700" title={msg.attached_knowledge.title}>
-                              {msg.attached_knowledge.title}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="w-full min-w-0 wrap-break-word text-xs">
-                        <MarkdownRenderer content={msg.content.replace(/\n{3,}/g, '\n\n')} />
-                      </div>
-                    )}
-                  </div>
-
-                  {isUser && (
-                    <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-500 shrink-0 select-none shadow-3xs">
-                      <User className="h-4 w-4" />
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {messages.map((msg, index) => (
+              <ChatMessageItem key={msg.id || index} msg={msg} onPreview={setPreviewImage} />
+            ))}
 
             {isGenerating && (
               <div className="flex gap-3.5 justify-start w-full">
@@ -241,7 +312,7 @@ export default function ChatWindow({
       {/* Modal 2: Chọn Skill dạng Cascading Dropdown */}
       {isSkillModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-3xs animate-in fade-in duration-200">
-          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col max-h-[500px]">
+          <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col max-h-125">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4 shrink-0">
               <div className="flex items-center gap-2">
                 {/* Nút Quay lại */}
@@ -384,6 +455,38 @@ export default function ChatWindow({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Lightbox Preview Image Modal */}
+      {previewImage !== null && typeof document !== 'undefined' && createPortal(
+        <div
+          onClick={() => setPreviewImage(null)}
+          className="fixed inset-0 w-screen h-screen z-999999 bg-black/90 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-200"
+        >
+          {/* Nút Thoát */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewImage(null);
+            }}
+            className="absolute top-6 left-6 z-1000000 p-3 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all cursor-pointer flex items-center justify-center border-0"
+            title="Quay lại"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+          </button>
+          
+          {/* Ảnh phóng to */}
+          <img
+            src={previewImage}
+            alt="Preview fullscreen"
+            className="max-w-[90vw] max-h-[90vh] object-contain drop-shadow-2xl rounded-lg select-none"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>,
+        document.body
       )}
     </div>
   );

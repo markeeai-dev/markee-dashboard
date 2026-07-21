@@ -82,7 +82,7 @@ TextareaAutosize.displayName = 'TextareaAutosize';
 interface ChatInputProps {
   inputValue: string;
   setInputValue: (val: string) => void;
-  onSendMessage: () => void;
+  onSendMessage: (content: string) => void;
   isGenerating: boolean;
   onStopGeneration?: () => void;
   selectedModel: string;
@@ -140,6 +140,8 @@ export default function ChatInput({
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [projectSearchQuery, setProjectSearchQuery] = useState('');
   
+  const [localValue, setLocalValue] = useState('');
+  
   // Local state render pill ngay lập tức - không phụ thuộc prop chain
   const [stagedFileLocal, setStagedFileLocal] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -150,6 +152,11 @@ export default function ChatInput({
   useEffect(() => {
     setStagedFileLocal(stagedFile);
   }, [stagedFile]);
+
+  // Đồng bộ local state text input từ prop cha (ví dụ khi inject prompt)
+  useEffect(() => {
+    setLocalValue(inputValue);
+  }, [inputValue]);
 
   // Quản lý tạo preview Base64 bằng FileReader để vượt qua lỗi CSP
   useEffect(() => {
@@ -214,13 +221,20 @@ export default function ChatInput({
 
   // Wrapper gửi tin: dọn sạch file pill TRƯỚC khi gọi API
   const handleSend = () => {
+    const trimmed = localValue.trim();
+    if (!trimmed) return;
+    
     // Xóa file pill ngay lập tức để UX phản hồi tức thì
     setStagedFileLocal(null);
     if (typeof setStagedFile === 'function') setStagedFile(null);
     const domInput = document.getElementById('global-hidden-file-input') as HTMLInputElement | null;
     if (domInput) domInput.value = '';
-    // Gọi hàm gửi tin nhắn của AIChat
-    onSendMessage();
+    
+    // Gọi hàm gửi tin nhắn của AIChat và truyền nội dung
+    onSendMessage(trimmed);
+    
+    // Reset local state input
+    setLocalValue('');
   };
 
   const handleInjectKnowledge = (title: string, content: string) => {
@@ -378,8 +392,8 @@ export default function ChatInput({
           ref={textareaRef as any}
           minRows={1}
           maxRows={6}
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
+          value={localValue}
+          onChange={(e) => setLocalValue(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder="Hỏi đáp về tri thức dự án hoặc SOP..."
@@ -470,7 +484,7 @@ export default function ChatInput({
             ) : (
               <button
                 type="button"
-                disabled={!inputValue.trim()}
+                disabled={!localValue.trim()}
                 onClick={handleSend}
                 className="rounded-xl bg-markee-primary hover:bg-markee-hover disabled:bg-slate-200 text-white p-2.5 transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0 shadow-sm border-0 flex items-center justify-center"
               >

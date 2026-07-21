@@ -23,7 +23,7 @@ const preprocessMarkdown = (text: string) => {
   return processed;
 };
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+export const MarkdownRenderer = React.memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   const processedContent = preprocessMarkdown(content);
   return (
     <div className="markdown-body wrap-break-word prose prose-sm max-w-none dark:prose-invert">
@@ -94,7 +94,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
