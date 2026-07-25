@@ -1,9 +1,13 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Edit, Trash2, ArrowLeftRight, ChevronDown, ChevronRight, Upload } from 'lucide-react';
+import { Edit, Trash2, ChevronDown, ChevronRight, Upload, MoreVertical, Share2 } from 'lucide-react';
 import FilePreviewModal from '@/app/components/Shared/FilePreviewModal';
+import { MarkdownRenderer } from '@/app/components/AIChat/MarkdownRenderer';
 import {
   fetchProjectWIPMembers,
   fetchProjectWIPsForUser,
@@ -112,12 +116,22 @@ function parseAttachedFiles(attached_file: any): any[] {
 
 
 interface SummaryItem {
+  id?: string;
+  projectId?: number;
+  featureId?: string;
   title: string;
-  insights: string[];
-  contributors: string;
-  totalTokens: number;
-  model: string;
+  feature_name?: string;
+  content?: string;
+  markdown?: string;
+  objective?: string;
+  decisions?: string[];
+  next_steps?: string[];
+  insights?: string[];
+  contributors?: string;
+  totalTokens?: number;
+  model?: string;
   timestamp?: string;
+  files?: any[];
 }
 
 function PromptText({ text }: { text: string }) {
@@ -187,6 +201,7 @@ export default function ProjectDetailContent({
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
   const [editFeatureName, setEditFeatureName] = useState('');
+  const [editMoveProjectId, setEditMoveProjectId] = useState<number | ''>('');
   const [isEditingWIP, setIsEditingWIP] = useState(false);
   const [editAttachedFiles, setEditAttachedFiles] = useState<any[]>([]);
   const [removedFiles, setRemovedFiles] = useState<any[]>([]);
@@ -195,8 +210,16 @@ export default function ProjectDetailContent({
   const [selectedFeature, setSelectedFeature] = useState<string>('');
   const [selectedWipFileIdx, setSelectedWipFileIdx] = useState<{ [logId: number]: number }>({});
   const [isOpenMembers, setIsOpenMembers] = useState(false);
-  const [isOpenFeatures, setIsOpenFeatures] = useState(false);
+  const [isOpenFeatures, setIsOpenFeatures] = useState(true);
   const [uploadingLogId, setUploadingLogId] = useState<number | null>(null);
+
+  // Feature menu & Knowledge Hub merge states
+  const [openFeatureMenu, setOpenFeatureMenu] = useState<string | null>(null);
+  const [featureMenuPos, setFeatureMenuPos] = useState<{ f: string; top: number; left: number } | null>(null);
+  const [featureToMerge, setFeatureToMerge] = useState<string | null>(null);
+  const [selectedMergeLogIds, setSelectedMergeLogIds] = useState<number[]>([]);
+  const [isMergingKnowledge, setIsMergingKnowledge] = useState(false);
+  const [editingSummaryItem, setEditingSummaryItem] = useState<SummaryItem | null>(null);
 
   const [activeMoveWIP, setActiveMoveWIP] = useState<AISession | null>(null);
   const [newProjectId, setNewProjectId] = useState<number | ''>('');
@@ -205,6 +228,9 @@ export default function ProjectDetailContent({
 
   const [activeDeleteWIP, setActiveDeleteWIP] = useState<AISession | null>(null);
   const [isDeletingWIP, setIsDeletingWIP] = useState(false);
+
+  const [activeDeleteSummaryItem, setActiveDeleteSummaryItem] = useState<SummaryItem | null>(null);
+  const [isDeletingSummaryItem, setIsDeletingSummaryItem] = useState(false);
 
   const [deletingIds, setDeletingIds] = useState<number[]>([]);
 
@@ -223,6 +249,55 @@ export default function ProjectDetailContent({
       }, duration);
     }
   }
+
+  const searchParams = useSearchParams();
+
+  // URL Deep Linking for feature filter and target WIP scroll
+  useEffect(() => {
+    if (!searchParams) return;
+    const featureParam = searchParams.get('feature');
+    if (featureParam) {
+      setSelectedFeature(featureParam);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!searchParams || !project?.id) return;
+    const wipParam = searchParams.get('wip');
+    if (wipParam) {
+      async function locateWipAuthor() {
+        try {
+          const { data } = await supabase
+            .from('skill_library')
+            .select('author_id')
+            .eq('id', Number(wipParam))
+            .single();
+          if (data?.author_id) {
+            setActiveMemberEmail(data.author_id);
+            loadUserLogs(project.id, data.author_id, true);
+          }
+        } catch (e) {
+          console.error('Error locating WIP author:', e);
+        }
+      }
+      locateWipAuthor();
+    }
+  }, [searchParams, project?.id]);
+
+  useEffect(() => {
+    if (!searchParams) return;
+    const wipParam = searchParams.get('wip');
+    if (wipParam && logs.length > 0) {
+      const timer = setTimeout(() => {
+        const el = document.getElementById(`wip-log-${wipParam}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.add('ring-2', 'ring-markee-primary', 'bg-red-50/20');
+        }
+      }, 400);
+      return () => clearTimeout(timer);
+    }
+  }, [logs, searchParams]);
 
   // Load members
   useEffect(() => {
@@ -398,6 +473,171 @@ export default function ProjectDetailContent({
     }
   }
 
+  async function handleConfirmMergeKnowledge() {
+    if (!featureToMerge || selectedMergeLogIds.length === 0) return;
+    setIsMergingKnowledge(true);
+    try {
+      const selectedLogs = logs.filter(l => selectedMergeLogIds.includes(l.id));
+      const logTexts = selectedLogs.map(l => `### Tiêu đề: ${l.title || 'Nhật ký'}\n\n${l.prompt_content || ''}`);
+
+      const allAttachedFiles: any[] = [];
+      selectedLogs.forEach(l => {
+        const files = parseAttachedFiles(l.attached_file);
+        allAttachedFiles.push(...files);
+      });
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/summarize-project', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
+        },
+        body: JSON.stringify({
+          projectId: project.id,
+          featureName: featureToMerge,
+          wipLogsContent: logTexts
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || 'Lỗi từ AI API');
+      }
+
+      const generatedMarkdown = data.markdown || data.content || '';
+      const generatedTitle = data.title || `Tri thức tính năng: ${featureToMerge}`;
+
+      const newSummaryObj: SummaryItem = {
+        id: `summary_${Date.now()}`,
+        projectId: project.id,
+        featureId: featureToMerge,
+        feature_name: featureToMerge,
+        title: generatedTitle,
+        content: generatedMarkdown,
+        files: allAttachedFiles,
+        contributors: profile?.email || 'Hệ thống',
+        timestamp: new Date().toISOString()
+      };
+
+      // Set up Edit Modal prefilled for review
+      setEditingSummaryItem(newSummaryObj);
+      setEditTitle(generatedTitle);
+      setEditContent(generatedMarkdown);
+      setEditFeatureName(featureToMerge);
+      setEditMoveProjectId(project.id);
+      setEditAttachedFiles(allAttachedFiles);
+
+      setFeatureToMerge(null);
+      showToast('AI đã tổng hợp xong! Vui lòng xem lại & lưu.', 'success');
+    } catch (err: any) {
+      console.error('Error merging knowledge:', err);
+      showToast(`Lỗi tổng hợp tri thức: ${err.message || err}`, 'error');
+    } finally {
+      setIsMergingKnowledge(false);
+    }
+  }
+
+  async function handleSaveEditedSummary() {
+    if (!editTitle.trim() || !editContent.trim()) return;
+    setIsEditingWIP(true);
+    try {
+      const targetProjId = editMoveProjectId || project.id;
+      let currentSummaries: SummaryItem[] = [];
+
+      let targetProjectObj = project;
+      if (targetProjId !== project.id) {
+        const found = otherProjects.find(p => p.id === targetProjId);
+        if (found) targetProjectObj = found;
+      }
+
+      if (targetProjectObj.master_summary) {
+        try {
+          const parsed = JSON.parse(targetProjectObj.master_summary);
+          if (Array.isArray(parsed)) currentSummaries = parsed;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      const updatedItem: SummaryItem = {
+        id: editingSummaryItem?.id || `summary_${Date.now()}`,
+        projectId: targetProjId,
+        featureId: editFeatureName,
+        feature_name: editFeatureName,
+        title: editTitle.trim(),
+        content: editContent.trim(),
+        insights: editContent.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.replace(/^-\s*/, '')),
+        files: editAttachedFiles,
+        contributors: editingSummaryItem?.contributors || profile?.email || 'Hệ thống',
+        totalTokens: editingSummaryItem?.totalTokens || 0,
+        model: editingSummaryItem?.model || 'Gemini 3.5 Flash',
+        timestamp: editingSummaryItem?.timestamp || new Date().toISOString()
+      };
+
+      let newSummaries: SummaryItem[] = [];
+      if (editingSummaryItem?.id) {
+        newSummaries = [updatedItem, ...currentSummaries.filter(s => s.id !== editingSummaryItem.id)];
+      } else {
+        newSummaries = [updatedItem, ...currentSummaries.filter(s => s.feature_name !== editFeatureName)];
+      }
+
+      const serialized = JSON.stringify(newSummaries);
+      await updateProjectSummary(targetProjId, serialized);
+
+      if (targetProjId === project.id) {
+        const updatedProj = { ...project, master_summary: serialized };
+        setProject(updatedProj);
+        if (onProjectUpdated) onProjectUpdated(updatedProj);
+      }
+
+      showToast('Đã lưu bản Tri thức Tổng hợp!', 'success');
+      setEditingSummaryItem(null);
+      setActiveEditWIP(null);
+      setProjectTab('knowledge_hub');
+    } catch (err) {
+      console.error('Error saving summary edit:', err);
+      showToast('Lỗi khi lưu tri thức tổng hợp', 'error');
+    } finally {
+      setIsEditingWIP(false);
+    }
+  }
+
+  function handleDeleteSummaryItem(summaryToDelete: SummaryItem) {
+    setActiveDeleteSummaryItem(summaryToDelete);
+  }
+
+  async function confirmDeleteSummaryItem() {
+    if (!activeDeleteSummaryItem) return;
+    setIsDeletingSummaryItem(true);
+    try {
+      let currentSummaries: SummaryItem[] = [];
+      if (project.master_summary) {
+        try {
+          const parsed = JSON.parse(project.master_summary);
+          if (Array.isArray(parsed)) currentSummaries = parsed;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      const updated = currentSummaries.filter(s => s.id ? s.id !== activeDeleteSummaryItem.id : s.title !== activeDeleteSummaryItem.title);
+      const serialized = JSON.stringify(updated);
+      await updateProjectSummary(project.id, serialized);
+
+      const updatedProj = { ...project, master_summary: serialized };
+      setProject(updatedProj);
+      if (onProjectUpdated) onProjectUpdated(updatedProj);
+      showToast('Đã xóa bản tri thức khỏi Knowledge Hub', 'success');
+      setActiveDeleteSummaryItem(null);
+    } catch (e) {
+      console.error(e);
+      showToast('Lỗi khi xóa bản tri thức', 'error');
+    } finally {
+      setIsDeletingSummaryItem(false);
+    }
+  }
+
   async function handleEditWIP() {
     if (!activeEditWIP) return;
     setIsEditingWIP(true);
@@ -426,21 +666,27 @@ export default function ProjectDetailContent({
         throw new Error(errData.error || 'Lỗi khi sửa bản nháp');
       }
 
-      showToast('Cập nhật bản nháp thành công!', 'success');
+      // If user selected to move to another project inside Edit Modal
+      if (editMoveProjectId && Number(editMoveProjectId) !== Number(project.id)) {
+        await supabase.from('skill_library').update({ project_id: Number(editMoveProjectId) }).eq('id', activeEditWIP.id);
+        setLogs(prev => prev.filter(l => l.id !== activeEditWIP.id));
+        showToast('Cập nhật & chuyển dự án thành công!', 'success');
+      } else {
+        showToast('Cập nhật bản nháp thành công!', 'success');
+        setLogs(prev => prev.map(l => l.id === activeEditWIP.id ? {
+          ...l,
+          title: editTitle,
+          prompt_content: editContent,
+          feature_name: editFeatureName,
+          attached_file: editAttachedFiles
+        } : l));
+      }
 
-      setLogs(prev => prev.map(l => l.id === activeEditWIP.id ? {
-        ...l,
-        title: editTitle,
-        prompt_content: editContent,
-        feature_name: editFeatureName,
-        attached_file: editAttachedFiles
-      } : l));
-
-      // Load lại các tính năng (features) của dự án để cập nhật Autocomplete
       loadProjectFeatures();
-
       setActiveEditWIP(null);
     } catch (err: any) {
+      console.error('Error editing WIP:', err);
+      showToast(err.message || 'Lỗi khi sửa bản nháp', 'error');
       console.error('Error editing WIP:', err);
       showToast(err.message || 'Lỗi khi sửa bản nháp', 'error');
     } finally {
@@ -594,7 +840,7 @@ export default function ProjectDetailContent({
   }, [project.created_by, profile, isReadOnly]);
 
   return (
-    <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-5xl w-full h-[80vh] max-h-[85vh] overflow-hidden flex flex-col">
+    <div className="bg-white border border-markee-border rounded-xl shadow-2xl w-[90vw] max-w-5xl h-[82vh] overflow-hidden flex flex-col">
       {/* Toast Notification */}
       {toast && (
         <div className={`fixed top-4 right-4 z-100 flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg border text-sm font-semibold transition-all duration-300 ${toast.type === 'loading'
@@ -617,19 +863,6 @@ export default function ProjectDetailContent({
           <p className="text-xs text-markee-muted mt-0.5">Timeline ghi nhận các phiên làm việc và tri thức của dự án.</p>
         </div>
         <div className="flex items-center gap-3">
-          {!isReadOnly && isCreatorOrAdmin && (
-            <button
-              type="button"
-              onClick={handleSummarizeProject}
-              disabled={members.length === 0}
-              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors cursor-pointer ${members.length === 0
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-60'
-                  : 'bg-markee-primary hover:bg-markee-hover text-white'
-                }`}
-            >
-              Tổng hợp Tri thức Dự án
-            </button>
-          )}
           {onClose && (
             <button
               type="button"
@@ -669,7 +902,9 @@ export default function ProjectDetailContent({
                 if (!project?.master_summary) return 0;
                 try {
                   const parsed = JSON.parse(project.master_summary);
-                  return Array.isArray(parsed) ? parsed.length : 0;
+                  if (!Array.isArray(parsed)) return 0;
+                  if (!selectedFeature) return parsed.length;
+                  return parsed.filter(s => (s.feature_name || '').trim().toLowerCase() === selectedFeature.trim().toLowerCase()).length;
                 } catch {
                   return 0;
                 }
@@ -679,195 +914,352 @@ export default function ProjectDetailContent({
         </div>
 
         {/* Tab Content Area */}
-        <div className="flex-1 overflow-hidden flex flex-col">
-          {projectTab === 'knowledge_hub' ? (
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* Knowledge Hub summaries cards */}
-              {(() => {
-                let summaries: SummaryItem[] = [];
-                if (project?.master_summary) {
-                  try {
-                    const parsed = JSON.parse(project.master_summary) as SummaryItem[];
-                    if (Array.isArray(parsed)) {
-                      summaries = parsed.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-                    }
-                  } catch (e) {
-                    console.error("Error parsing master_summary:", e);
-                  }
-                }
+        <div className="flex-1 overflow-hidden flex flex-col md:flex-row p-6 gap-6">
+          {/* Left Sidebar: Features Accordion (Block 1) & Active Members Accordion (Block 2) */}
+          <div className="w-full md:w-1/4 md:min-w-56 border-r border-markee-border pr-6 flex flex-col shrink-0 overflow-y-auto space-y-4">
+            
+            {/* Block 1: TÍNH NĂNG Accordion (POSITIONED FIRST!) */}
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col">
+              <button
+                type="button"
+                onClick={() => setIsOpenFeatures(!isOpenFeatures)}
+                className="flex items-center justify-between w-full text-xs font-bold text-markee-muted uppercase tracking-wider cursor-pointer border-0 bg-transparent py-1"
+              >
+                <span>🎯 Tính năng ({features.length})</span>
+                {isOpenFeatures ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-500" />}
+              </button>
 
-                if (summaries.length === 0) {
+              {isOpenFeatures && (
+                <div className="mt-3 flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFeature('')}
+                    className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold text-left transition-all border shrink-0 ${
+                      selectedFeature === ''
+                        ? 'bg-markee-primary/10 border-markee-primary/20 text-markee-primary font-bold'
+                        : 'hover:bg-slate-100 border-transparent text-markee-text bg-white'
+                    } w-full`}
+                  >
+                    <span>Tất cả tính năng</span>
+                    {selectedFeature === '' && <span className="text-[10px] text-markee-primary font-bold">✓</span>}
+                  </button>
+
+                  {features.map((f) => {
+                    const isActive = selectedFeature === f;
+                    const isMenuOpen = openFeatureMenu === f;
+                    return (
+                      <div key={f} className="relative flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedFeature(prev => prev === f ? '' : f)}
+                          className={`flex-1 flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold text-left transition-all border min-w-0 ${
+                            isActive
+                              ? 'bg-markee-primary/10 border-markee-primary/20 text-markee-primary font-bold'
+                              : 'hover:bg-slate-100 border-transparent text-markee-text bg-white'
+                          }`}
+                        >
+                          <span className="truncate">{f}</span>
+                          {isActive && <span className="text-[10px] text-markee-primary font-bold shrink-0 ml-1">✓</span>}
+                        </button>
+
+                        <button
+                          type="button"
+                          title="Tùy chọn tính năng"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (openFeatureMenu === f) {
+                              setOpenFeatureMenu(null);
+                              setFeatureMenuPos(null);
+                            } else {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const dropdownWidth = 224; // w-56
+                              const dropdownHeight = 90;
+                              const margin = 12;
+
+                              let left = rect.right + 8;
+                              let top = rect.top;
+
+                              if (left + dropdownWidth > window.innerWidth - margin) {
+                                left = rect.left - dropdownWidth - 8;
+                              }
+                              if (left < margin) {
+                                left = Math.max(margin, window.innerWidth - dropdownWidth - margin);
+                              }
+                              if (top + dropdownHeight > window.innerHeight - margin) {
+                                top = Math.max(margin, window.innerHeight - dropdownHeight - margin);
+                              }
+
+                              setOpenFeatureMenu(f);
+                              setFeatureMenuPos({ f, top, left });
+                            }
+                          }}
+                          className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors bg-white cursor-pointer shrink-0"
+                        >
+                          <MoreVertical className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Feature Dropdown Backdrop Overlay */}
+            {openFeatureMenu && typeof document !== 'undefined' && createPortal(
+              <div
+                className="fixed inset-0 z-99 bg-transparent"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenFeatureMenu(null);
+                  setFeatureMenuPos(null);
+                }}
+              />,
+              document.body
+            )}
+
+            {/* Feature Dropdown Menu Portal */}
+            {openFeatureMenu && featureMenuPos && typeof document !== 'undefined' && createPortal(
+              <div
+                className="fixed z-100 bg-white border border-slate-200 rounded-xl shadow-xl py-1 w-56 animate-in fade-in duration-150"
+                style={{
+                  top: `${featureMenuPos.top}px`,
+                  left: `${featureMenuPos.left}px`,
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const f = openFeatureMenu;
+                    setOpenFeatureMenu(null);
+                    setFeatureMenuPos(null);
+                    const url = `${window.location.origin}/projects?projectId=${project.id}&feature=${encodeURIComponent(f)}`;
+                    navigator.clipboard?.writeText(url);
+                    showToast('Đã sao chép link tính năng!', 'success');
+                  }}
+                  className="w-full px-3 py-2 text-xs text-left font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 transition-colors cursor-pointer border-0"
+                >
+                  <Share2 className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Chia sẻ link tính năng</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const f = openFeatureMenu;
+                    setOpenFeatureMenu(null);
+                    setFeatureMenuPos(null);
+                    const featureLogs = logs.filter(l => (l.feature_name || l.team_track || '').trim().toLowerCase() === f.trim().toLowerCase());
+                    setSelectedMergeLogIds(featureLogs.map(l => l.id));
+                    setFeatureToMerge(f);
+                  }}
+                  className="w-full px-3 py-2 text-xs text-left font-semibold text-markee-primary hover:bg-red-50 flex items-center gap-2 transition-colors cursor-pointer border-0"
+                >
+                  <span>🧠</span>
+                  <span>Gộp toàn bộ log vào Knowledge Hub</span>
+                </button>
+              </div>,
+              document.body
+            )}
+
+            {/* Block 2: THÀNH VIÊN HOẠT ĐỘNG Accordion (HIDDEN WHEN ON KNOWLEDGE HUB TAB) */}
+            {projectTab !== 'knowledge_hub' && (
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col">
+                <button
+                  type="button"
+                  onClick={() => setIsOpenMembers(!isOpenMembers)}
+                  className="flex items-center justify-between w-full text-xs font-bold text-markee-muted uppercase tracking-wider cursor-pointer border-0 bg-transparent py-1"
+                >
+                  <span>Thành viên hoạt động ({members.length})</span>
+                  {isOpenMembers ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-500" />}
+                </button>
+
+                {isOpenMembers && (
+                  <div className="mt-3">
+                    {membersLoading ? (
+                      <div className="text-xs text-markee-muted py-2 animate-pulse">Đang tải...</div>
+                    ) : members.length === 0 ? (
+                      <div className="text-xs text-markee-muted py-2">Không có thành viên nào.</div>
+                    ) : (
+                      <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
+                        {members.map((m) => {
+                          const isActive = activeMemberEmail === m.email;
+                          const isCurrentUser = profile && m.email === profile.email;
+                          return (
+                            <button
+                              key={m.email}
+                              type="button"
+                              onClick={() => handleSelectMember(m.email)}
+                              className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all border shrink-0 ${
+                                isActive
+                                  ? 'bg-markee-primary/10 border-markee-primary/20 text-markee-primary font-bold'
+                                  : 'hover:bg-slate-100 border-transparent text-markee-text bg-white'
+                              } w-full`}
+                            >
+                              <div
+                                className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-[10px] text-white shrink-0 select-none shadow-3xs"
+                                style={{ backgroundColor: m.avatarColor || '#E3000F' }}
+                              >
+                                {getInitials(m.name)}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold truncate leading-tight flex items-center">
+                                  <span>{m.name}</span>
+                                  {isCurrentUser && (
+                                    <span className="text-[9px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded-full ml-1.5 font-normal shrink-0">
+                                      Bạn
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-markee-muted truncate mt-0.5">@{m.email.split('@')[0]}</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right Main Panel: Timeline OR Knowledge Hub */}
+          <div className="flex-1 min-h-0 overflow-y-auto pl-2 flex flex-col pr-1">
+            {projectTab === 'knowledge_hub' ? (
+              <div className="flex flex-col h-full space-y-6">
+                {/* Knowledge Hub synthesized documents */}
+                {(() => {
+                  let summaries: SummaryItem[] = [];
+                  if (project?.master_summary) {
+                    try {
+                      const parsed = JSON.parse(project.master_summary) as SummaryItem[];
+                      if (Array.isArray(parsed)) {
+                        summaries = parsed.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+                      }
+                    } catch (e) {
+                      console.error("Error parsing master_summary:", e);
+                    }
+                  }
+
+                  if (selectedFeature) {
+                    summaries = summaries.filter(s => (s.feature_name || '').trim().toLowerCase() === selectedFeature.trim().toLowerCase());
+                  }
+
+                  if (summaries.length === 0) {
+                    return (
+                      <div className="flex-1 h-full min-h-[400px] w-full flex flex-col items-center justify-center gap-2 text-slate-400 bg-slate-50 border border-slate-150 rounded-xl">
+                        <span className="text-3xl">🧠</span>
+                        <p className="text-sm font-medium">{selectedFeature ? `Chưa có bản tri thức nào cho tính năng "${selectedFeature}".` : 'Chưa có bản tổng hợp tri thức nào.'}</p>
+                      </div>
+                    );
+                  }
+
                   return (
-                    <div className="text-center py-10 text-sm text-markee-muted">
-                      Chưa có bản tổng hợp tri thức nào.
+                    <div className="space-y-6">
+                      {summaries.map((summary: SummaryItem, idx: number) => (
+                        <div key={idx} className="bg-white border border-gray-200 rounded-xl p-5 shadow-2xs hover:shadow-sm transition-all space-y-4">
+                          <div className="flex items-start justify-between gap-3 border-b border-gray-100 pb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-base">🧠</span>
+                                <h4 className="font-bold text-markee-text text-base">
+                                  {summary.title}
+                                </h4>
+                              </div>
+                              {summary.feature_name && (
+                                <span className="mt-1.5 inline-block text-[10px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full font-bold border border-purple-100">
+                                  🎯 {summary.feature_name}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-[11px] font-semibold text-markee-primary bg-markee-primary/10 px-2 py-0.5 rounded-full border border-markee-primary/20 shrink-0">
+                                @{((summary.contributors || profile?.email || 'System').includes('@'))
+                                  ? (summary.contributors || profile?.email || 'System').split('@')[0]
+                                  : (summary.contributors || profile?.email || 'System')}
+                              </span>
+                              <span className="text-[10px] text-markee-muted bg-gray-50 border border-gray-150 px-2 py-0.5 rounded-sm font-semibold shrink-0">
+                                {getRelativeTime(summary.timestamp || '')}
+                              </span>
+                              {!isReadOnly && (
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    title="Sửa bản tri thức"
+                                    onClick={() => {
+                                      setEditingSummaryItem(summary);
+                                      setEditTitle(summary.title);
+                                      setEditContent(summary.content || summary.markdown || (summary.insights || []).map(i => `- ${i}`).join('\n'));
+                                      setEditFeatureName(summary.feature_name || '');
+                                      setEditMoveProjectId(summary.projectId || project.id);
+                                      setEditAttachedFiles(summary.files || []);
+                                    }}
+                                    className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors bg-white cursor-pointer"
+                                  >
+                                    <Edit className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Xóa bản tri thức"
+                                    onClick={() => handleDeleteSummaryItem(summary)}
+                                    className="p-1.5 rounded-lg border border-red-200 hover:bg-red-50 text-red-600 transition-colors bg-white cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Markdown Content */}
+                          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 max-h-[40vh] overflow-y-auto">
+                            <MarkdownRenderer content={summary.content || summary.markdown || (summary.insights || []).map((i: string) => `- ${i}`).join('\n')} />
+                          </div>
+
+                          {/* Tài liệu đính kèm */}
+                          {summary.files && summary.files.length > 0 && (
+                            <div>
+                              <h5 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                                <span>📎</span> Tài liệu đính kèm ({summary.files.length})
+                              </h5>
+                              <div className="flex flex-wrap gap-2">
+                                {summary.files.map((file: any, fIdx: number) => {
+                                  const fName = file.name || file.file_name || `File ${fIdx + 1}`;
+                                  const sPath = file.storage_path || '';
+                                  const sourceUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${sPath}`;
+                                  return (
+                                    <div key={fIdx} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs">
+                                      <span className="truncate max-w-37.5 font-medium text-slate-700">{fName}</span>
+                                      <a href={`${sourceUrl}?download=${fName}`} download={fName} target="_blank" rel="noopener noreferrer" className="text-markee-primary font-bold hover:underline text-[10px]">
+                                        Tải về
+                                      </a>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                   );
-                }
-
-                return (
-                  <div className="space-y-4">
-                    {summaries.map((summary: SummaryItem, idx: number) => (
-                      <div key={idx} className="bg-white border border-gray-200 rounded-xl p-5 shadow-2xs hover:shadow-sm transition-all space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <h4 className="font-bold text-markee-text text-sm md:text-base">
-                            {summary.title}
-                          </h4>
-                          <span className="text-[10px] text-markee-muted bg-gray-50 border border-gray-150 px-2 py-0.5 rounded-sm font-semibold shrink-0">
-                            {getRelativeTime(summary.timestamp || '')}
-                          </span>
-                        </div>
-
-                        <ul className="list-disc pl-5 text-xs text-markee-text space-y-1.5">
-                          {summary.insights && summary.insights.map((insight: string, i: number) => (
-                            <li key={i} className="leading-relaxed">{insight}</li>
-                          ))}
-                        </ul>
-
-                        <div className="pt-3 border-t border-gray-100 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-markee-muted">
-                          <div className="flex items-center gap-1">
-                            <span className="font-bold text-markee-text">Nguồn:</span>
-                            <span>{summary.contributors}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <span className="font-bold text-markee-text">Công cụ:</span>
-                            <span>{summary.model}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <span className="font-bold text-markee-text">Số Token:</span>
-                            <span>{summary.totalTokens?.toLocaleString()} tokens</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
-          ) : (
-            <div className="flex-1 overflow-hidden p-6 flex flex-col md:flex-row gap-6">
-              {/* Left Sidebar: Active Members & Features Accordions */}
-              <div className="w-full md:w-1/4 md:min-w-56 border-r border-markee-border pr-6 flex flex-col shrink-0 overflow-y-auto space-y-4">
-                {/* Block 1: Thành viên hoạt động Accordion */}
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col">
-                  <button
-                    type="button"
-                    onClick={() => setIsOpenMembers(!isOpenMembers)}
-                    className="flex items-center justify-between w-full text-xs font-bold text-markee-muted uppercase tracking-wider cursor-pointer border-0 bg-transparent py-1"
-                  >
-                    <span>Thành viên hoạt động ({members.length})</span>
-                    {isOpenMembers ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-500" />}
-                  </button>
-
-                  {isOpenMembers && (
-                    <div className="mt-3">
-                      {membersLoading ? (
-                        <div className="text-xs text-markee-muted py-2 animate-pulse">Đang tải...</div>
-                      ) : members.length === 0 ? (
-                        <div className="text-xs text-markee-muted py-2">Không có thành viên nào.</div>
-                      ) : (
-                        <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
-                          {members.map((m) => {
-                            const isActive = activeMemberEmail === m.email;
-                            const isCurrentUser = profile && m.email === profile.email;
-                            return (
-                              <button
-                                key={m.email}
-                                type="button"
-                                onClick={() => handleSelectMember(m.email)}
-                                className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all border shrink-0 ${
-                                  isActive
-                                    ? 'bg-markee-primary/10 border-markee-primary/20 text-markee-primary font-bold'
-                                    : 'hover:bg-slate-100 border-transparent text-markee-text bg-white'
-                                } w-full`}
-                              >
-                                <div
-                                  className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-[10px] text-white shrink-0 select-none shadow-3xs"
-                                  style={{ backgroundColor: m.avatarColor || '#E3000F' }}
-                                >
-                                  {getInitials(m.name)}
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="text-xs font-semibold truncate leading-tight flex items-center">
-                                    <span>{m.name}</span>
-                                    {isCurrentUser && (
-                                      <span className="text-[9px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded-full ml-1.5 font-normal shrink-0">
-                                        Bạn
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-[10px] text-markee-muted truncate mt-0.5">@{m.email.split('@')[0]}</div>
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Block 2: Tính năng Accordion */}
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col">
-                  <button
-                    type="button"
-                    onClick={() => setIsOpenFeatures(!isOpenFeatures)}
-                    className="flex items-center justify-between w-full text-xs font-bold text-markee-muted uppercase tracking-wider cursor-pointer border-0 bg-transparent py-1"
-                  >
-                    <span>🎯 Tính năng ({features.length})</span>
-                    {isOpenFeatures ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-500" />}
-                  </button>
-
-                  {isOpenFeatures && (
-                    <div className="mt-3 flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedFeature('')}
-                        className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold text-left transition-all border shrink-0 ${
-                          selectedFeature === ''
-                            ? 'bg-markee-primary/10 border-markee-primary/20 text-markee-primary font-bold'
-                            : 'hover:bg-slate-100 border-transparent text-markee-text bg-white'
-                        } w-full`}
-                      >
-                        <span>Tất cả tính năng</span>
-                        {selectedFeature === '' && <span className="text-[10px] text-markee-primary font-bold">✓</span>}
-                      </button>
-
-                      {features.map((f) => {
-                        const isActive = selectedFeature === f;
-                        return (
-                          <button
-                            key={f}
-                            type="button"
-                            onClick={() => setSelectedFeature(prev => prev === f ? '' : f)}
-                            className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold text-left transition-all border shrink-0 ${
-                              isActive
-                                ? 'bg-markee-primary/10 border-markee-primary/20 text-markee-primary font-bold'
-                                : 'hover:bg-slate-100 border-transparent text-markee-text bg-white'
-                            } w-full`}
-                          >
-                            <span className="truncate">{f}</span>
-                            {isActive && <span className="text-[10px] text-markee-primary font-bold shrink-0">✓</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                })()}
               </div>
-
-              {/* Right Timeline Panel */}
-              <div className="flex-1 overflow-y-auto pl-2 flex flex-col pr-1 h-full">
-
-                {logsLoading && logs.length === 0 ? (
-                  <div className="text-center py-10 text-sm text-markee-sub">Đang tải nhật ký hoạt động...</div>
-                ) : logs.length === 0 ? (
-                  <div className="text-center py-10 text-sm text-markee-sub">
-                    Không có log hoạt động nào.
-                  </div>
-                ) : filteredLogs.length === 0 ? (
-                  <div className="text-center py-10 text-sm text-markee-sub">
-                    Không tìm thấy bản nháp nào khớp với tính năng này.
-                  </div>
+            ) : logsLoading && logs.length === 0 ? (
+                  <div className="flex-1 h-full min-h-[500px] w-full flex items-center justify-center text-sm text-markee-sub bg-gray-50 rounded-xl">
+                  Đang tải nhật ký hoạt động...
+                </div>
+              ) : logs.length === 0 ? (
+                <div className="flex-1 h-full min-h-[500px] w-full flex flex-col items-center justify-center text-gray-500 bg-gray-50 rounded-xl gap-2">
+                  <span className="text-2xl">📭</span>
+                  <p className="text-sm font-medium">Không có log hoạt động nào.</p>
+                </div>
+              ) : filteredLogs.length === 0 ? (
+                <div className="flex-1 h-full min-h-[500px] w-full flex flex-col items-center justify-center text-gray-500 bg-gray-50 rounded-xl gap-2">
+                  <span className="text-2xl">🔍</span>
+                  <p className="text-sm font-medium">Không tìm thấy bản nháp nào khớp với tính năng này.</p>
+                </div>
                 ) : (
                   <div className="space-y-6">
                     <div className="relative border-l-2 border-markee-border pl-6 ml-3 space-y-8">
@@ -906,14 +1298,15 @@ export default function ProjectDetailContent({
                         return (
                           <div
                             key={log.id}
-                            className={`relative transition-all duration-500 ease-out ${isDeleting
+                            id={`wip-log-${log.id}`}
+                            className={`relative transition-all duration-500 ease-out p-2 rounded-xl ${isDeleting
                                 ? 'opacity-0 scale-95 max-h-0 py-0 my-0 overflow-hidden pl-0'
                                 : ''
                               }`}
                           >
                             {/* Timeline Bullet Node */}
                             <div
-                              className="absolute -left-7.75 top-1 w-4 h-4 rounded-full border-2 border-white shadow-xs bg-markee-primary"
+                              className="absolute -left-7.75 top-3 w-4 h-4 rounded-full border-2 border-white shadow-xs bg-markee-primary"
                               title={log.author_id}
                             />
 
@@ -952,27 +1345,27 @@ export default function ProjectDetailContent({
 
                                     {canManageWIP && (
                                       <div className="flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
-                                        <label
-                                           title="Thêm file đính kèm"
-                                           className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-emerald-600 cursor-pointer bg-white"
-                                         >
-                                           <Upload className="h-3 w-3" />
-                                           <input
-                                             type="file"
-                                             multiple
-                                             className="hidden"
-                                             disabled={uploadingLogId === log.id}
-                                             onChange={(e) => handleQuickUploadFiles(e, log)}
-                                           />
-                                         </label>
                                         <button
                                           type="button"
-                                          title="Sửa"
+                                          title="Chia sẻ bản nháp"
+                                          onClick={() => {
+                                            const url = `${window.location.origin}/projects?projectId=${project.id}&wip=${log.id}`;
+                                            navigator.clipboard?.writeText(url);
+                                            showToast('Đã sao chép link bản nháp!', 'success');
+                                          }}
+                                          className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-slate-800 cursor-pointer bg-white"
+                                        >
+                                          <Share2 className="h-3 w-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          title="Sửa bản nháp"
                                           onClick={() => {
                                             setActiveEditWIP(log);
                                             setEditTitle(log.title || '');
                                             setEditContent(log.prompt_content || '');
                                             setEditFeatureName(log.feature_name || '');
+                                            setEditMoveProjectId(log.project_id || '');
                                             const files = parseAttachedFiles(log.attached_file);
                                             setEditAttachedFiles(files);
                                             setRemovedFiles([]);
@@ -983,18 +1376,7 @@ export default function ProjectDetailContent({
                                         </button>
                                         <button
                                           type="button"
-                                          title="Chuyển Dự án"
-                                          onClick={() => {
-                                            setActiveMoveWIP(log);
-                                            setNewProjectId(log.project_id ? log.project_id : '');
-                                          }}
-                                          className="p-1 rounded hover:bg-slate-100 border border-slate-200 transition-colors flex items-center justify-center text-gray-500 hover:text-markee-primary cursor-pointer bg-white"
-                                        >
-                                          <ArrowLeftRight className="h-3 w-3" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          title="Xóa"
+                                          title="Xóa bản nháp"
                                           onClick={() => {
                                             setActiveDeleteWIP(log);
                                           }}
@@ -1026,7 +1408,7 @@ export default function ProjectDetailContent({
                                     const sourceUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${sPath}`;
 
                                     return (
-                                      <div className="mt-3 bg-slate-50 border border-slate-100 rounded-lg p-2.5 flex flex-col gap-2.5 text-xs bg-white">
+                                      <div className="mt-3 bg-slate-50 border border-slate-100 rounded-lg p-2.5 flex flex-col gap-2.5 text-xs">
                                         {/* Tiêu đề & Chọn file (nếu có từ 2 file trở lên) */}
                                         <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-1.5 shrink-0">
                                           <div className="flex items-center gap-1">
@@ -1043,7 +1425,7 @@ export default function ProjectDetailContent({
                                                 const val = Number(e.target.value);
                                                 setSelectedWipFileIdx(prev => ({ ...prev, [log.id]: val }));
                                               }}
-                                              className="text-[10px] font-bold text-markee-primary bg-white border border-slate-200 rounded px-1.5 py-0.5 outline-none cursor-pointer hover:border-markee-primary transition-colors max-w-[150px] truncate"
+                                              className="text-[10px] font-bold text-markee-primary bg-white border border-slate-200 rounded px-1.5 py-0.5 outline-none cursor-pointer hover:border-markee-primary transition-colors max-w-37.5 truncate"
                                             >
                                               {files.map((f: any, fIdx: number) => (
                                                 <option key={fIdx} value={fIdx}>
@@ -1118,11 +1500,9 @@ export default function ProjectDetailContent({
                     </div>
                   </div>
                 )}
-              </div>
             </div>
-          )}
+          </div>
         </div>
-      </div>
 
       {/* Modal Footer */}
       {onClose && (
@@ -1138,14 +1518,16 @@ export default function ProjectDetailContent({
       )}
 
       {/* Modals for editing/moving/deleting WIP inside detail */}
-      {activeEditWIP && (
+      {(activeEditWIP || editingSummaryItem) && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
             <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
-              <h3 className="text-base font-bold text-markee-text">Sửa bản nháp WIP</h3>
+              <h3 className="text-base font-bold text-markee-text">
+                {editingSummaryItem ? 'Sửa bản Tri thức Tổng hợp' : 'Sửa bản nháp WIP'}
+              </h3>
               <button
                 type="button"
-                onClick={() => setActiveEditWIP(null)}
+                onClick={() => { setActiveEditWIP(null); setEditingSummaryItem(null); }}
                 className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold border-0 bg-transparent"
               >
                 ✕
@@ -1155,7 +1537,7 @@ export default function ProjectDetailContent({
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               <div>
                 <label htmlFor="editWipTitleInput" className="block text-xs font-semibold text-markee-text mb-1.5">
-                  Tiêu đề bản nháp
+                  Tiêu đề
                 </label>
                 <input
                   id="editWipTitleInput"
@@ -1185,6 +1567,23 @@ export default function ProjectDetailContent({
                     <option key={idx} value={f} />
                   ))}
                 </datalist>
+              </div>
+
+              <div>
+                <label htmlFor="editWipProjectSelect" className="block text-xs font-semibold text-markee-text mb-1.5">
+                  Dự án (Chuyển dự án nếu cần)
+                </label>
+                <select
+                  id="editWipProjectSelect"
+                  value={editMoveProjectId}
+                  onChange={(e) => setEditMoveProjectId(e.target.value ? Number(e.target.value) : '')}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white text-markee-text focus:outline-none cursor-pointer"
+                >
+                  <option value={project.id}>{project.name} (Hiện tại)</option>
+                  {otherProjects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1228,7 +1627,7 @@ export default function ProjectDetailContent({
 
                 {/* Danh sách file đã đính kèm */}
                 {editAttachedFiles.length > 0 && (
-                  <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
                     {editAttachedFiles.map((file, idx) => {
                       const fName = file.name || file.file_name || 'attachment';
                       const fSize = file.size || file.size_bytes || 0;
@@ -1237,7 +1636,7 @@ export default function ProjectDetailContent({
                          <div key={idx} className="flex items-center justify-between p-2 bg-slate-50 border border-slate-100 rounded-lg text-xs">
                            <div className="flex items-center gap-2 min-w-0">
                              <span className="shrink-0 text-sm">📄</span>
-                             <span className="font-semibold text-slate-700 truncate text-[11px] max-w-[200px]" title={fName}>
+                             <span className="font-semibold text-slate-700 truncate text-[11px] max-w-50" title={fName}>
                                {fName}
                              </span>
                              <span className="text-[9px] text-slate-400 shrink-0 font-medium">
@@ -1263,18 +1662,18 @@ export default function ProjectDetailContent({
             <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
               <button
                 type="button"
-                onClick={() => setActiveEditWIP(null)}
+                onClick={() => { setActiveEditWIP(null); setEditingSummaryItem(null); }}
                 className="px-4 py-2 border border-markee-border bg-white text-markee-muted rounded-lg text-xs font-semibold cursor-pointer"
               >
                 Hủy
               </button>
               <button
                 type="button"
-                onClick={handleEditWIP}
+                onClick={editingSummaryItem ? handleSaveEditedSummary : handleEditWIP}
                 disabled={isEditingWIP || !editTitle.trim() || !editContent.trim()}
                 className="px-4 py-2 bg-markee-primary text-white rounded-lg text-xs font-semibold cursor-pointer"
               >
-                {isEditingWIP ? 'Đang lưu...' : 'Lưu thay đổi'}
+                {isEditingWIP ? 'Đang lưu...' : editingSummaryItem ? 'Lưu vào Knowledge Hub' : 'Lưu thay đổi'}
               </button>
             </div>
           </div>
@@ -1371,6 +1770,42 @@ export default function ProjectDetailContent({
         </div>
       )}
 
+      {activeDeleteSummaryItem && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-red-100 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Xóa bản tri thức</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Hành động này không thể hoàn tác.</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100 font-medium">
+              Bạn có chắc chắn muốn xóa bản tri thức <span className="font-bold text-slate-800">&quot;{activeDeleteSummaryItem.title}&quot;</span> khỏi Knowledge Hub?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActiveDeleteSummaryItem(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer border border-slate-200 bg-white"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingSummaryItem}
+                onClick={confirmDeleteSummaryItem}
+                className="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isDeletingSummaryItem ? 'Đang xóa...' : 'Xóa bản tri thức'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isSummaryModalOpen && (
         <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-3xl w-full h-[75vh] overflow-hidden flex flex-col">
@@ -1411,13 +1846,13 @@ export default function ProjectDetailContent({
                     <div>
                       <h4 className="text-xs font-bold text-markee-muted uppercase tracking-wider mb-2">Insights</h4>
                       <ul className="list-disc pl-5 text-xs text-markee-text space-y-2">
-                        {summaryResult.insights.map((insight, idx) => (
+                        {(summaryResult.insights || []).map((insight, idx) => (
                           <li key={idx}>
                             <textarea
                               rows={2}
                               value={insight}
                               onChange={(e) => {
-                                const newInsights = [...summaryResult.insights];
+                                const newInsights = [...(summaryResult.insights || [])];
                                 newInsights[idx] = e.target.value;
                                 setSummaryResult({ ...summaryResult, insights: newInsights });
                               }}
@@ -1451,6 +1886,109 @@ export default function ProjectDetailContent({
                   Lưu vào Knowledge Hub
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* KNOWLEDGE HUB MERGE MODAL */}
+      {featureToMerge && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="border-b border-markee-border px-6 py-4 bg-red-50/50 flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                  <span>🧠</span> Tổng hợp Tri Thức Dự án
+                </h3>
+                <p className="text-xs text-markee-muted mt-0.5">
+                  Tính năng: <span className="font-bold text-markee-primary">{featureToMerge}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFeatureToMerge(null)}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold border-0 bg-transparent"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Chọn các nhật ký làm việc thuộc tính năng <span className="font-bold text-slate-800">&quot;{featureToMerge}&quot;</span> để gộp thành văn bản tri thức tổng hợp:
+              </p>
+
+              {(() => {
+                const featureLogs = logs.filter(l => (l.feature_name || l.team_track || '').trim().toLowerCase() === featureToMerge.trim().toLowerCase());
+                
+                if (featureLogs.length === 0) {
+                  return (
+                    <div className="text-center py-6 text-xs text-slate-400 bg-slate-50 rounded-lg border border-slate-150">
+                      Không tìm thấy nhật ký làm việc nào cho tính năng này.
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-2.5 max-h-75 overflow-y-auto pr-1">
+                    {featureLogs.map((log) => {
+                      const isChecked = selectedMergeLogIds.includes(log.id);
+                      return (
+                        <label
+                          key={log.id}
+                          className={`flex items-start gap-3 p-3 rounded-lg border text-xs cursor-pointer transition-all ${
+                            isChecked
+                              ? 'bg-red-50/40 border-markee-primary/30 text-slate-800'
+                              : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              if (isChecked) {
+                                setSelectedMergeLogIds(prev => prev.filter(id => id !== log.id));
+                              } else {
+                                setSelectedMergeLogIds(prev => [...prev, log.id]);
+                              }
+                            }}
+                            className="mt-0.5 rounded border-slate-300 text-markee-primary focus:ring-markee-primary shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-xs text-slate-800 truncate">
+                              {log.title || log.prompt_content?.slice(0, 60) || 'Bản nháp không tiêu đề'}
+                            </div>
+                            <div className="flex items-center gap-3 text-[10px] text-slate-400 mt-1">
+                              <span>@{log.author_id?.split('@')[0]}</span>
+                              <span>• {new Date(log.created_at).toLocaleDateString('vi-VN')}</span>
+                              <span>• {log.tokens_used || 0} tokens</span>
+                            </div>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-slate-50 shrink-0">
+              <button
+                type="button"
+                onClick={() => setFeatureToMerge(null)}
+                className="px-4 py-2 border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 rounded-lg text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmMergeKnowledge}
+                disabled={isMergingKnowledge || selectedMergeLogIds.length === 0}
+                className="px-4 py-2 bg-markee-primary text-white hover:bg-red-700 rounded-lg text-xs font-semibold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <span>🧠</span>
+                <span>{isMergingKnowledge ? 'Đang tổng hợp...' : 'Gộp & cập nhật Knowledge Hub'}</span>
+              </button>
             </div>
           </div>
         </div>

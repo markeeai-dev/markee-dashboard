@@ -38,7 +38,8 @@ export async function POST(req: Request) {
   try {
     const { user, supabase } = await authenticateRequest(req);
 
-    const { projectId, model: requestedModel } = await req.json();
+    const body = await req.json();
+    const { projectId, featureName, wipLogsContent, model: requestedModel } = body;
     if (!projectId) {
       return NextResponse.json({ error: "Missing projectId" }, { status: 400 });
     }
@@ -70,63 +71,49 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Bạn không có quyền truy cập dự án này" }, { status: 403 });
     }
 
-    const { data: wipSkills, error: fetchError } = await supabase.from("skill_library").select("title, markdown_content, author_id, session_tokens").eq("project_id", projectId).eq("skill_type", "wip");
+    let combinedContent = "";
+    if (Array.isArray(wipLogsContent) && wipLogsContent.length > 0) {
+      combinedContent = wipLogsContent.join("\n\n---\n\n");
+    } else if (typeof wipLogsContent === "string" && wipLogsContent.trim().length > 0) {
+      combinedContent = wipLogsContent;
+    } else {
+      const { data: wipSkills, error: fetchError } = await supabase.from("skill_library").select("title, markdown_content, author_id, session_tokens").eq("project_id", projectId).eq("skill_type", "wip");
 
-    if (fetchError) {
-      console.error("Error fetching WIP skills:", fetchError);
-      return NextResponse.json({ error: "Lỗi cơ sở dữ liệu khi tải WIP" }, { status: 500 });
-    }
-
-    if (!wipSkills || wipSkills.length === 0) {
-      return NextResponse.json({ error: "Không tìm thấy bản tóm tắt công việc (WIP) nào trong dự án này để tổng hợp." }, { status: 404 });
-    }
-
-    const emails = Array.from(new Set(wipSkills.map((s) => s.author_id).filter(Boolean)));
-    let contributors = "Hệ thống";
-    if (emails.length > 0) {
-      const { data: users } = await supabase.from("users").select("full_name, email").in("email", emails);
-
-      if (users && users.length > 0) {
-        contributors = users.map((u) => u.full_name || u.email.split("@")[0]).join(", ");
-      } else {
-        contributors = emails.map((e) => e.split("@")[0]).join(", ");
+      if (fetchError) {
+        console.error("Error fetching WIP skills:", fetchError);
+        return NextResponse.json({ error: "Lỗi cơ sở dữ liệu khi tải WIP" }, { status: 500 });
       }
+
+      if (!wipSkills || wipSkills.length === 0) {
+        return NextResponse.json({ error: "Không tìm thấy bản tóm tắt công việc (WIP) nào để tổng hợp." }, { status: 404 });
+      }
+
+      combinedContent = wipSkills.map((s) => `### Tiêu đề: ${s.title}\n\n${s.markdown_content || ""}`).join("\n\n---\n\n");
     }
 
-    const totalTokens = wipSkills.reduce((sum, s) => sum + (s.session_tokens || 0), 0);
-    const combinedContent = wipSkills.map((s) => `### Tiêu đề: ${s.title}\n\n${s.markdown_content || ""}`).join("\n\n---\n\n");
+    const systemPrompt = `Bạn là một Chuyên gia Tổng hợp Tri thức Dự án. Đọc các nhật ký làm việc (WIP logs) và tổng hợp thành một tài liệu duy nhất.
+YÊU CẦU:
+1. CHỈ xuất ra Markdown theo đúng định dạng mẫu.
+2. KHÔNG thêm lời chào, giải thích, token, hay metadata.
+3. Gộp thông tin trùng lặp, giữ lại mục tiêu và quyết định.
 
-    const systemPrompt = `Bạn là AI Project Architect.
+ĐỊNH DẠNG MẪU:
 
-Nhiệm vụ:
-Đọc toàn bộ các bản tóm tắt WIP của dự án và hợp nhất chúng thành một Master Summary phản ánh tri thức cốt lõi của dự án.
+**Mục đích:** Đây là bản tri thức duy nhất để dev, product và các team liên quan có thể hiểu nhanh phạm vi, quyết định thiết kế và bước tiếp theo mà không cần đọc lại toàn bộ log chat.
 
-Mục tiêu:
-- Loại bỏ thông tin trùng lặp.
-- Hợp nhất các công việc liên quan thành insight cấp cao hơn.
-- Tập trung vào kiến trúc, quyết định kỹ thuật, luồng nghiệp vụ, thay đổi quan trọng và bài học rút ra.
-- Không liệt kê từng task nhỏ.
-- Không mô tả tiến độ cá nhân.
-- Ưu tiên tri thức có giá trị cho người mới tiếp quản dự án.
+### 1. Mục tiêu sản phẩm
+- [Liệt kê các mục tiêu chính từ logs]
+- [Kết nối ngắn gọn các luồng làm việc]
 
-QUY TẮC:
-1. Chỉ trả về JSON hợp lệ.
-2. Không giải thích ngoài JSON.
-3. Mỗi insight phải là một phát hiện hoặc hiểu biết cấp hệ thống.
-4. Không lặp lại cùng một ý dưới nhiều cách diễn đạt.
-5. Tạo title ngắn gọn phản ánh chủ đề chính của toàn bộ dữ liệu.
+### 2. Quyết định UX/UI đã chốt
+- [Các quyết định về thiết kế, tính năng đã được thống nhất]
+- [Cấu trúc hoặc thay đổi quan trọng]
 
-Định dạng:
-{
-  "title": "Tên tri thức tổng hợp",
-  "insights": [
-    "Insight cấp cao 1",
-    "Insight cấp cao 2",
-    "Insight cấp cao 3"
-  ]
-}`;
+### 3. Việc cần làm tiếp theo (Next Steps)
+- [Các hành động cụ thể cần thực hiện tiếp theo]
+- [Các vấn đề còn tồn đọng cần giải quyết]`;
 
-    const modelName = "google/gemini-3.5-flash";
+    const modelName = requestedModel || "google/gemini-3.5-flash";
     let text = "";
     try {
       const modelInstance = getModelInstance(modelName);
@@ -142,22 +129,13 @@ QUY TẮC:
       return NextResponse.json({ error: `Lỗi gọi API AI (${modelName}): ${aiError.message || aiError}` }, { status: 502 });
     }
 
-    let resultJSON;
-    try {
-      const cleanJsonStr = text.replace(/```json\n?|\n?```/g, "").trim();
-      resultJSON = JSON.parse(cleanJsonStr);
-    } catch (parseError) {
-      console.error("Error parsing AI response:", parseError, text);
-      return NextResponse.json({ error: "Lỗi định dạng phản hồi AI: " + text }, { status: 500 });
-    }
+    const defaultTitle = featureName ? `Tri thức tính năng: ${featureName}` : "Tổng hợp tri thức dự án";
 
     return NextResponse.json({
       success: true,
-      title: resultJSON.title || "Tổng hợp tri thức dự án",
-      insights: resultJSON.insights || [],
-      contributors,
-      totalTokens,
-      model: `Auto-Summary (${modelName})`,
+      title: defaultTitle,
+      markdown: text,
+      content: text,
     });
   } catch (error) {
     if (error instanceof AuthError) {

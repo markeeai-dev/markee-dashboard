@@ -2,14 +2,16 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search } from 'lucide-react';
+import { Search, Edit, Trash2 } from 'lucide-react';
 import {
   fetchCurationStats,
   removeVietnameseTones,
+  updateProjectSummary,
   type Project,
   type UserProfile,
 } from '@/lib/dashboard-supabase';
 import { supabase } from '@/lib/supabase';
+import { MarkdownRenderer } from '@/app/components/AIChat/MarkdownRenderer';
 
 export interface CurationStats {
   rawSessions: number;
@@ -18,12 +20,22 @@ export interface CurationStats {
 }
 
 interface SummaryItem {
+  id?: string;
+  projectId?: number;
+  featureId?: string;
   title: string;
-  insights: string[];
-  contributors: string;
-  totalTokens: number;
-  model: string;
+  feature_name?: string;
+  content?: string;
+  markdown?: string;
+  objective?: string;
+  decisions?: string[];
+  next_steps?: string[];
+  insights?: string[];
+  contributors?: string;
+  totalTokens?: number;
+  model?: string;
   timestamp?: string;
+  files?: any[];
 }
 
 function getRelativeTime(dateString: string): string {
@@ -70,6 +82,91 @@ export default function KnowledgeHubDashboard({
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedHubProject, setSelectedHubProject] = useState<Project | null>(null);
+
+  // Edit & Delete states for Knowledge Hub summaries
+  const [editingSummaryItem, setEditingSummaryItem] = useState<SummaryItem | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editFeatureName, setEditFeatureName] = useState('');
+  const [isEditingSummary, setIsEditingSummary] = useState(false);
+
+  const [activeDeleteSummary, setActiveDeleteSummary] = useState<{ summary: SummaryItem; project: Project } | null>(null);
+  const [isDeletingSummary, setIsDeletingSummary] = useState(false);
+
+  async function handleSaveEditedSummary() {
+    if (!selectedHubProject || !editingSummaryItem || !editTitle.trim() || !editContent.trim()) return;
+    setIsEditingSummary(true);
+    try {
+      let currentSummaries: SummaryItem[] = [];
+      if (selectedHubProject.master_summary) {
+        try {
+          const parsed = JSON.parse(selectedHubProject.master_summary);
+          if (Array.isArray(parsed)) currentSummaries = parsed;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      const updatedItem: SummaryItem = {
+        ...editingSummaryItem,
+        title: editTitle.trim(),
+        content: editContent.trim(),
+        feature_name: editFeatureName,
+        insights: editContent.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.replace(/^-\s*/, '')),
+      };
+
+      const newSummaries = currentSummaries.map(s => s.id === editingSummaryItem.id ? updatedItem : s);
+      const serialized = JSON.stringify(newSummaries);
+      await updateProjectSummary(selectedHubProject.id, serialized);
+
+      const updatedProj = { ...selectedHubProject, master_summary: serialized };
+      setSelectedHubProject(updatedProj);
+      setProjects(prev => prev.map(p => p.id === updatedProj.id ? updatedProj : p));
+
+      setEditingSummaryItem(null);
+    } catch (err) {
+      console.error('Error saving summary edit:', err);
+    } finally {
+      setIsEditingSummary(false);
+    }
+  }
+
+  function handleDeleteSummaryItem(summaryToDelete: SummaryItem) {
+    if (!selectedHubProject) return;
+    setActiveDeleteSummary({ summary: summaryToDelete, project: selectedHubProject });
+  }
+
+  async function confirmDeleteSummary() {
+    if (!activeDeleteSummary) return;
+    setIsDeletingSummary(true);
+    const { summary: summaryToDelete, project: targetProject } = activeDeleteSummary;
+    try {
+      let currentSummaries: SummaryItem[] = [];
+      if (targetProject.master_summary) {
+        try {
+          const parsed = JSON.parse(targetProject.master_summary);
+          if (Array.isArray(parsed)) currentSummaries = parsed;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      const updated = currentSummaries.filter(s => s.id ? s.id !== summaryToDelete.id : s.title !== summaryToDelete.title);
+      const serialized = JSON.stringify(updated);
+      await updateProjectSummary(targetProject.id, serialized);
+
+      const updatedProj = { ...targetProject, master_summary: serialized };
+      setSelectedHubProject(updatedProj);
+      setProjects(prev => prev.map(p => p.id === updatedProj.id ? updatedProj : p));
+      // Decrement global Knowledge Hub counter immediately
+      setStats(prev => ({ ...prev, knowledgeHub: Math.max(0, prev.knowledgeHub - 1) }));
+      setActiveDeleteSummary(null);
+    } catch (e) {
+      console.error('Error deleting summary:', e);
+    } finally {
+      setIsDeletingSummary(false);
+    }
+  }
 
   async function loadData() {
     setLoading(true);
@@ -293,41 +390,94 @@ export default function KnowledgeHubDashboard({
           <div className="space-y-4">
             {summariesInProject.map((summary, idx) => (
               <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-3xs space-y-4 flex flex-col justify-between">
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="font-bold text-markee-text text-sm md:text-base">
-                    {summary.title}
-                  </h3>
-                  <span className="text-[10px] text-markee-muted bg-gray-50 border border-gray-150 px-2 py-0.5 rounded-sm font-semibold shrink-0">
-                    {getRelativeTime(summary.timestamp || selectedHubProject.created_at)}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  <h4 className="text-[10px] font-bold text-markee-muted uppercase tracking-wider">Insight cốt lõi</h4>
-                  <div className="text-xs text-markee-text whitespace-pre-wrap leading-relaxed bg-slate-50 border border-slate-200 rounded-xl p-4 max-h-[30vh] overflow-y-auto font-medium">
-                    {(summary.insights || []).map((insight) => `- ${insight}`).join('\n')}
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🧠</span>
+                      <h3 className="font-bold text-markee-text text-sm md:text-base">
+                        {summary.title}
+                      </h3>
+                    </div>
+                    {summary.feature_name && (
+                      <span className="mt-1.5 inline-block text-[10px] bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full font-bold border border-purple-100">
+                        🎯 {summary.feature_name}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] font-semibold text-markee-primary bg-markee-primary/10 px-2 py-0.5 rounded-full border border-markee-primary/20 shrink-0">
+                      @{((summary.contributors || profile?.email || selectedHubProject.created_by || 'System').includes('@'))
+                        ? (summary.contributors || profile?.email || selectedHubProject.created_by || 'System').split('@')[0]
+                        : (summary.contributors || profile?.email || selectedHubProject.created_by || 'System')}
+                    </span>
+                    <span className="text-[10px] text-markee-muted bg-gray-50 border border-gray-150 px-2 py-0.5 rounded-sm font-semibold shrink-0">
+                      {getRelativeTime(summary.timestamp || selectedHubProject.created_at)}
+                    </span>
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-gray-100 flex flex-wrap items-center gap-x-4 gap-y-2 text-[10px] text-markee-muted justify-between">
-                  <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    <div className="flex items-center gap-1">
-                      <span className="font-bold text-markee-text">Nguồn:</span>
-                      <span>{summary.contributors || 'Hệ thống'}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="font-bold text-markee-text">Công cụ:</span>
-                      <span>{summary.model || 'Gemini 3.5 Flash'}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <span className="font-bold text-markee-text">Token:</span>
-                      <span>{(summary.totalTokens || 0).toLocaleString()} tokens</span>
+                {/* Markdown Renderer Content */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 max-h-[40vh] overflow-y-auto font-medium">
+                  <MarkdownRenderer content={summary.content || summary.markdown || (summary.insights || []).map((insight) => `- ${insight}`).join('\n')} />
+                </div>
+
+                {/* Render Attachments */}
+                {summary.files && summary.files.length > 0 && (
+                  <div className="pt-2">
+                    <h5 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                      <span>📎</span> Tài liệu đính kèm ({summary.files.length})
+                    </h5>
+                    <div className="flex flex-wrap gap-2">
+                      {summary.files.map((file: any, fIdx: number) => {
+                        const fName = file.name || file.file_name || `File ${fIdx + 1}`;
+                        const sPath = file.storage_path || '';
+                        const sourceUrl = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/chat_attachments/${sPath}`;
+                        return (
+                          <div key={fIdx} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs">
+                            <span className="truncate max-w-[150px] font-medium text-slate-700">{fName}</span>
+                            <a href={`${sourceUrl}?download=${fName}`} download={fName} target="_blank" rel="noopener noreferrer" className="text-markee-primary font-bold hover:underline text-[10px]">
+                              Tải về
+                            </a>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
+                )}
+
+                {/* Card Action Buttons: Chat, Edit, Delete */}
+                <div className="pt-3 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSummaryItem(summary);
+                        setEditTitle(summary.title);
+                        setEditContent(summary.content || summary.markdown || (summary.insights || []).map(i => `- ${i}`).join('\n'));
+                        setEditFeatureName(summary.feature_name || '');
+                      }}
+                      className="px-3 py-1.5 border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-lg font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                      <span>Sửa</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSummaryItem(summary)}
+                      className="px-3 py-1.5 border border-red-200 hover:bg-red-50 text-red-600 rounded-lg font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Xóa</span>
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => {
-                      const summaryContent = (summary.insights || []).map((i: string) => `- ${i}`).join('\n');
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      const summaryContent = summary.content || summary.markdown || (summary.insights || []).map((i: string) => `- ${i}`).join('\n');
+                      if (!summaryContent || !summary.title) return;
                       const payload = {
                         id: summary.title + (summary.timestamp || selectedHubProject.created_at),
                         title: summary.title,
@@ -335,16 +485,20 @@ export default function KnowledgeHubDashboard({
                         projectName: selectedHubProject.name,
                         projectId: selectedHubProject.id
                       };
-                      sessionStorage.setItem('markee_pending_knowledge', JSON.stringify(payload));
-                      if (typeof window !== 'undefined') {
-                        localStorage.removeItem('lastActiveChatId');
+                      try {
+                        sessionStorage.setItem('markee_pending_knowledge', JSON.stringify(payload));
+                        if (typeof window !== 'undefined') {
+                          localStorage.removeItem('lastActiveChatId');
+                        }
+                        const params = new URLSearchParams(window.location.search);
+                        params.set('tab', 'ai_chat');
+                        params.delete('session_id');
+                        params.delete('folderId');
+                        router.replace(`${window.location.pathname}?${params.toString()}`);
+                        setActiveTab('ai_chat');
+                      } catch (err) {
+                        console.error('Error navigating to chat:', err);
                       }
-                      const params = new URLSearchParams(window.location.search);
-                      params.set('tab', 'ai_chat');
-                      params.delete('session_id');
-                      params.delete('folderId');
-                      router.replace(`${window.location.pathname}?${params.toString()}`);
-                      setActiveTab('ai_chat');
                     }}
                     className="bg-markee-primary hover:bg-markee-hover text-white px-3.5 py-2 rounded-xl transition-all text-xs font-bold cursor-pointer border-0 shadow-3xs flex items-center gap-1"
                   >
@@ -359,6 +513,110 @@ export default function KnowledgeHubDashboard({
                 Không tìm thấy bản tóm tắt tri thức nào phù hợp trong dự án này.
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Edit Knowledge Hub Modal */}
+      {editingSummaryItem && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-markee-border rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="border-b border-markee-border px-6 py-4 bg-markee-bg/10 flex items-center justify-between shrink-0">
+              <h3 className="text-base font-bold text-markee-text">Sửa bản Tri thức Tổng hợp</h3>
+              <button
+                type="button"
+                onClick={() => setEditingSummaryItem(null)}
+                className="text-markee-muted hover:text-markee-text transition-colors p-1 cursor-pointer font-bold border-0 bg-transparent"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              <div>
+                <label className="block text-xs font-semibold text-markee-text mb-1.5">Tiêu đề</label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-markee-text mb-1.5">Tính năng</label>
+                <input
+                  type="text"
+                  value={editFeatureName}
+                  onChange={(e) => setEditFeatureName(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-markee-text mb-1.5">Nội dung Markdown</label>
+                <textarea
+                  rows={8}
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-markee-border rounded-lg bg-white focus:outline-none font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="border-t border-markee-border px-6 py-3.5 flex justify-end gap-2.5 bg-markee-bg/10 shrink-0">
+              <button
+                type="button"
+                onClick={() => setEditingSummaryItem(null)}
+                className="px-4 py-2 border border-markee-border bg-white text-markee-muted rounded-lg text-xs font-semibold cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEditedSummary}
+                disabled={isEditingSummary || !editTitle.trim() || !editContent.trim()}
+                className="px-4 py-2 bg-markee-primary text-white rounded-lg text-xs font-semibold cursor-pointer"
+              >
+                {isEditingSummary ? 'Đang lưu...' : 'Lưu vào Knowledge Hub'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeDeleteSummary && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-red-100 rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-800">Xóa bản tri thức</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Hành động này không thể hoàn tác.</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100 font-medium">
+              Bạn có chắc chắn muốn xóa bản tri thức <span className="font-bold text-slate-800">&quot;{activeDeleteSummary.summary.title}&quot;</span> khỏi Knowledge Hub?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setActiveDeleteSummary(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer border border-slate-200 bg-white"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingSummary}
+                onClick={confirmDeleteSummary}
+                className="px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isDeletingSummary ? 'Đang xóa...' : 'Xóa bản tri thức'}
+              </button>
+            </div>
           </div>
         </div>
       )}

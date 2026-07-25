@@ -764,7 +764,7 @@ export default function ProjectManagement({ profile }: { profile: UserProfile })
   }, []);
 
   useEffect(() => {
-    const openModalId = searchParams.get('open_modal_id');
+    const openModalId = searchParams.get('projectId') || searchParams.get('open_modal_id');
     if (openModalId && projects.length > 0) {
       const projId = Number(openModalId);
       const matched = projects.find(p => p.id === projId);
@@ -773,6 +773,18 @@ export default function ProjectManagement({ profile }: { profile: UserProfile })
       }
     }
   }, [searchParams, projects]);
+
+  function handleCloseProjectModal() {
+    setSelectedProject(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('projectId');
+      url.searchParams.delete('open_modal_id');
+      url.searchParams.delete('wip');
+      url.searchParams.delete('feature');
+      router.replace(url.pathname + (url.searchParams.toString() ? `?${url.searchParams.toString()}` : ''));
+    }
+  }
 
   return (
     <main className="mx-auto max-w-7xl space-y-5 p-5 relative">
@@ -900,18 +912,6 @@ export default function ProjectManagement({ profile }: { profile: UserProfile })
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setOpenMenuProjectId(null);
-                                    handleShareProject(project.id);
-                                  }}
-                                  className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-1.5 cursor-pointer border-0 bg-transparent transition-colors"
-                                >
-                                  <Share className="h-3.5 w-3.5 text-gray-400" />
-                                  Chia sẻ
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOpenMenuProjectId(null);
                                     handleEditProjectOpen(project);
                                   }}
                                   className="w-full text-left px-3 py-2 text-xs text-gray-700 hover:bg-gray-50 flex items-center gap-1.5 cursor-pointer border-0 bg-transparent transition-colors"
@@ -1012,19 +1012,23 @@ export default function ProjectManagement({ profile }: { profile: UserProfile })
           )}
         </div>
       )}
-
       {selectedProject && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <ProjectDetailContent
-            project={selectedProject}
-            profile={profile}
-            isReadOnly={false}
-            onClose={() => setSelectedProject(null)}
-            onProjectUpdated={(updatedProj) => {
-              setSelectedProject(updatedProj);
-              setProjects(prev => prev.map(p => p.id === updatedProj.id ? updatedProj : p));
-            }}
-          />
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          onClick={handleCloseProjectModal}
+        >
+          <div onClick={(e) => e.stopPropagation()} className="contents">
+            <ProjectDetailContent
+              project={selectedProject}
+              profile={profile}
+              isReadOnly={false}
+              onClose={handleCloseProjectModal}
+              onProjectUpdated={(updatedProj) => {
+                setSelectedProject(updatedProj);
+                setProjects(prev => prev.map(p => p.id === updatedProj.id ? updatedProj : p));
+              }}
+            />
+          </div>
         </div>
       )}
 

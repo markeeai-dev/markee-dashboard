@@ -607,6 +607,11 @@ export default function RoleDashboard({ initialTab }: { initialTab?: string }) {
       window.removeEventListener('markee_open_file_preview', handleOpenPreview);
     };
   }, []);
+  useEffect(() => {
+  if (activeTab === 'projects') {
+    setIsCustomerMenuOpen(true);
+  }
+}, [activeTab]);
 
 
 
@@ -700,83 +705,108 @@ export default function RoleDashboard({ initialTab }: { initialTab?: string }) {
             <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>Trò chuyện cùng AI</span>
           </Link>
 
-          {/* DROPDOWN: QUẢN LÝ DỰ ÁN & KHÁCH HÀNG */}
+          {/* MERGED DROPDOWN: KHÁCH HÀNG & DỰ ÁN */}
           <div>
-            <Link
-              href="/projects"
-              scroll={false}
-              prefetch={false}
+            <button
+              type="button"
               onClick={(e) => {
-                e.stopPropagation();
-                setActiveTab('projects');
-                setSelectedCustomerId('');
-              }}
-              className={`w-full flex items-center rounded-xl text-sm font-semibold transition-all cursor-pointer ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'gap-3 px-4 py-3'
-                } ${activeTab === 'projects' && !selectedCustomerId
-                  ? 'bg-markee-primary text-white shadow-md shadow-red-100'
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (!isCustomerMenuOpen) {
+    // TRƯỜNG HỢP 1: Menu đang đóng -> Ép mở và chuyển tab
+    setIsCustomerMenuOpen(true);
+    setActiveTab('projects');
+    setSelectedCustomerId('');
+  } else {
+    // TRƯỜNG HỢP 2: Menu đang mở
+    if (activeTab === 'projects' && !selectedCustomerId) {
+      // Đang xem "Tất cả dự án" rồi -> Thu menu lại
+      setIsCustomerMenuOpen(false);
+    } else {
+      // Đang xem khách hàng lẻ -> Về "Tất cả dự án", VẪN GIỮ MỞ
+      setActiveTab('projects');
+      setSelectedCustomerId('');
+    }
+  }
+}}
+              className={`w-full flex items-center justify-between rounded-xl text-sm font-semibold transition-all cursor-pointer border-0 ${isCollapsed ? 'justify-start md:justify-center gap-3 md:gap-0 px-4 md:px-0 py-3' : 'px-4 py-3'
+                } ${activeTab === 'projects'
+                  ? 'bg-markee-primary text-white shadow-md shadow-red-100 font-bold'
                   : 'text-markee-muted hover:bg-markee-bg hover:text-markee-text'
                 }`}
             >
-              <span>📁</span>
-              <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>
-                Quản Lý dự án
-              </span>
-            </Link>
-
-            {/* SUB-MENU KHÁCH HÀNG (FOLDER TREE) */}
-            {!isCollapsed && (
-              <div className="mt-1">
-                {/* Header Row: [Icon] KHÁCH HÀNG [flex-spacer] X DỰ ÁN */}
-                <button
-                  type="button"
-                  onClick={() => setIsCustomerMenuOpen(!isCustomerMenuOpen)}
-                  className="w-full px-3 py-1.5 text-[10px] font-bold text-slate-400 hover:text-slate-700 uppercase tracking-wider flex items-center justify-between cursor-pointer border-0 bg-transparent rounded-lg hover:bg-slate-100 transition-colors"
-                >
-                  <div className="flex items-center gap-1.5">
-                    {isCustomerMenuOpen ? (
-                      <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    ) : (
-                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    )}
-                    <span>Khách hàng</span>
-                  </div>
-                </button>
-
-                {/* LUÔN RENDER DIV, DÙNG CSS HIDDEN/BLOCK ĐỂ ẨN HIỆN */}
-                <div className={`mt-1 space-y-1 pl-4 border-l-2 border-slate-100 ml-3 ${isCustomerMenuOpen ? 'block' : 'hidden'
-                  }`}>
-                  {sidebarCustomers.map((cust) => {
-                    const isSelected = activeTab === 'projects' && selectedCustomerId === cust.id;
-                    return (
-                      <Link
-                        key={cust.id}
-                        href={`/projects?customer=${cust.id}`}
-                        scroll={false}
-                        prefetch={false}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setActiveTab('projects');
-                          setSelectedCustomerId(cust.id);
-                          setIsCustomerMenuOpen(true);
-                        }}
-                        className={`w-full flex items-center justify-between rounded-xl text-xs font-semibold transition-all cursor-pointer px-3 py-1.5 ${isSelected
-                            ? 'bg-red-50 text-markee-primary font-bold'
-                            : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
-                          }`}
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-xs shrink-0">🏢</span>
-                          <span className="truncate">
-                            {cust.name}
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 font-medium shrink-0">
-                          ({cust.projectCount})
-                        </span>
-                      </Link>
-                    );
-                  })}
+              <div className="flex items-center gap-3">
+                <span>📁</span>
+                <span className={`animate-in fade-in duration-200 ${isCollapsed ? 'block md:hidden' : 'block'}`}>
+                  Khách hàng & Dự án
+                </span>
+              </div>
+              {!isCollapsed && (
+                <div className={activeTab === 'projects' ? 'text-white' : 'text-slate-400'}>
+                  {isCustomerMenuOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                 </div>
+              )}
+            </button>
+
+            {/* SUB-MENU KHÁCH HÀNG & TẤT CẢ DỰ ÁN */}
+            {!isCollapsed && (
+              <div className={`mt-1 space-y-1 pl-4 border-l-2 border-slate-100 ml-5 ${isCustomerMenuOpen ? 'block' : 'hidden'}`}>
+                {/* 1. Tất cả dự án */}
+                <Link
+                  href="/projects"
+                  scroll={false}
+                  prefetch={false}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveTab('projects');
+                    setSelectedCustomerId('');
+                    setIsCustomerMenuOpen(true); // Ép menu luôn mở khi click vào link con
+                  }}
+                  className={`w-full flex items-center justify-between rounded-xl text-xs font-semibold transition-all cursor-pointer px-3 py-2 ${activeTab === 'projects' && !selectedCustomerId
+                      ? 'bg-red-50 text-markee-primary font-bold'
+                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                    }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs shrink-0">🌐</span>
+                    <span>Tất cả dự án</span>
+                  </div>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded-full font-semibold">
+                    {totalProjectsCount}
+                  </span>
+                </Link>
+
+                {/* 2. Danh sách Khách hàng */}
+                {sidebarCustomers.map((cust) => {
+                  const isSelected = activeTab === 'projects' && selectedCustomerId === cust.id;
+                  return (
+                    <Link
+                      key={cust.id}
+                      href={`/projects?customer=${cust.id}`}
+                      scroll={false}
+                      prefetch={false}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveTab('projects');
+                        setSelectedCustomerId(cust.id);
+                        setIsCustomerMenuOpen(true); // Ép menu luôn mở khi click vào link con
+                      }}
+                      className={`w-full flex items-center justify-between rounded-xl text-xs font-semibold transition-all cursor-pointer px-3 py-2 ${isSelected
+                          ? 'bg-red-50 text-markee-primary font-bold'
+                          : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800'
+                        }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs shrink-0">🏢</span>
+                        <span className="truncate">{cust.name}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-medium shrink-0">
+                        ({cust.projectCount})
+                      </span>
+                    </Link>
+                  );
+                })}
               </div>
             )}
           </div>
