@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, Suspense } from 'react';
+// BỔ SUNG: Import thêm useSearchParams
+import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import ProjectDetailContent from '@/app/components/ProjectManagement/ProjectDetailContent';
 import Link from 'next/link';
@@ -10,7 +11,8 @@ interface SharedProjectClientProps {
   project: any;
 }
 
-export default function SharedProjectClient({ project }: SharedProjectClientProps) {
+// BƯỚC 1: Tách logic chính ra một component con để dùng useSearchParams an toàn
+function SharedProjectInner({ project, searchParams }: { project: any, searchParams: any }) {
   const router = useRouter();
   const [checkingAuth, setCheckingAuth] = useState(true);
 
@@ -19,8 +21,22 @@ export default function SharedProjectClient({ project }: SharedProjectClientProp
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user) {
-          // Đã đăng nhập -> redirect thẳng về Dashboard kèm open_modal_id
-          router.replace(`/?tab=projects&open_modal_id=${project.id}`);
+          // Xây dựng link redirect gốc
+          let redirectUrl = `/?tab=projects&open_modal_id=${project.id}`;
+
+          // BỔ SUNG: Nhặt lại các tham số feature và wip từ link Extension
+          const feature = searchParams.get('feature');
+          const wip = searchParams.get('wip');
+
+          if (feature) {
+            redirectUrl += `&feature=${encodeURIComponent(feature)}`;
+          }
+          if (wip) {
+            redirectUrl += `&wip=${encodeURIComponent(wip)}`;
+          }
+
+          // Đã đăng nhập -> bẻ lái về Dashboard giữ nguyên tham số
+          router.replace(redirectUrl);
         } else {
           // Chưa đăng nhập -> hiển thị chế độ read-only
           setCheckingAuth(false);
@@ -31,7 +47,7 @@ export default function SharedProjectClient({ project }: SharedProjectClientProp
       }
     }
     checkSession();
-  }, [project.id, router]);
+  }, [project.id, router, searchParams]);
 
   if (checkingAuth) {
     return (
@@ -46,7 +62,6 @@ export default function SharedProjectClient({ project }: SharedProjectClientProp
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col items-center justify-center p-4 md:p-8 font-sans relative w-full">
-      {/* Nút đăng nhập hệ thống ở góc trên bên phải */}
       <div className="absolute top-4 right-4 z-50">
         <Link
           href="/"
@@ -64,5 +79,17 @@ export default function SharedProjectClient({ project }: SharedProjectClientProp
         />
       </div>
     </div>
+  );
+}
+
+// BƯỚC 2: Bọc Suspense ở ngoài cùng. 
+// (Next.js yêu cầu dùng Suspense khi gọi useSearchParams trong Client Component)
+export default function SharedProjectClient({ project }: SharedProjectClientProps) {
+  const searchParams = useSearchParams();
+  
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#f8fafc]" />}>
+      <SharedProjectInner project={project} searchParams={searchParams} />
+    </Suspense>
   );
 }
