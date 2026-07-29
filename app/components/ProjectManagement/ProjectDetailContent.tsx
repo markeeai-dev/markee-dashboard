@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
@@ -183,6 +183,9 @@ export default function ProjectDetailContent({
   const [activeMemberEmail, setActiveMemberEmail] = useState<string | null>(null);
   const [membersLoading, setMembersLoading] = useState(false);
 
+  // Ref to track whether we are waiting to scroll to a specific WIP after logs load
+  const scrollPendingRef = useRef<string | null>(null);
+
   const [logs, setLogs] = useState<AISession[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [page, setPage] = useState(0);
@@ -252,7 +255,7 @@ export default function ProjectDetailContent({
 
   const searchParams = useSearchParams();
 
-  // URL Deep Linking for feature filter and target WIP scroll
+  // URL Deep Linking: apply feature filter from URL
   useEffect(() => {
     if (!searchParams) return;
     const featureParam = searchParams.get('feature');
@@ -261,52 +264,75 @@ export default function ProjectDetailContent({
     }
   }, [searchParams]);
 
+  // URL Deep Linking: resolve ?wip= to its author + feature, then load the right logs
   useEffect(() => {
     if (!searchParams || !project?.id) return;
     const wipParam = searchParams.get('wip');
-    if (wipParam) {
-      async function locateWipAuthor() {
-        try {
-          const { data } = await supabase
-            .from('skill_library')
-            .select('author_id')
-            .eq('id', Number(wipParam))
-            .single();
-          if (data?.author_id) {
-            setActiveMemberEmail(data.author_id);
-            loadUserLogs(project.id, data.author_id, true);
-          }
-        } catch (e) {
-          console.error('Error locating WIP author:', e);
+    if (!wipParam) return;
+
+    // Mark that we need to scroll to this WIP once the correct logs arrive
+    scrollPendingRef.current = wipParam;
+
+    async function resolveWipAndLoadLogs() {
+      try {
+        const { data } = await supabase
+          .from('skill_library')
+          .select('author_id, feature_name')
+          .eq('id', Number(wipParam))
+          .single();
+
+        if (!data?.author_id) return;
+
+        // Apply feature filter if available
+        if (data.feature_name) {
+          setSelectedFeature(data.feature_name);
         }
+
+        // Select the correct member and load their logs
+        setActiveMemberEmail(data.author_id);
+        setLogs([]);
+        setPage(0);
+        setHasMore(false);
+        await loadUserLogs(project.id, data.author_id, true);
+      } catch (e) {
+        console.error('Error resolving WIP deep link:', e);
+        scrollPendingRef.current = null;
       }
-      locateWipAuthor();
     }
+
+    resolveWipAndLoadLogs();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, project?.id]);
 
+  // Scroll & highlight the target WIP once the correct logs have been loaded into the DOM
   useEffect(() => {
-    if (!searchParams) return;
-    const wipParam = searchParams.get('wip');
-    if (wipParam && logs.length > 0) {
-      const timer = setTimeout(() => {
-        const el = document.getElementById(`wip-log-${wipParam}`);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          el.classList.add('ring-2', 'ring-markee-primary', 'bg-red-50/20');
-        }
-      }, 400);
-      return () => clearTimeout(timer);
-    }
-  }, [logs, searchParams]);
+    const wipId = scrollPendingRef.current;
+    if (!wipId || logs.length === 0) return;
 
-  // Load members
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`wip-log-${wipId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-markee-primary', 'bg-red-50/20');
+        // Clear the pending flag so subsequent log updates don't re-trigger scroll
+        scrollPendingRef.current = null;
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [logs]);
+
+  // Load members list for Sidebar — skip auto-selecting Member 1 when a ?wip= param is present
   useEffect(() => {
     async function loadMembers() {
       setMembersLoading(true);
       try {
         const activeMembers = await fetchProjectWIPMembers(project.id);
         setMembers(activeMembers);
-        if (activeMembers.length > 0) {
+
+        // Only auto-select Member 1 if there is no wip deep-link
+        // (the wip deep-link effect owns member selection in that case)
+        const wipParam = searchParams?.get('wip');
+        if (!wipParam && activeMembers.length > 0) {
           const firstEmail = activeMembers[0].email;
           setActiveMemberEmail(firstEmail);
           loadUserLogs(project.id, firstEmail, true);
@@ -318,6 +344,7 @@ export default function ProjectDetailContent({
       }
     }
     loadMembers();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
   // Load other projects for moving WIP
