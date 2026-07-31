@@ -17,7 +17,7 @@ function getSupabaseAdmin() {
   });
 }
 
-async function sendTelegramAlert(appName: string, balance: number, limit: number) {
+async function sendTelegramAlert(appName: string, providerName: string, balance: number, limit: number) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   const threadId = process.env.TELEGRAM_MESSAGE_THREAD_ID;
@@ -28,8 +28,8 @@ async function sendTelegramAlert(appName: string, balance: number, limit: number
   }
 
   const usagePercent = limit > 0 ? ((limit - balance) / limit) * 100 : 0;
-  
-  const text = `⚠️ <b>CẢNH BÁO SẮP CẠN SỐ DƯ API</b> ⚠️\n\nỨng dụng: <b>${appName}</b>\nHạn mức còn lại: <code>$${balance.toFixed(2)}</code> (~ ${(balance * 3250).toLocaleString('vi-VN')}đ)\nTổng ngân sách cấp: <code>$${limit.toFixed(2)}</code> (~ ${(limit * 3250).toLocaleString('vi-VN')}đ)\nTỷ lệ sử dụng: <b>${usagePercent.toFixed(1)}%</b>\n\n🔴 <i>Vui lòng nạp thêm ngân sách tại ShopAIKey để tránh gián đoạn dịch vụ AI.</i>`;
+
+  const text = `⚠️ <b>CẢNH BÁO SẮP CẠN SỐ DƯ API</b> ⚠️\n\nỨng dụng: <b>${appName}</b> (${providerName})\nHạn mức còn lại: <code>$${balance.toFixed(2)}</code> (~ ${(balance * 3250).toLocaleString("vi-VN")}đ)\nTổng ngân sách cấp: <code>$${limit.toFixed(2)}</code> (~ ${(limit * 3250).toLocaleString("vi-VN")}đ)\nTỷ lệ sử dụng: <b>${usagePercent.toFixed(1)}%</b>\n\n🔴 <i>Vui lòng nạp thêm ngân sách tại ${providerName} để tránh gián đoạn dịch vụ.</i>`;
 
   try {
     const payload: any = {
@@ -70,22 +70,19 @@ export async function POST(request: Request) {
 }
 
 async function handleSync(request: Request) {
-  const authHeader = request.headers.get('authorization');
+  const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return new Response(JSON.stringify({ success: false, message: 'Unauthorized' }), {
+    return new Response(JSON.stringify({ success: false, message: "Unauthorized" }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { "Content-Type": "application/json" },
     });
   }
 
   try {
-
     const supabaseAdmin = getSupabaseAdmin();
 
     // 2. Lấy tất cả apps
-    const { data: apps, error: appsError } = await supabaseAdmin
-      .from("apps")
-      .select("*");
+    const { data: apps, error: appsError } = await supabaseAdmin.from("apps").select("*");
 
     if (appsError) {
       console.error("Lỗi lấy danh sách apps trong cronjob:", appsError);
@@ -105,62 +102,123 @@ async function handleSync(request: Request) {
 
     const results = [];
 
-    // 3. Lặp qua từng app để đồng bộ số dư ShopAIKey
+    // 3. Lặp qua từng app để đồng bộ số dư
     for (const app of apps) {
-      const key = app.secret_key;
-      if (!key || !key.trim()) {
-        results.push({ app_id: app.id, app_name: app.name, status: "skipped", reason: "Secret Key rỗng" });
-        continue;
-      }
+      const provider = app.provider || "shopaikey";
+      const providerLabel = provider === "dataforseo" ? "DataForSEO" : "ShopAIKey";
 
       try {
-        // API 1: Lấy billing subscription
-        const subRes = await fetch("https://api.shopaikey.com/v1/dashboard/billing/subscription", {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${key}`,
-          },
-          cache: "no-store",
-        });
+        let hardLimitUsd = 0;
+        let totalUsedUsd = 0;
+        let balanceUsd = 0;
 
-        if (!subRes.ok) {
-          throw new Error(`Billing API error (HTTP ${subRes.status})`);
-        }
+        if (provider === "dataforseo") {
+          const apiLogin = app.api_login;
+          const apiPassword = app.secret_key;
 
-        const subData = await subRes.json();
-        const hardLimitUsdRaw = Number(subData.hard_limit_usd || 0);
-        const hardLimitUsd = Math.round(hardLimitUsdRaw * 100) / 100;
+          if (!apiLogin || !apiPassword || !apiLogin.trim() || !apiPassword.trim()) {
+            results.push({
+              app_id: app.id,
+              app_name: app.name,
+              provider,
+              status: "skipped",
+              reason: "Thiếu API Login hoặc API Password",
+            });
+            continue;
+          }
 
-        // API 2: Lấy usage
-        const usageRes = await fetch(
-          `https://api.shopaikey.com/v1/dashboard/billing/usage?start_date=${startDate}&end_date=${endDate}`,
-          {
+          const authHeaderValue = `Basic ${Buffer.from(`${apiLogin.trim()}:${apiPassword.trim()}`).toString("base64")}`;
+
+          const res = await fetch("https://api.dataforseo.com/v3/appendix/user_data", {
             method: "GET",
             headers: {
-              Authorization: `Bearer ${key}`,
+              Authorization: authHeaderValue,
             },
             cache: "no-store",
-          }
-        );
+          });
 
-        if (!usageRes.ok) {
-          throw new Error(`Usage API error (HTTP ${usageRes.status})`);
+          if (res.status === 401) {
+            throw new Error("Sai API Login hoặc API Password cho DataForSEO. Vui lòng kiểm tra lại Credentials.");
+          }
+
+          if (!res.ok) {
+            throw new Error(`DataForSEO API error (HTTP ${res.status})`);
+          }
+
+          const data = await res.json();
+          if (data.status_code !== 20000) {
+            throw new Error(data.message || `DataForSEO API error (Code ${data.status_code})`);
+          }
+
+          const moneyData = data.tasks?.[0]?.result?.[0]?.money;
+          if (!moneyData) {
+            throw new Error("Không thể đọc thông tin số dư tài chính từ DataForSEO");
+          }
+
+          balanceUsd = Math.round(Number(moneyData.balance || 0) * 100) / 100;
+          hardLimitUsd = Math.round(Number(moneyData.total || 0) * 100) / 100;
+          totalUsedUsd = Math.round(Math.max(0, hardLimitUsd - balanceUsd) * 100) / 100;
+        } else {
+          const key = app.secret_key;
+          if (!key || !key.trim()) {
+            results.push({
+              app_id: app.id,
+              app_name: app.name,
+              provider,
+              status: "skipped",
+              reason: "Secret Key rỗng",
+            });
+            continue;
+          }
+
+          // API 1: Lấy billing subscription
+          const subRes = await fetch("https://api.shopaikey.com/v1/dashboard/billing/subscription", {
+            method: "GET",
+            headers: {
+              Authorization: `Bearer ${key.trim()}`,
+            },
+            cache: "no-store",
+          });
+
+          if (!subRes.ok) {
+            throw new Error(`Billing API error (HTTP ${subRes.status})`);
+          }
+
+          const subData = await subRes.json();
+          const hardLimitUsdRaw = Number(subData.hard_limit_usd || 0);
+          hardLimitUsd = Math.round(hardLimitUsdRaw * 100) / 100;
+
+          // API 2: Lấy usage
+          const usageRes = await fetch(
+            `https://api.shopaikey.com/v1/dashboard/billing/usage?start_date=${startDate}&end_date=${endDate}`,
+            {
+              method: "GET",
+              headers: {
+                Authorization: `Bearer ${key.trim()}`,
+              },
+              cache: "no-store",
+            }
+          );
+
+          if (!usageRes.ok) {
+            throw new Error(`Usage API error (HTTP ${usageRes.status})`);
+          }
+
+          const usageData = await usageRes.json();
+          const totalUsageCents = Number(usageData.total_usage || 0);
+          totalUsedUsd = Math.round((totalUsageCents / 100) * 100) / 100;
+
+          balanceUsd = Math.round((hardLimitUsd - totalUsedUsd) * 100) / 100;
         }
 
-        const usageData = await usageRes.json();
-        const totalUsageCents = Number(usageData.total_usage || 0);
-        const totalUsedUsd = Math.round((totalUsageCents / 100) * 100) / 100;
-
-        // Tính toán số dư
-        const balanceUsd = Math.round((hardLimitUsd - totalUsedUsd) * 100) / 100;
         const status = balanceUsd > 0 ? "active" : "depleted";
 
         // Logic Cảnh báo Telegram số dư thấp (còn lại <= 10%)
         let isLowBalanceAlerted = app.is_low_balance_alerted || false;
-        
+
         if (hardLimitUsd > 0 && balanceUsd <= hardLimitUsd * 0.1) {
           if (!isLowBalanceAlerted) {
-            await sendTelegramAlert(app.name, balanceUsd, hardLimitUsd);
+            await sendTelegramAlert(app.name, providerLabel, balanceUsd, hardLimitUsd);
             isLowBalanceAlerted = true;
           }
         } else {
@@ -176,31 +234,29 @@ async function handleSync(request: Request) {
             total_used: totalUsedUsd,
             balance: balanceUsd,
             status,
-            is_low_balance_alerted: isLowBalanceAlerted
+            is_low_balance_alerted: isLowBalanceAlerted,
           })
           .eq("id", app.id);
 
         // Insert bảng balance_history
-        await supabaseAdmin
-          .from("balance_history")
-          .insert({
-            app_id: app.id,
-            total_used: totalUsedUsd,
-            balance: balanceUsd,
-          });
+        await supabaseAdmin.from("balance_history").insert({
+          app_id: app.id,
+          total_used: totalUsedUsd,
+          balance: balanceUsd,
+        });
 
         results.push({
           app_id: app.id,
           app_name: app.name,
+          provider,
           status: "success",
           total_granted: hardLimitUsd,
           total_used: totalUsedUsd,
           balance: balanceUsd,
         });
-
       } catch (err: any) {
-        console.error(`Cron sync failed for app ${app.name}:`, err.message || err);
-        
+        console.error(`Cron sync failed for app ${app.name} (${providerLabel}):`, err.message || err);
+
         await supabaseAdmin
           .from("apps")
           .update({
@@ -211,6 +267,7 @@ async function handleSync(request: Request) {
         results.push({
           app_id: app.id,
           app_name: app.name,
+          provider,
           status: "failed",
           reason: err.message || String(err),
         });

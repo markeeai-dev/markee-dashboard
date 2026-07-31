@@ -27,71 +27,19 @@ import {
   RefreshCw,
   ChevronUp,
   ChevronDown,
-  ChevronsUpDown
+  ChevronsUpDown,
+  Mail,
+  Lock,
+  Key
 } from 'lucide-react';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell
-} from 'recharts';
-
-const DAILY_USAGE_DATA = {
-  today: [
-    { name: '00:00', tokens: 12000, cost: 1.2 },
-    { name: '04:00', tokens: 8000, cost: 0.8 },
-    { name: '08:00', tokens: 45000, cost: 4.5 },
-    { name: '12:00', tokens: 68000, cost: 6.8 },
-    { name: '16:00', tokens: 95000, cost: 9.5 },
-    { name: '20:00', tokens: 52000, cost: 5.2 }
-  ],
-  '7days': [
-    { name: 'Thứ 2', tokens: 350000, cost: 35 },
-    { name: 'Thứ 3', tokens: 420000, cost: 42 },
-    { name: 'Thứ 4', tokens: 380000, cost: 38 },
-    { name: 'Thứ 5', tokens: 510000, cost: 51 },
-    { name: 'Thứ 6', tokens: 490000, cost: 49 },
-    { name: 'Thứ 7', tokens: 210000, cost: 21 },
-    { name: 'Chủ Nhật', tokens: 180000, cost: 18 }
-  ],
-  '30days': [
-    { name: 'Tuần 1', tokens: 1200000, cost: 120 },
-    { name: 'Tuần 2', tokens: 1450000, cost: 145 },
-    { name: 'Tuần 3', tokens: 1300000, cost: 130 },
-    { name: 'Tuần 4', tokens: 1650000, cost: 165 }
-  ],
-  all: [
-    { name: 'Tháng 2', tokens: 4500000, cost: 450 },
-    { name: 'Tháng 3', tokens: 5200000, cost: 520 },
-    { name: 'Tháng 4', tokens: 6100000, cost: 610 },
-    { name: 'Tháng 5', tokens: 5800000, cost: 580 },
-    { name: 'Tháng 6', tokens: 7200000, cost: 720 },
-    { name: 'Tháng 7', tokens: 8500000, cost: 850 }
-  ]
-};
-
-const PIE_COLORS = ['#E3000F', '#F43F5E', '#FB7185', '#FDA4AF', '#FECDD3'];
-
-const MOCK_HISTORY_LOGS = [
-  { time: '2026-07-16 09:35:12', type: 'Chat', model: 'gpt-4o', input: 120, output: 450, total: 570, cost: 0.00285 },
-  { time: '2026-07-16 09:30:45', type: 'Completion', model: 'claude-3-5-sonnet', input: 240, output: 890, total: 1130, cost: 0.01695 },
-  { time: '2026-07-16 09:12:02', type: 'Chat', model: 'gpt-4o-mini', input: 85, output: 312, total: 397, cost: 0.00006 },
-  { time: '2026-07-16 08:55:30', type: 'Translation', model: 'gpt-4o', input: 500, output: 520, total: 1020, cost: 0.00510 },
-  { time: '2026-07-16 08:42:15', type: 'Chat', model: 'claude-3-5-sonnet', input: 150, output: 620, total: 770, cost: 0.01155 },
-  { time: '2026-07-16 08:10:04', type: 'Summarization', model: 'gpt-4o-mini', input: 1200, output: 350, total: 1550, cost: 0.00023 }
-];
 
 interface AppItem {
   id: string;
   name: string;
   secret_key: string;
   app_url: string | null;
+  provider?: 'shopaikey' | 'dataforseo' | string;
+  api_login?: string | null;
   status: string;
   total_granted: number;
   total_used: number;
@@ -102,6 +50,15 @@ interface AppItem {
 interface ApiManagementDashboardProps {
   isTab?: boolean;
 }
+
+// Helper function tính tỷ giá tiền Việt theo nhà cung cấp
+const getExchangeRate = (provider?: string) => {
+  return provider === 'dataforseo' ? 25400 : 3250;
+};
+
+const getVndAmount = (usdAmount: number, provider?: string) => {
+  return Number(usdAmount || 0) * getExchangeRate(provider);
+};
 
 export default function ApiManagementDashboard({ isTab = false }: ApiManagementDashboardProps) {
   const [isMounted, setIsMounted] = useState(false);
@@ -116,25 +73,36 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
 
   // Modal & Form States
   const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Create App Modal
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [newProvider, setNewProvider] = useState<'shopaikey' | 'dataforseo'>('shopaikey');
   const [newAppName, setNewAppName] = useState('');
   const [newAppUrl, setNewAppUrl] = useState('');
+  const [newApiLogin, setNewApiLogin] = useState('');
   const [newAppSecretKey, setNewAppSecretKey] = useState('');
 
+  // Edit App Modal
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [appToEdit, setAppToEdit] = useState<AppItem | null>(null);
+  const [editProvider, setEditProvider] = useState<'shopaikey' | 'dataforseo'>('shopaikey');
   const [editAppName, setEditAppName] = useState('');
   const [editAppUrl, setEditAppUrl] = useState('');
+  const [editApiLogin, setEditApiLogin] = useState('');
   const [editAppSecretKey, setEditAppSecretKey] = useState('');
 
+  // Delete App Modal
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [appToDelete, setAppToDelete] = useState<AppItem | null>(null);
 
+  // View Secret Key Modal
   const [isViewKeyModalOpen, setIsViewKeyModalOpen] = useState(false);
   const [viewAppKeyData, setViewAppKeyData] = useState<AppItem | null>(null);
 
+  // History Slide-over Modal
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [historyAppName, setHistoryAppName] = useState('');
+  const [historyAppProvider, setHistoryAppProvider] = useState<string>('shopaikey');
   const [historyLogs, setHistoryLogs] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
@@ -151,12 +119,11 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
     setIsMounted(true);
     loadApps();
 
-    // Thiết lập chạy ngầm đồng bộ mỗi 15 phút (15 * 60 * 1000)
+    // Thiết lập chạy ngầm đồng bộ mỗi 15 phút
     const interval = setInterval(() => {
       fetch('/api/admin/sync-balances', { method: 'POST' })
         .then(res => res.json())
         .then(() => {
-          // reload ngầm danh sách apps
           fetch('/api/apps')
             .then(res => res.json())
             .then(data => setApps(data || []))
@@ -193,6 +160,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
 
   // Copy to clipboard helper
   const handleCopyKey = (key: string, id: string) => {
+    if (!key) return;
     navigator.clipboard.writeText(key);
     setCopiedKeyId(id);
     setTimeout(() => setCopiedKeyId(null), 2000);
@@ -222,7 +190,23 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
   // Create App / Key via Real Database API
   const handleCreateApp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAppName.trim() || !newAppSecretKey.trim()) return;
+    if (!newAppName.trim()) return;
+
+    if (newProvider === 'shopaikey' && !newAppSecretKey.trim()) {
+      setToast({ message: 'Vui lòng nhập Secret Key cho ShopAIKey.', type: 'error' });
+      return;
+    }
+
+    if (newProvider === 'dataforseo') {
+      if (!newApiLogin.trim()) {
+        setToast({ message: 'Vui lòng nhập API Login (Email) cho DataForSEO.', type: 'error' });
+        return;
+      }
+      if (!newAppSecretKey.trim()) {
+        setToast({ message: 'Vui lòng nhập API Password cho DataForSEO.', type: 'error' });
+        return;
+      }
+    }
 
     try {
       const res = await fetch('/api/apps', {
@@ -233,6 +217,8 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
         body: JSON.stringify({ 
           name: newAppName.trim(),
           app_url: newAppUrl.trim() || null,
+          provider: newProvider,
+          api_login: newProvider === 'dataforseo' ? newApiLogin.trim() : null,
           secret_key: newAppSecretKey.trim()
         }),
       });
@@ -242,7 +228,6 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
         throw new Error(resData.error || 'Lỗi khi tạo ứng dụng mới.');
       }
 
-      console.log("Fetch API tạo app thành công!");
       setApps([resData, ...apps]);
       setIsCreateModalOpen(false);
       setToast({ message: 'Đã thêm API Key thành công!', type: 'success' });
@@ -268,6 +253,8 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
           id: appToEdit.id, 
           name: editAppName.trim(),
           app_url: editAppUrl.trim() || null,
+          provider: editProvider,
+          api_login: editProvider === 'dataforseo' ? editApiLogin.trim() : null,
           secret_key: editAppSecretKey.trim() || null
         }),
       });
@@ -281,6 +268,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
       setIsEditModalOpen(false);
       setAppToEdit(null);
       setToast({ message: 'Cập nhật ứng dụng thành công!', type: 'success' });
+      loadApps();
     } catch (err: any) {
       console.error('Lỗi khi sửa app:', err);
       setToast({ message: err.message || 'Lỗi khi sửa ứng dụng', type: 'error' });
@@ -314,6 +302,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
   // Fetch real logs history from backend API
   const handleOpenHistory = async (app: AppItem) => {
     setHistoryAppName(app.name);
+    setHistoryAppProvider(app.provider || 'shopaikey');
     setIsHistoryModalOpen(true);
     setHistoryLogs([]);
     setLoadingHistory(true);
@@ -330,10 +319,14 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
     }
   };
 
-  // Calculation statistics based on current apps
-  const totalGranted = apps.reduce((sum, app) => sum + Number(app.total_granted || 0), 0);
-  const totalUsed = apps.reduce((sum, app) => sum + Number(app.total_used || 0), 0);
-  const totalBalance = apps.reduce((sum, app) => sum + Number(app.balance || 0), 0);
+  // Calculation statistics (cộng dồn tiền VNĐ chính xác theo từng provider)
+  const totalGrantedVnd = apps.reduce((sum, app) => sum + getVndAmount(Number(app.total_granted || 0), app.provider), 0);
+  const totalUsedVnd = apps.reduce((sum, app) => sum + getVndAmount(Number(app.total_used || 0), app.provider), 0);
+  const totalBalanceVnd = apps.reduce((sum, app) => sum + getVndAmount(Number(app.balance || 0), app.provider), 0);
+
+  const totalGrantedUsd = apps.reduce((sum, app) => sum + Number(app.total_granted || 0), 0);
+  const totalUsedUsd = apps.reduce((sum, app) => sum + Number(app.total_used || 0), 0);
+  const totalBalanceUsd = apps.reduce((sum, app) => sum + Number(app.balance || 0), 0);
   const activeAppsCount = apps.filter(app => app.status === 'active').length;
 
   // Filtered Apps
@@ -383,8 +376,8 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
       {toast && (
         <div className={`fixed top-6 right-6 z-[2000] flex items-center gap-2 rounded-2xl px-4 py-3 text-xs font-semibold shadow-xl border transition-all animate-in fade-in slide-in-from-top-2 duration-300 ${
           toast.type === 'success'
-            ? 'bg-emerald-50 border-emerald-250 text-emerald-800 border-emerald-200'
-            : 'bg-red-50 border-red-250 text-red-800 border-red-200'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : 'bg-red-50 border-red-200 text-red-800'
         }`}>
           {toast.type === 'success' ? <span>✅</span> : <span>❌</span>}
           <span>{toast.message}</span>
@@ -413,7 +406,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
               <span>Quản lý API & Chi phí</span>
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              Quản lý các khóa tích hợp, cấu hình hạn mức tokens và giám sát chi phí dịch vụ AI theo thời gian thực.
+              Quản lý các khóa tích hợp (ShopAIKey & DataForSEO), cấu hình hạn mức tokens và giám sát chi phí dịch vụ AI theo thời gian thực.
             </p>
           </div>
 
@@ -426,7 +419,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                   onClick={() => setTimeFilter(filter as any)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                     timeFilter === filter
-                      ? 'bg-white text-slate-800 shadow-sm border-0'
+                      ? 'bg-white text-slate-800 shadow-xs border-0'
                       : 'text-slate-500 hover:text-slate-800 bg-transparent border-0'
                   }`}
                 >
@@ -437,7 +430,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
           </div>
         </section>
 
-        {/* Stats Cards Section */}
+        {/* Stats Cards Section (4 Thẻ Summary Cards) */}
         <section className="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           {/* Card 1 */}
           <div className="bg-white border border-slate-200/80 rounded-2xl p-5 flex flex-col justify-between shadow-2xs relative overflow-hidden group hover:border-markee-primary/30 transition-all duration-300">
@@ -449,10 +442,10 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
             </div>
             <div>
               <div className="text-xl md:text-2xl font-bold text-slate-900">
-                {(totalGranted * 3250).toLocaleString('vi-VN')} đ
+                {totalGrantedVnd.toLocaleString('vi-VN')} đ
               </div>
               <p className="text-[10px] text-slate-400 font-semibold mt-1">
-                ~ ${totalGranted.toFixed(2)}
+                ~ ${totalGrantedUsd.toFixed(2)} USD
               </p>
             </div>
           </div>
@@ -467,10 +460,10 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
             </div>
             <div>
               <div className="text-xl md:text-2xl font-bold text-slate-900">
-                {(totalUsed * 3250).toLocaleString('vi-VN')} đ
+                {totalUsedVnd.toLocaleString('vi-VN')} đ
               </div>
               <p className="text-[10px] text-slate-400 font-semibold mt-1">
-                ~ ${totalUsed.toFixed(2)}
+                ~ ${totalUsedUsd.toFixed(2)} USD
               </p>
             </div>
           </div>
@@ -485,11 +478,11 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
             </div>
             <div>
               <div className="text-xl md:text-2xl font-bold text-slate-900">
-                {(totalBalance * 3250).toLocaleString('vi-VN')} đ
+                {totalBalanceVnd.toLocaleString('vi-VN')} đ
               </div>
-              <p className="text-[10px] text-slate-450 font-semibold mt-1 flex items-center gap-0.5">
+              <p className="text-[10px] text-slate-400 font-semibold mt-1 flex items-center gap-0.5">
                 <TrendingUp className="w-3 h-3 text-emerald-500" />
-                <span>~ ${totalBalance.toFixed(2)}</span>
+                <span>~ ${totalBalanceUsd.toFixed(2)} USD</span>
               </p>
             </div>
           </div>
@@ -519,7 +512,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
             <div className="flex flex-col gap-1">
               <h2 className="text-sm font-bold text-slate-800">Danh sách API Keys</h2>
               <p className="text-xs text-slate-400">
-                Quản trị ngân sách tài chính và thông tin số dư ShopAIKey của từng ứng dụng.
+                Quản trị ngân sách tài chính và thông tin kết nối ShopAIKey & DataForSEO của từng ứng dụng.
               </p>
             </div>
             
@@ -549,8 +542,10 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
 
                 <button
                   onClick={() => {
+                    setNewProvider('shopaikey');
                     setNewAppName('');
                     setNewAppUrl('');
+                    setNewApiLogin('');
                     setNewAppSecretKey('');
                     setIsCreateModalOpen(true);
                   }}
@@ -576,11 +571,11 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                   <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-bold uppercase tracking-wider select-none">
                     <th className="px-6 py-4 cursor-pointer hover:bg-slate-100/80 transition-colors" onClick={() => handleSort('name')}>
                       <div className="flex items-center gap-1">
-                        <span>Tên Ứng dụng</span>
+                        <span>Tên Ứng dụng & Provider</span>
                         {sortField === 'name' ? (sortDirection === 'asc' ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />) : <ChevronsUpDown className="w-3.5 h-3.5 text-slate-350" />}
                       </div>
                     </th>
-                    <th className="px-6 py-4 hidden md:table-cell">Secret Key</th>
+                    <th className="px-6 py-4 hidden md:table-cell">Thông tin Credentials</th>
                     <th className="px-6 py-4 hidden lg:table-cell cursor-pointer hover:bg-slate-100/80 transition-colors" onClick={() => handleSort('total_granted')}>
                       <div className="flex items-center gap-1">
                         <span>Tổng ngân sách</span>
@@ -597,70 +592,159 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {sortedApps.map((app, index) => {
+                  {sortedApps.map((app) => {
                     const isKeyVisible = visibleKeyIds.includes(app.id);
+                    const isDataForSEO = app.provider === 'dataforseo';
+                    const appVndGranted = getVndAmount(Number(app.total_granted || 0), app.provider);
+                    const appVndUsed = getVndAmount(Number(app.total_used || 0), app.provider);
 
                     return (
                       <tr key={app.id} className="hover:bg-slate-50/50 transition-colors">
+                        {/* Tên App & Badge Provider */}
                         <td className="px-6 py-4 font-bold text-slate-800">
-                          <div className="flex items-center gap-1.5">
-                            {app.app_url ? (
-                              <a
-                                href={app.app_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="hover:text-markee-primary hover:underline flex items-center gap-1 text-slate-800"
-                              >
-                                <span>{app.name}</span>
-                                <ExternalLink className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              </a>
-                            ) : (
-                              <span>{app.name}</span>
-                            )}
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-2">
+                              {app.app_url ? (
+                                <a
+                                  href={app.app_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="hover:text-markee-primary hover:underline flex items-center gap-1 text-slate-800 font-bold"
+                                >
+                                  <span>{app.name}</span>
+                                  <ExternalLink className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                </a>
+                              ) : (
+                                <span className="font-bold text-slate-800">{app.name}</span>
+                              )}
+
+                              {/* Badge Nhà Cung Cấp */}
+                              {isDataForSEO ? (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 text-blue-600 border border-blue-200/80 shrink-0">
+                                  DataForSEO
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200/80 shrink-0">
+                                  ShopAIKey
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-normal">
+                              Tỷ giá: 1 USD = {getExchangeRate(app.provider).toLocaleString('vi-VN')} VNĐ
+                            </div>
                           </div>
                         </td>
+
+                        {/* Credentials Column */}
                         <td className="px-6 py-4 font-mono text-[11px] text-slate-650 hidden md:table-cell">
-                          <div className="flex items-center gap-2">
-                            <span>
-                              {isKeyVisible 
-                                ? app.secret_key 
-                                : `${app.secret_key.slice(0, 14)}•••••••••••••••••••••••••••••••••••••`}
-                            </span>
-                            <button
-                              onClick={() => {
-                                if (isKeyVisible) {
-                                  setVisibleKeyIds(visibleKeyIds.filter(id => id !== app.id));
-                                } else {
-                                  setVisibleKeyIds([...visibleKeyIds, app.id]);
-                                }
-                              }}
-                              className="p-1 hover:bg-slate-100 rounded-md text-slate-450 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
-                            >
-                              {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                            </button>
-                            <button
-                              onClick={() => handleCopyKey(app.secret_key, app.id)}
-                              className="p-1 hover:bg-slate-100 rounded-md text-slate-450 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
-                            >
-                              {copiedKeyId === app.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                            </button>
-                          </div>
+                          {isDataForSEO ? (
+                            /* DataForSEO Credentials: Login (Email) & Password */
+                            <div className="space-y-1.5">
+                              {/* Email Login */}
+                              <div className="flex items-center gap-2">
+                                <Mail className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                                <span className="text-slate-800 font-semibold">{app.api_login || 'Chưa nhập email'}</span>
+                                {app.api_login && (
+                                  <button
+                                    onClick={() => handleCopyKey(app.api_login || '', `email-${app.id}`)}
+                                    className="p-1 hover:bg-slate-100 rounded-md text-slate-450 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
+                                    title="Copy Email"
+                                  >
+                                    {copiedKeyId === `email-${app.id}` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                              {/* Password */}
+                              <div className="flex items-center gap-2">
+                                <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                <span>
+                                  {isKeyVisible 
+                                    ? app.secret_key 
+                                    : '••••••••••••••••'}
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    if (isKeyVisible) {
+                                      setVisibleKeyIds(visibleKeyIds.filter(id => id !== app.id));
+                                    } else {
+                                      setVisibleKeyIds([...visibleKeyIds, app.id]);
+                                    }
+                                  }}
+                                  className="p-1 hover:bg-slate-100 rounded-md text-slate-450 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
+                                  title={isKeyVisible ? "Ẩn Mật khẩu" : "Hiện Mật khẩu"}
+                                >
+                                  {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  onClick={() => handleCopyKey(app.secret_key, `pass-${app.id}`)}
+                                  className="p-1 hover:bg-slate-100 rounded-md text-slate-450 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
+                                  title="Copy Mật khẩu API"
+                                >
+                                  {copiedKeyId === `pass-${app.id}` ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            /* ShopAIKey Credentials: Secret Key */
+                            <div className="flex items-center gap-2">
+                              <Key className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                              <span>
+                                {isKeyVisible 
+                                  ? app.secret_key 
+                                  : `${app.secret_key.slice(0, 8)}••••••••••••••••••••`}
+                              </span>
+                              <button
+                                onClick={() => {
+                                  if (isKeyVisible) {
+                                    setVisibleKeyIds(visibleKeyIds.filter(id => id !== app.id));
+                                  } else {
+                                    setVisibleKeyIds([...visibleKeyIds, app.id]);
+                                  }
+                                }}
+                                className="p-1 hover:bg-slate-100 rounded-md text-slate-450 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
+                                title={isKeyVisible ? "Ẩn Key" : "Hiện Key"}
+                              >
+                                {isKeyVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+                              <button
+                                onClick={() => handleCopyKey(app.secret_key, app.id)}
+                                className="p-1 hover:bg-slate-100 rounded-md text-slate-450 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
+                                title="Copy Key"
+                              >
+                                {copiedKeyId === app.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                              </button>
+                            </div>
+                          )}
                         </td>
+
+                        {/* Tổng Ngân Sách Column (Quy đổi VNĐ & USD) */}
                         <td className="px-6 py-4 hidden lg:table-cell">
-                          <div className="text-sm font-extrabold text-slate-900">{(Number(app.total_granted || 0) * 3250).toLocaleString('vi-VN')} đ</div>
-                          <div className="text-[11px] font-bold text-slate-500 mt-0.5">
-                            ~ ${Number(app.total_granted || 0).toFixed(2)}
+                          <div className="text-sm font-extrabold text-slate-900">
+                            {appVndGranted.toLocaleString('vi-VN')} đ
+                          </div>
+                          <div className="text-[11px] font-bold text-slate-400 mt-0.5">
+                            ~ ${Number(app.total_granted || 0).toFixed(2)} USD
                           </div>
                         </td>
+
+                        {/* Ngân Sách Sử Dụng Column (Quy đổi VNĐ & USD) */}
                         <td className="px-6 py-4 font-medium text-slate-750">
                           {(() => {
                             const usagePercent = app.total_granted > 0 ? Math.min(100, (app.total_used / app.total_granted) * 100) : 0;
                             const barColorClass = usagePercent < 75 ? 'bg-emerald-500' : usagePercent <= 90 ? 'bg-amber-500' : 'bg-red-500';
                             return (
                               <div className="flex flex-col w-full min-w-37.5 sm:min-w-50">
-                                <div className="flex items-center justify-between text-sm font-extrabold text-slate-900">
+                                <div className="flex items-center justify-between text-xs font-extrabold text-slate-900">
                                   <span>
-                                    {(app.total_used * 3250).toLocaleString('vi-VN')}đ / {(app.total_granted * 3250).toLocaleString('vi-VN')}đ
+                                    {appVndUsed.toLocaleString('vi-VN')}đ / {appVndGranted.toLocaleString('vi-VN')}đ
                                   </span>
                                   <span className="text-slate-600 font-bold">({usagePercent.toFixed(1)}%)</span>
                                 </div>
@@ -672,13 +756,15 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                                   />
                                 </div>
 
-                                <div className="text-[11px] font-bold text-slate-500 mt-1">
-                                  ~ ${Number(app.total_used || 0).toFixed(2)} / ${Number(app.total_granted || 0).toFixed(2)}
+                                <div className="text-[11px] font-bold text-slate-400 mt-1">
+                                  ~ ${Number(app.total_used || 0).toFixed(2)} / ${Number(app.total_granted || 0).toFixed(2)} USD
                                 </div>
                               </div>
                             );
                           })()}
                         </td>
+
+                        {/* Thao tác Menu Dropdown */}
                         <td className="px-6 py-4 text-right relative overflow-visible">
                           <button
                             onClick={(e) => {
@@ -703,8 +789,10 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                                 <button
                                   onClick={() => {
                                     setAppToEdit(app);
+                                    setEditProvider((app.provider as any) || 'shopaikey');
                                     setEditAppName(app.name);
                                     setEditAppUrl(app.app_url || '');
+                                    setEditApiLogin(app.api_login || '');
                                     setEditAppSecretKey('');
                                     setIsEditModalOpen(true);
                                     setActiveMenuId(null);
@@ -759,7 +847,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
 
       </div>
 
-      {/* --- CREATE KEY MODAL --- */}
+      {/* --- CREATE KEY MODAL (Hỗ trợ chọn Provider ShopAIKey & DataForSEO) --- */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
           <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-6 shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col mx-4 max-h-[90vh]">
@@ -771,9 +859,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                 <span>Tạo API Key mới</span>
               </h3>
               <button
-                onClick={() => {
-                  setIsCreateModalOpen(false);
-                }}
+                onClick={() => setIsCreateModalOpen(false)}
                 className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -781,6 +867,48 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
             </div>
 
             <form onSubmit={handleCreateApp} className="space-y-4 flex-1 overflow-y-auto pr-1">
+              {/* Provider Selector */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Nhà cung cấp (Provider)</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setNewProvider('shopaikey')}
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                      newProvider === 'shopaikey'
+                        ? 'border-markee-primary bg-red-50/50 text-slate-900 font-bold ring-1 ring-markee-primary'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs font-bold flex items-center gap-1">
+                        <span>ShopAIKey</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-normal mt-0.5">1 USD = 3,250 VNĐ</div>
+                    </div>
+                    {newProvider === 'shopaikey' && <CheckCircle2 className="w-4 h-4 text-markee-primary shrink-0" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setNewProvider('dataforseo')}
+                    className={`p-3 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                      newProvider === 'dataforseo'
+                        ? 'border-blue-600 bg-blue-50/50 text-slate-900 font-bold ring-1 ring-blue-600'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs font-bold text-blue-700 flex items-center gap-1">
+                        <span>DataForSEO</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-normal mt-0.5">1 USD = 25,400 VNĐ</div>
+                    </div>
+                    {newProvider === 'dataforseo' && <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />}
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Tên ứng dụng</label>
                 <input
@@ -806,18 +934,55 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                 <p className="text-[10px] text-slate-400 mt-1.5">Liên kết trỏ tới website của ứng dụng này.</p>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Secret Key từ nhà cung cấp</label>
-                <input
-                  type="text"
-                  required
-                  value={newAppSecretKey}
-                  onChange={e => setNewAppSecretKey(e.target.value)}
-                  placeholder="Nhập khóa API (sk_...)"
-                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-markee-primary focus:ring-1 focus:ring-markee-primary font-mono"
-                />
-                <p className="text-[10px] text-slate-400 mt-1.5">Dán Secret Key của ShopAIKey vào đây để hệ thống đồng bộ ngân sách tài chính.</p>
-              </div>
+              {/* Dynamic Fields theo Provider */}
+              {newProvider === 'shopaikey' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                    SECRET KEY TỪ NHÀ CUNG CẤP
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newAppSecretKey}
+                    onChange={e => setNewAppSecretKey(e.target.value)}
+                    placeholder="sk-..."
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-markee-primary focus:ring-1 focus:ring-markee-primary font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1.5">Dán Secret Key của ShopAIKey vào đây để hệ thống đồng bộ ngân sách tài chính.</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      API Login (Email)
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={newApiLogin}
+                      onChange={e => setNewApiLogin(e.target.value)}
+                      placeholder="email@company.com"
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-mono"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1.5">Email tài khoản đăng ký trên DataForSEO.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                      API Password
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newAppSecretKey}
+                      onChange={e => setNewAppSecretKey(e.target.value)}
+                      placeholder="Nhập API Password từ trang DataForSEO..."
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-mono"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1.5">Mật khẩu API được cấp trong trang quản trị DataForSEO.</p>
+                  </div>
+                </>
+              )}
 
               <div className="border-t border-slate-100 pt-5 flex items-center justify-end gap-3 shrink-0">
                 <button
@@ -839,10 +1004,10 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
         </div>
       )}
 
-      {/* --- EDIT APP NAME MODAL --- */}
+      {/* --- EDIT APP MODAL --- */}
       {isEditModalOpen && appToEdit && (
         <div className="fixed inset-0 z-[1050] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95 duration-200 mx-4">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95 duration-200 mx-4 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between shrink-0 mb-4 pb-3 border-b border-slate-100">
               <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                 <Edit2 className="w-4 h-4 text-markee-primary" />
@@ -859,7 +1024,45 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
               </button>
             </div>
 
-            <form onSubmit={handleEditApp} className="space-y-4">
+            <form onSubmit={handleEditApp} className="space-y-4 flex-1 overflow-y-auto pr-1">
+              {/* Provider Selector */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Nhà cung cấp (Provider)</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditProvider('shopaikey')}
+                    className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                      editProvider === 'shopaikey'
+                        ? 'border-markee-primary bg-red-50/50 text-slate-900 font-bold ring-1 ring-markee-primary'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs font-bold">ShopAIKey</div>
+                      <div className="text-[10px] text-slate-400 font-normal">3,250 VNĐ/USD</div>
+                    </div>
+                    {editProvider === 'shopaikey' && <CheckCircle2 className="w-4 h-4 text-markee-primary shrink-0" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditProvider('dataforseo')}
+                    className={`p-2.5 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                      editProvider === 'dataforseo'
+                        ? 'border-blue-600 bg-blue-50/50 text-slate-900 font-bold ring-1 ring-blue-600'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs font-bold text-blue-700">DataForSEO</div>
+                      <div className="text-[10px] text-slate-400 font-normal">25,400 VNĐ/USD</div>
+                    </div>
+                    {editProvider === 'dataforseo' && <CheckCircle2 className="w-4 h-4 text-blue-600 shrink-0" />}
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Tên ứng dụng</label>
                 <input
@@ -882,17 +1085,45 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Secret Key mới (Tùy chọn)</label>
-                <input
-                  type="text"
-                  value={editAppSecretKey}
-                  onChange={e => setEditAppSecretKey(e.target.value)}
-                  placeholder="Bỏ trống nếu giữ nguyên khóa cũ"
-                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-markee-primary focus:ring-1 focus:ring-markee-primary font-mono"
-                />
-                <p className="text-[10px] text-slate-400 mt-1.5">Nhập khóa mới nếu muốn cập nhật thông tin gọi API của ứng dụng.</p>
-              </div>
+              {/* Dynamic inputs theo Edit Provider */}
+              {editProvider === 'shopaikey' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Secret Key mới (Tùy chọn)</label>
+                  <input
+                    type="text"
+                    value={editAppSecretKey}
+                    onChange={e => setEditAppSecretKey(e.target.value)}
+                    placeholder="Bỏ trống nếu giữ nguyên khóa cũ"
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-markee-primary focus:ring-1 focus:ring-markee-primary font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1.5">Nhập Secret Key mới nếu muốn cập nhật thông tin ShopAIKey.</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">API Login (Email)</label>
+                    <input
+                      type="email"
+                      required
+                      value={editApiLogin}
+                      onChange={e => setEditApiLogin(e.target.value)}
+                      placeholder="email@company.com"
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">API Password mới (Tùy chọn)</label>
+                    <input
+                      type="text"
+                      value={editAppSecretKey}
+                      onChange={e => setEditAppSecretKey(e.target.value)}
+                      placeholder="Bỏ trống nếu giữ nguyên API Password cũ"
+                      className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-700 bg-white placeholder-slate-400 focus:outline-none focus:border-blue-600 focus:ring-1 focus:ring-blue-600 font-mono"
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="border-t border-slate-100 pt-5 mt-5 flex items-center justify-end gap-3 shrink-0">
                 <button
@@ -917,7 +1148,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
         </div>
       )}
 
-      {/* --- DELETE CONFIRMATION MODAL (Thay thế window.confirm) --- */}
+      {/* --- DELETE CONFIRMATION MODAL --- */}
       {isDeleteModalOpen && appToDelete && (
         <div className="fixed inset-0 z-[1050] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
           <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95 duration-200 mx-4">
@@ -928,7 +1159,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
               <div>
                 <h3 className="text-sm font-bold text-slate-800">Xác nhận xóa API Key?</h3>
                 <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                  Ứng dụng: <span className="font-bold text-slate-700">{appToDelete.name}</span>
+                  Ứng dụng: <span className="font-bold text-slate-700">{appToDelete.name}</span> ({appToDelete.provider === 'dataforseo' ? 'DataForSEO' : 'ShopAIKey'})
                 </p>
               </div>
             </div>
@@ -960,68 +1191,6 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
         </div>
       )}
 
-      {/* --- VIEW SECRET KEY MODAL --- */}
-      {isViewKeyModalOpen && viewAppKeyData && (
-        <div className="fixed inset-0 z-[1050] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95 duration-200 mx-4">
-            <div className="flex items-center justify-between shrink-0 mb-4 pb-3 border-b border-slate-100">
-              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                <span className="w-8 h-8 rounded-lg bg-red-50 text-markee-primary flex items-center justify-center border border-red-100">
-                  <Eye className="w-4 h-4" />
-                </span>
-                <span>Xem API Secret Key</span>
-              </h3>
-              <button
-                onClick={() => {
-                  setIsViewKeyModalOpen(false);
-                  setViewAppKeyData(null);
-                }}
-                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Tên Ứng dụng</span>
-                <div className="text-xs font-bold text-slate-800 mt-1">{viewAppKeyData.name}</div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-[10px] text-slate-400 uppercase font-bold tracking-wider">Secret Key</label>
-                <div className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 p-3 rounded-xl">
-                  <span className="font-mono text-xs text-slate-800 break-all select-all font-semibold">{viewAppKeyData.secret_key}</span>
-                  <button
-                    onClick={() => handleCopyKey(viewAppKeyData.secret_key, "-98")}
-                    className="p-2 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg text-slate-500 hover:text-slate-800 transition-colors cursor-pointer shrink-0"
-                    title="Sao chép Key"
-                  >
-                    {copiedKeyId === "-98" ? (
-                      <Check className="w-4 h-4 text-emerald-600 animate-in zoom-in-50 duration-150" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t border-slate-100 pt-5 mt-5 flex items-center justify-end shrink-0">
-              <button
-                onClick={() => {
-                  setIsViewKeyModalOpen(false);
-                  setViewAppKeyData(null);
-                }}
-                className="px-4 py-2 bg-slate-950 hover:bg-slate-850 text-white rounded-xl text-xs font-bold transition-all border-0 cursor-pointer"
-              >
-                Đóng
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* --- SLIDE-OVER DETAILS LOGS (Xem Lịch Sử) --- */}
       {isHistoryModalOpen && (
         <div className="fixed inset-0 z-[1100] overflow-hidden">
@@ -1040,7 +1209,9 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                     <History className="w-4 h-4 text-markee-primary" />
                     <span>Lịch sử biến động số dư</span>
                   </h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Ứng dụng: <span className="font-bold text-slate-600">{historyAppName}</span></p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    Ứng dụng: <span className="font-bold text-slate-600">{historyAppName}</span> ({historyAppProvider === 'dataforseo' ? 'DataForSEO' : 'ShopAIKey'})
+                  </p>
                 </div>
                 <button
                   onClick={() => setIsHistoryModalOpen(false)}
@@ -1061,7 +1232,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                   <div className="text-center border-x border-slate-200/60">
                     <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wider">Đã dùng (mới nhất)</span>
                     <div className="text-sm font-bold text-slate-800 mt-0.5">
-                      {historyLogs[0] ? (Number(historyLogs[0].total_used || 0) * 3250).toLocaleString('vi-VN') + 'đ' : '0đ'}
+                      {historyLogs[0] ? getVndAmount(Number(historyLogs[0].total_used || 0), historyAppProvider).toLocaleString('vi-VN') + 'đ' : '0đ'}
                     </div>
                     <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
                       ~ ${historyLogs[0] ? Number(historyLogs[0].total_used || 0).toFixed(2) : '0.00'}
@@ -1070,7 +1241,7 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                   <div className="text-center">
                     <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wider">Số dư hiện tại</span>
                     <div className="text-sm font-bold text-emerald-600 mt-0.5">
-                      {historyLogs[0] ? (Number(historyLogs[0].balance || 0) * 3250).toLocaleString('vi-VN') + 'đ' : '0đ'}
+                      {historyLogs[0] ? getVndAmount(Number(historyLogs[0].balance || 0), historyAppProvider).toLocaleString('vi-VN') + 'đ' : '0đ'}
                     </div>
                     <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
                       ~ ${historyLogs[0] ? Number(historyLogs[0].balance || 0).toFixed(2) : '0.00'}
@@ -1104,17 +1275,20 @@ export default function ApiManagementDashboard({ isTab = false }: ApiManagementD
                             const dateStr = log.synced_at 
                               ? new Date(log.synced_at).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) 
                               : '---';
+                            const logUsedVnd = getVndAmount(Number(log.total_used || 0), historyAppProvider);
+                            const logBalanceVnd = getVndAmount(Number(log.balance || 0), historyAppProvider);
+
                             return (
                               <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
                                 <td className="px-4 py-3 text-slate-400 text-[10px]">{dateStr}</td>
                                 <td className="px-4 py-3 text-slate-700">
-                                  <div className="text-xs font-extrabold text-slate-800">{(Number(log.total_used || 0) * 3250).toLocaleString('vi-VN')}đ</div>
+                                  <div className="text-xs font-extrabold text-slate-800">{logUsedVnd.toLocaleString('vi-VN')}đ</div>
                                   <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
                                     ~ ${Number(log.total_used || 0).toFixed(2)}
                                   </div>
                                 </td>
                                 <td className="px-4 py-3 text-right">
-                                  <div className="text-xs font-extrabold text-emerald-600">{(Number(log.balance || 0) * 3250).toLocaleString('vi-VN')}đ</div>
+                                  <div className="text-xs font-extrabold text-emerald-600">{logBalanceVnd.toLocaleString('vi-VN')}đ</div>
                                   <div className="text-[10px] text-slate-500 font-semibold mt-0.5">
                                     ~ ${Number(log.balance || 0).toFixed(2)}
                                   </div>

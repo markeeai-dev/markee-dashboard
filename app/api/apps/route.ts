@@ -37,12 +37,15 @@ export async function GET() {
     const appsWithStats = (appsData || []).map((app) => ({
       id: app.id,
       name: app.name,
+      provider: app.provider || "shopaikey",
+      api_login: app.api_login || null,
       secret_key: app.secret_key || "",
       app_url: app.app_url || null,
       status: app.status || "active",
       total_granted: Number(app.total_granted || 0),
       total_used: Number(app.total_used || 0),
       balance: Number(app.balance || 0),
+      is_low_balance_alerted: app.is_low_balance_alerted || false,
       created_at: app.created_at ? app.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
     }));
 
@@ -53,33 +56,46 @@ export async function GET() {
   }
 }
 
-// 2. POST: Tạo mới App (nhận secret_key thủ công từ client)
+// 2. POST: Tạo mới App (hỗ trợ provider ShopAIKey và DataForSEO)
 export async function POST(request: Request) {
   try {
     const payload = await request.json();
-    const { name, app_url, secret_key } = payload;
+    const { name, app_url, secret_key, provider = "shopaikey", api_login } = payload;
 
     if (!name || !name.trim()) {
       return NextResponse.json({ error: "Tên ứng dụng là bắt buộc" }, { status: 400 });
     }
 
-    if (!secret_key || !secret_key.trim()) {
-      return NextResponse.json({ error: "Secret Key là bắt buộc" }, { status: 400 });
+    if (provider === "dataforseo") {
+      if (!api_login || !api_login.trim()) {
+        return NextResponse.json({ error: "API Login (Email) là bắt buộc cho DataForSEO" }, { status: 400 });
+      }
+      if (!secret_key || !secret_key.trim()) {
+        return NextResponse.json({ error: "API Password là bắt buộc cho DataForSEO" }, { status: 400 });
+      }
+    } else {
+      if (!secret_key || !secret_key.trim()) {
+        return NextResponse.json({ error: "Secret Key là bắt buộc cho ShopAIKey" }, { status: 400 });
+      }
     }
 
     const supabaseAdmin = getSupabaseAdmin();
 
+    const insertPayload: any = {
+      name: name.trim(),
+      provider: provider || "shopaikey",
+      api_login: provider === "dataforseo" && api_login ? api_login.trim() : null,
+      app_url: app_url ? app_url.trim() : null,
+      secret_key: secret_key.trim(),
+      total_granted: 0,
+      total_used: 0,
+      balance: 0,
+      status: "active"
+    };
+
     const { data: newApp, error: insertError } = await supabaseAdmin
       .from("apps")
-      .insert({
-        name: name.trim(),
-        app_url: app_url ? app_url.trim() : null,
-        secret_key: secret_key.trim(),
-        total_granted: 0,
-        total_used: 0,
-        balance: 0,
-        status: "active"
-      })
+      .insert(insertPayload)
       .select("*")
       .single();
 
@@ -93,12 +109,15 @@ export async function POST(request: Request) {
     return NextResponse.json({
       id: newApp.id,
       name: newApp.name,
+      provider: newApp.provider || "shopaikey",
+      api_login: newApp.api_login || null,
       secret_key: newApp.secret_key,
       app_url: newApp.app_url,
       status: newApp.status,
       total_granted: 0,
       total_used: 0,
       balance: 0,
+      is_low_balance_alerted: newApp.is_low_balance_alerted || false,
       created_at: newApp.created_at ? newApp.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
     });
   } catch (error: any) {
@@ -107,11 +126,11 @@ export async function POST(request: Request) {
   }
 }
 
-// 3. PUT: Sửa tên ứng dụng, link web, và secret_key (nếu có)
+// 3. PUT: Sửa thông tin ứng dụng (tên, provider, api_login, link web, secret_key)
 export async function PUT(request: Request) {
   try {
     const payload = await request.json();
-    const { id, name, app_url, secret_key } = payload;
+    const { id, name, app_url, secret_key, provider, api_login } = payload;
 
     if (!id || !name || !name.trim()) {
       return NextResponse.json({ error: "Thiếu id ứng dụng hoặc tên mới" }, { status: 400 });
@@ -125,7 +144,17 @@ export async function PUT(request: Request) {
       app_url: app_url ? app_url.trim() : null,
     };
 
-    // Chỉ cập nhật secret_key mới nếu admin có cung cấp (không bỏ trống)
+    if (provider) {
+      updateData.provider = provider;
+    }
+
+    if (provider === "dataforseo") {
+      updateData.api_login = api_login ? api_login.trim() : null;
+    } else if (provider === "shopaikey") {
+      updateData.api_login = null;
+    }
+
+    // Chỉ cập nhật secret_key mới nếu được cung cấp (không bỏ trống)
     if (secret_key && secret_key.trim()) {
       updateData.secret_key = secret_key.trim();
     }
@@ -145,12 +174,15 @@ export async function PUT(request: Request) {
     return NextResponse.json({
       id: updatedApp.id,
       name: updatedApp.name,
+      provider: updatedApp.provider || "shopaikey",
+      api_login: updatedApp.api_login || null,
       secret_key: updatedApp.secret_key,
       app_url: updatedApp.app_url,
       status: updatedApp.status,
       total_granted: Number(updatedApp.total_granted || 0),
       total_used: Number(updatedApp.total_used || 0),
       balance: Number(updatedApp.balance || 0),
+      is_low_balance_alerted: updatedApp.is_low_balance_alerted || false,
       created_at: updatedApp.created_at ? updatedApp.created_at.split("T")[0] : new Date().toISOString().split("T")[0],
     });
   } catch (error: any) {
