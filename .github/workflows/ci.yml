@@ -1,0 +1,48 @@
+name: CI
+
+# Chạy trên MỖI push/PR: cài deps + build production Y HỆT Dockerfile prod (pnpm, node 22,
+# NEXT_PUBLIC_* qua build-arg). Mục tiêu: bắt lỗi build/cấu hình TRƯỚC khi lên aiskill.markeeai.com
+# — đúng loại lỗi từng làm khách chết vài phút (bake sai URL, thiếu env, build fail).
+#
+# Đây MỚI là phần "CI" (kiểm thử). Phần "CD" (tự deploy khi CI xanh) là job riêng chạy trên
+# self-hosted runner cài NGAY trên VPS aiskill (VPS ở IP nội bộ/VPN, runner đám mây không với tới).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Bật pnpm qua corepack (khớp Dockerfile prod)
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm --version
+
+      - name: Cài dependencies (frozen lockfile — khớp prod, --ignore-scripts như Dockerfile)
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Lint (thông tin — KHÔNG chặn, tránh CI đỏ vì cảnh báo có sẵn)
+        continue-on-error: true
+        run: pnpm run lint
+
+      - name: Build production (GATE CHÍNH — build fail = CI đỏ = KHÔNG được deploy)
+        env:
+          # Placeholder CHỈ để build chạy qua (biến NEXT_PUBLIC_* bake vào bundle lúc build).
+          # KHÔNG phải secret thật — giá trị thật nằm trong .env trên VPS lúc build/deploy prod.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+          NEXT_PUBLIC_GEMINI_API_KEY: ci-placeholder
+          NEXT_PUBLIC_OPENROUTER_API_KEY: ci-placeholder
+          NEXT_PUBLIC_SHOPAIKEY_API_KEY: ci-placeholder
+        run: pnpm build
