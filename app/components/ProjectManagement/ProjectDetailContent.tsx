@@ -5,7 +5,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Edit, Trash2, ChevronDown, ChevronRight, Upload, MoreVertical, Share2 } from 'lucide-react';
+import { Edit, Trash2, ChevronDown, ChevronRight, Upload, MoreVertical, Share2, Plus, X, AlertTriangle } from 'lucide-react';
 import FilePreviewModal from '@/app/components/Shared/FilePreviewModal';
 import { MarkdownRenderer } from '@/app/components/AIChat/MarkdownRenderer';
 import {
@@ -216,6 +216,40 @@ export default function ProjectDetailContent({
   const [isOpenFeatures, setIsOpenFeatures] = useState(true);
   const [uploadingLogId, setUploadingLogId] = useState<number | null>(null);
 
+  // Create Feature Modal states
+  const [isCreateFeatureModalOpen, setIsCreateFeatureModalOpen] = useState(false);
+  const [newFeatureName, setNewFeatureName] = useState('');
+  const [isCreatingFeature, setIsCreatingFeature] = useState(false);
+  const [customerName, setCustomerName] = useState<string>('');
+
+  // Edit Feature Modal states
+  const [isEditFeatureModalOpen, setIsEditFeatureModalOpen] = useState(false);
+  const [featureToEdit, setFeatureToEdit] = useState<string | null>(null);
+  const [editFeatureNameInput, setEditFeatureNameInput] = useState('');
+  const [isUpdatingFeatureName, setIsUpdatingFeatureName] = useState(false);
+
+  // Delete Feature Confirm Dialog states
+  const [isDeleteFeatureConfirmOpen, setIsDeleteFeatureConfirmOpen] = useState(false);
+  const [featureToDelete, setFeatureToDelete] = useState<string | null>(null);
+  const [isDeletingFeature, setIsDeletingFeature] = useState(false);
+
+  useEffect(() => {
+    if (!project?.customer_id) return;
+    async function loadCustomer() {
+      try {
+        const { data } = await supabase
+          .from('customers')
+          .select('name')
+          .eq('id', project.customer_id)
+          .single();
+        if (data?.name) setCustomerName(data.name);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    loadCustomer();
+  }, [project?.customer_id]);
+
   // Feature menu & Knowledge Hub merge states
   const [openFeatureMenu, setOpenFeatureMenu] = useState<string | null>(null);
   const [featureMenuPos, setFeatureMenuPos] = useState<{ f: string; top: number; left: number } | null>(null);
@@ -396,9 +430,16 @@ export default function ProjectDetailContent({
   }
 
   const filteredLogs = useMemo(() => {
-    if (!selectedFeature) return logs;
+    // 1. Lọc bỏ hoàn toàn các Ghost Record (bản ghi định nghĩa tính năng rỗng / status pending không có nội dung)
+    const validLogs = logs.filter(log => {
+      const hasContent = Boolean(log.prompt_content && log.prompt_content.trim().length > 0);
+      const isApprovedOrHasContent = log.status === 'approved' || hasContent;
+      return hasContent && isApprovedOrHasContent;
+    });
+
+    if (!selectedFeature) return validLogs;
     const target = selectedFeature.trim().toLowerCase();
-    return logs.filter(log => {
+    return validLogs.filter(log => {
       const feat = (log.feature_name || log.team_track || '').trim().toLowerCase();
       return feat === target;
     });
@@ -419,8 +460,7 @@ export default function ProjectDetailContent({
         dbFeatures = data.map(d => d.feature_name).filter(Boolean) as string[];
       }
 
-      const logFeatures = logs.map(l => l.feature_name).filter(Boolean) as string[];
-      const uniqueFeatures = Array.from(new Set([...dbFeatures, ...logFeatures]));
+      const uniqueFeatures = Array.from(new Set(dbFeatures));
       setFeatures(uniqueFeatures.sort());
     } catch (e) {
       console.error('Error fetching project features:', e);
@@ -429,7 +469,194 @@ export default function ProjectDetailContent({
 
   useEffect(() => {
     loadProjectFeatures();
-  }, [project?.id, logs]);
+  }, [project?.id]);
+
+  async function handleCreateFeature(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmedName = newFeatureName.trim();
+    if (!trimmedName) {
+      showToast('Vui lòng nhập tên tính năng', 'error');
+      return;
+    }
+
+    setIsCreatingFeature(true);
+    try {
+      // DUY NHẤT 1 LỆNH INSERT VÀO skill_library (Không gửi customer_id vì bảng skill_library không có cột này)
+      const payload = {
+        project_id: Number(project.id),
+        feature_name: trimmedName,
+        skill_type: 'wip',
+        status: 'pending',
+        title: `[Khởi tạo tính năng] ${trimmedName}`,
+        author_id: profile?.email || 'system',
+      };
+
+      const { error } = await supabase.from('skill_library').insert(payload);
+
+      if (error) throw error;
+
+      showToast('Tạo tính năng mới thành công!', 'success');
+      setNewFeatureName('');
+      setIsCreateFeatureModalOpen(false);
+
+      // Cập nhật lại Sidebar và chọn tính năng mới
+      await loadProjectFeatures();
+      setSelectedFeature(trimmedName);
+    } catch (err: any) {
+      console.error('Lỗi khi tạo tính năng mới:', err);
+      showToast(err.message || 'Lỗi khi tạo tính năng mới', 'error');
+    } finally {
+      setIsCreatingFeature(false);
+    }
+  }
+
+  async function handleSaveEditFeatureName(e: React.FormEvent) {
+    e.preventDefault();
+    if (!featureToEdit || !editFeatureNameInput.trim()) return;
+
+    const oldName = featureToEdit.trim();
+    const newName = editFeatureNameInput.trim();
+
+    if (oldName === newName) {
+      setIsEditFeatureModalOpen(false);
+      setFeatureToEdit(null);
+      return;
+    }
+
+    setIsUpdatingFeatureName(true);
+    try {
+      const { error } = await supabase
+        .from('skill_library')
+        .update({ feature_name: newName })
+        .eq('project_id', Number(project.id))
+        .eq('feature_name', oldName);
+
+      if (error) throw error;
+
+      // Tối ưu State: Map trực tiếp logs và features trong local state để đè tên mới, tránh trùng lặp tên cũ & mới
+      setLogs(prev => prev.map(log =>
+        (log.feature_name || '').trim().toLowerCase() === oldName.toLowerCase()
+          ? { ...log, feature_name: newName }
+          : log
+      ));
+
+      setFeatures(prev => Array.from(new Set(
+        prev.map(f => f.trim().toLowerCase() === oldName.toLowerCase() ? newName : f)
+      )).sort());
+
+      if (project.master_summary) {
+        try {
+          const parsed = JSON.parse(project.master_summary);
+          if (Array.isArray(parsed)) {
+            const updatedSummaries = parsed.map((s: any) =>
+              (s.feature_name || '').trim().toLowerCase() === oldName.toLowerCase()
+                ? { ...s, feature_name: newName, featureId: newName }
+                : s
+            );
+            const serialized = JSON.stringify(updatedSummaries);
+            await updateProjectSummary(project.id, serialized);
+            const updatedProj = { ...project, master_summary: serialized };
+            setProject(updatedProj);
+            if (onProjectUpdated) onProjectUpdated(updatedProj);
+          }
+        } catch (e) {
+          console.error('Error updating master summary feature_name:', e);
+        }
+      }
+
+      showToast('Đã cập nhật tên tính năng thành công!', 'success');
+      if (selectedFeature.trim().toLowerCase() === oldName.toLowerCase()) {
+        setSelectedFeature(newName);
+      }
+      setIsEditFeatureModalOpen(false);
+      setFeatureToEdit(null);
+      await loadProjectFeatures();
+    } catch (err: any) {
+      console.error('Lỗi khi đổi tên tính năng:', err);
+      showToast(err.message || 'Lỗi khi đổi tên tính năng', 'error');
+    } finally {
+      setIsUpdatingFeatureName(false);
+    }
+  }
+
+  async function handleConfirmDeleteFeature() {
+    if (!featureToDelete) return;
+    const targetFeature = featureToDelete.trim();
+
+    setIsDeletingFeature(true);
+    try {
+      // 1. TRƯỚC KHI XÓA: Kiểm tra xem feature_name này có chứa bản ghi lịch sử làm việc (status === 'approved' hoặc có markdown_content) hay không
+      const { data: existingRows, error: checkError } = await supabase
+        .from('skill_library')
+        .select('id, status, markdown_content')
+        .eq('project_id', Number(project.id))
+        .eq('feature_name', targetFeature);
+
+      if (checkError) throw checkError;
+
+      const hasWorkHistory = (existingRows || []).some(row => {
+        const hasContent = Boolean(row.markdown_content && row.markdown_content.trim().length > 0);
+        return row.status === 'approved' || hasContent;
+      });
+
+      // 2. NẾU CÓ DỮ LIỆU LÀM VIỆC: Không gọi xóa, báo lỗi cho người dùng
+      if (hasWorkHistory) {
+        showToast('Không thể xóa! Tính năng này đang chứa lịch sử làm việc. Vui lòng xóa các bản ghi WIP trong Lịch sử dự án trước.', 'error', 5000);
+        setIsDeleteFeatureConfirmOpen(false);
+        setFeatureToDelete(null);
+        return;
+      }
+
+      // 3. NẾU KHÔNG CÓ DỮ LIỆU LÀM VIỆC: Tiến hành xóa bản ghi định nghĩa (Ghost Record)
+      const { error } = await supabase
+        .from('skill_library')
+        .delete()
+        .eq('project_id', Number(project.id))
+        .eq('feature_name', targetFeature);
+
+      if (error) throw error;
+
+      // Cập nhật local logs và features state ngay sau khi xóa
+      setLogs(prev => prev.map(log =>
+        (log.feature_name || '').trim().toLowerCase() === targetFeature.toLowerCase()
+          ? { ...log, feature_name: undefined }
+          : log
+      ));
+
+      setFeatures(prev => prev.filter(f => f.trim().toLowerCase() !== targetFeature.toLowerCase()));
+
+      if (project.master_summary) {
+        try {
+          const parsed = JSON.parse(project.master_summary);
+          if (Array.isArray(parsed)) {
+            const updatedSummaries = parsed.filter(
+              (s: any) => (s.feature_name || '').trim().toLowerCase() !== targetFeature.toLowerCase()
+            );
+            const serialized = JSON.stringify(updatedSummaries);
+            await updateProjectSummary(project.id, serialized);
+            const updatedProj = { ...project, master_summary: serialized };
+            setProject(updatedProj);
+            if (onProjectUpdated) onProjectUpdated(updatedProj);
+          }
+        } catch (e) {
+          console.error('Error updating master summary on feature delete:', e);
+        }
+      }
+
+      showToast(`Đã xóa tính năng "${targetFeature}"!`, 'success');
+      if (selectedFeature.trim().toLowerCase() === targetFeature.toLowerCase()) {
+        setSelectedFeature('');
+      }
+      setIsDeleteFeatureConfirmOpen(false);
+      setFeatureToDelete(null);
+      await loadProjectFeatures();
+    } catch (err: any) {
+      console.error('Lỗi khi xóa tính năng:', err);
+      showToast(err.message || 'Lỗi khi xóa tính năng', 'error');
+    } finally {
+      setIsDeletingFeature(false);
+    }
+  }
 
   async function handleDeleteWIP() {
     if (!activeDeleteWIP) return;
@@ -947,14 +1174,28 @@ export default function ProjectDetailContent({
             
             {/* Block 1: TÍNH NĂNG Accordion (POSITIONED FIRST!) */}
             <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 flex flex-col">
-              <button
-                type="button"
-                onClick={() => setIsOpenFeatures(!isOpenFeatures)}
-                className="flex items-center justify-between w-full text-xs font-bold text-markee-muted uppercase tracking-wider cursor-pointer border-0 bg-transparent py-1"
-              >
-                <span>🎯 Tính năng ({features.length})</span>
-                {isOpenFeatures ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-500" />}
-              </button>
+              <div className="flex items-center justify-between w-full py-1">
+                <button
+                  type="button"
+                  onClick={() => setIsOpenFeatures(!isOpenFeatures)}
+                  className="flex items-center gap-1.5 text-xs font-bold text-markee-muted uppercase tracking-wider cursor-pointer border-0 bg-transparent"
+                >
+                  <span>🎯 Tính năng ({features.length})</span>
+                  {isOpenFeatures ? <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" /> : <ChevronRight className="w-4 h-4 shrink-0 text-slate-500" />}
+                </button>
+                <button
+                  type="button"
+                  title="Tạo tính năng mới"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setNewFeatureName('');
+                    setIsCreateFeatureModalOpen(true);
+                  }}
+                  className="p-1 hover:bg-slate-200/80 rounded-md text-slate-600 hover:text-markee-primary transition-colors border-0 bg-transparent cursor-pointer flex items-center justify-center shrink-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
               {isOpenFeatures && (
                 <div className="mt-3 flex flex-col gap-1.5 max-h-56 overflow-y-auto pr-1">
@@ -1076,6 +1317,22 @@ export default function ProjectDetailContent({
                     const f = openFeatureMenu;
                     setOpenFeatureMenu(null);
                     setFeatureMenuPos(null);
+                    setFeatureToEdit(f);
+                    setEditFeatureNameInput(f);
+                    setIsEditFeatureModalOpen(true);
+                  }}
+                  className="w-full px-3 py-2 text-xs text-left font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2 transition-colors cursor-pointer border-0"
+                >
+                  <Edit className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Sửa tên tính năng</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const f = openFeatureMenu;
+                    setOpenFeatureMenu(null);
+                    setFeatureMenuPos(null);
                     const featureLogs = logs.filter(l => (l.feature_name || l.team_track || '').trim().toLowerCase() === f.trim().toLowerCase());
                     setSelectedMergeLogIds(featureLogs.map(l => l.id));
                     setFeatureToMerge(f);
@@ -1084,6 +1341,23 @@ export default function ProjectDetailContent({
                 >
                   <span>🧠</span>
                   <span>Gộp toàn bộ log vào Knowledge Hub</span>
+                </button>
+
+                <div className="border-t border-slate-100 my-1" />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const f = openFeatureMenu;
+                    setOpenFeatureMenu(null);
+                    setFeatureMenuPos(null);
+                    setFeatureToDelete(f);
+                    setIsDeleteFeatureConfirmOpen(true);
+                  }}
+                  className="w-full px-3 py-2 text-xs text-left font-semibold text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors cursor-pointer border-0"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                  <span>Xóa tính năng</span>
                 </button>
               </div>,
               document.body
@@ -2015,6 +2289,208 @@ export default function ProjectDetailContent({
               >
                 <span>🧠</span>
                 <span>{isMergingKnowledge ? 'Đang tổng hợp...' : 'Gộp & cập nhật Knowledge Hub'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Tạo tính năng mới */}
+      {isCreateFeatureModalOpen && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <span className="w-7 h-7 rounded-lg bg-red-50 text-markee-primary flex items-center justify-center border border-red-100 font-bold text-sm">
+                  🎯
+                </span>
+                <span>Tạo tính năng mới</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsCreateFeatureModalOpen(false)}
+                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Auto Context Info (Read-only, NO dropdowns) */}
+            <div className="bg-slate-50 border border-slate-200/70 rounded-xl p-3 text-xs space-y-1.5 text-slate-600">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-400">Dự án hiện tại:</span>
+                <span className="font-bold text-slate-800">{project.name}</span>
+              </div>
+              {customerName && (
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-400">Khách hàng:</span>
+                  <span className="font-bold text-slate-800">{customerName}</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleCreateFeature} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Tên tính năng <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={newFeatureName}
+                  onChange={(e) => setNewFeatureName(e.target.value)}
+                  placeholder="Ví dụ: Tích hợp thanh toán VNPay, Quản lý đơn hàng..."
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-800 bg-white placeholder-slate-400 focus:outline-none focus:border-markee-primary focus:ring-1 focus:ring-markee-primary"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsCreateFeatureModalOpen(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer bg-white"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCreatingFeature || !newFeatureName.trim()}
+                  className="px-4 py-2 bg-markee-primary hover:bg-markee-hover text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer border-0 disabled:opacity-50"
+                >
+                  {isCreatingFeature ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Đang tạo...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tạo tính năng</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Sửa tên tính năng */}
+      {isEditFeatureModalOpen && featureToEdit && (
+        <div className="fixed inset-0 z-[1200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                <Edit className="w-4 h-4 text-markee-primary" />
+                <span>Sửa tên tính năng</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditFeatureModalOpen(false);
+                  setFeatureToEdit(null);
+                }}
+                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600 transition-colors border-0 bg-transparent cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditFeatureName} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Tên tính năng mới <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={editFeatureNameInput}
+                  onChange={(e) => setEditFeatureNameInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-xs text-slate-800 bg-white focus:outline-none focus:border-markee-primary focus:ring-1 focus:ring-markee-primary"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditFeatureModalOpen(false);
+                    setFeatureToEdit(null);
+                  }}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer bg-white"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingFeatureName || !editFeatureNameInput.trim()}
+                  className="px-4 py-2 bg-markee-primary hover:bg-markee-hover text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer border-0 disabled:opacity-50"
+                >
+                  {isUpdatingFeatureName ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Đang lưu...</span>
+                    </>
+                  ) : (
+                    <span>Lưu thay đổi</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog Xác nhận Xóa tính năng */}
+      {isDeleteFeatureConfirmOpen && featureToDelete && (
+        <div className="fixed inset-0 z-[1250] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0 border border-red-100">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">Xác nhận xóa tính năng?</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Tính năng: <span className="font-bold text-slate-700">{featureToDelete}</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-red-50/60 border border-red-100 rounded-xl p-3 text-xs text-red-700 font-medium">
+              Cảnh báo: Bạn có chắc chắn muốn xóa tính năng này không? Toàn bộ dữ liệu liên quan có thể bị mất.
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeleteFeatureConfirmOpen(false);
+                  setFeatureToDelete(null);
+                }}
+                className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer bg-white"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteFeature}
+                disabled={isDeletingFeature}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer border-0 disabled:opacity-50"
+              >
+                {isDeletingFeature ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Đang xóa...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Đồng ý Xóa</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

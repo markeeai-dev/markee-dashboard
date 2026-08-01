@@ -1,7 +1,10 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Activity, Wifi, WifiOff, Monitor, X, Copy, Check, Download, AppWindow } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Activity, Wifi, WifiOff, Monitor } from 'lucide-react';
 import {
   fetchVpsInstances,
   updateVpsStatus,
@@ -62,6 +65,13 @@ function RdpBody({ vps, fullSize = false }: { vps: VpsInstance; fullSize?: boole
 
 // ── ExpandModal ───────────────────────────────────────────────────────────────
 function ExpandModal({ vps, onClose }: { vps: VpsInstance; onClose: () => void }) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+  }, []);
+
   const isRdp = vps.protocol === 'RDP';
 
   const glowStyle = isRdp
@@ -70,9 +80,13 @@ function ExpandModal({ vps, onClose }: { vps: VpsInstance; onClose: () => void }
 
   const headerBg = isRdp ? 'bg-purple-800' : 'bg-emerald-800';
 
-  return (
+  // Đợi Client render xong mới bắn Portal ra document.body để tránh lỗi Next.js SSR
+  if (!mounted) return null;
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+      // Đã nâng z-index lên 99999 để đảm bảo đè chết mọi Sidebar/Header
+      className="fixed inset-0 z-99999 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
       onClick={onClose}
     >
       <div
@@ -112,7 +126,8 @@ function ExpandModal({ vps, onClose }: { vps: VpsInstance; onClose: () => void }
           <TerminalBody vps={vps} fullSize />
         )}
       </div>
-    </div>
+    </div>,
+    document.body // Bắn thẳng HTML ra ngoài thẻ <body>
   );
 }
 
@@ -226,6 +241,7 @@ export default function VpsMonitor() {
   }, [runPingCheck]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
     const pingInterval = setInterval(() => {
       setVpsList((currentList) => {

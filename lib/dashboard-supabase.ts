@@ -653,6 +653,7 @@ export interface AISession {
   department_id?: number;
   team_id?: number;
   feature_name?: string | null;
+  status?: string | null;
 }
 
 export async function fetchAllUsers(): Promise<AppUser[]> {
@@ -779,7 +780,11 @@ export async function fetchProjects(
 
 async function enrichProjectData(projectsData: Record<string, unknown>[]): Promise<Project[]> {
 
-  const { data: wips, error: wipsError } = await supabase.from("skill_library").select("project_id, author_id, created_at").eq("skill_type", "wip");
+  const { data: wips, error: wipsError } = await supabase
+    .from("skill_library")
+    .select("project_id, author_id, created_at, status")
+    .eq("skill_type", "wip")
+    .eq("status", "approved");
 
   const projectCounts = new Map<number, number>();
   const projectMemberEmails = new Map<number, Set<string>>();
@@ -788,7 +793,7 @@ async function enrichProjectData(projectsData: Record<string, unknown>[]): Promi
 
   if (!wipsError && wips) {
     wips.forEach((s) => {
-      if (s.project_id) {
+      if (s.project_id && s.status === "approved") {
         projectCounts.set(s.project_id, (projectCounts.get(s.project_id) || 0) + 1);
 
         if (s.author_id) {
@@ -1143,7 +1148,7 @@ export async function updateProjectSummary(projectId: number, summaryJson: strin
 export async function fetchCurationStats(): Promise<{ rawSessions: number; wipDrafts: number; knowledgeHub: number }> {
   const { count: sessionCount } = await supabase.from("ai_sessions").select("*", { count: "exact", head: true });
 
-  const { count: wipCount } = await supabase.from("skill_library").select("*", { count: "exact", head: true }).eq("skill_type", "wip");
+  const { count: wipCount } = await supabase.from("skill_library").select("*", { count: "exact", head: true }).eq("skill_type", "wip").eq("status", "approved");
 
   const { data: projects } = await supabase.from("projects").select("master_summary");
 
@@ -1225,6 +1230,7 @@ export async function fetchProjectWIPsForUser(projectId: number, authorId: strin
     team_track: row.team_track,
     feature_name: row.feature_name,
     attached_file: row.attached_file,
+    status: row.status,
   }));
 
   const total = count || 0;
@@ -1260,6 +1266,7 @@ export async function fetchProjectWIPs(projectId: number, page = 0, pageSize = 2
     team_track: row.team_track,
     feature_name: row.feature_name,
     attached_file: row.attached_file,
+    status: row.status,
   }));
 
   const total = count || 0;
@@ -1297,6 +1304,7 @@ export async function fetchMyWIPs(email: string): Promise<AISession[]> {
     team_track: row.team_track,
     feature_name: row.feature_name,
     attached_file: row.attached_file,
+    status: row.status,
   }));
 }
 
