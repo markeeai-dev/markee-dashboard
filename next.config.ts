@@ -24,11 +24,6 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  // Lint KHÔNG chặn build. Team cố ý dùng `any` + eslint-disable theo dòng và vẫn ship;
-  // `next build` mặc định coi lỗi ESLint là fail -> chính Dockerfile prod (`pnpm build`) cũng
-  // build KHÔNG nổi trên main hiện tại. Bật cờ này để build phản ánh "app có deploy được không",
-  // vẫn GIỮ kiểm tra TypeScript type (type error vẫn làm build fail). Lint chạy riêng (job CI).
-  eslint: { ignoreDuringBuilds: true },
   async headers() {
     return [
       {
