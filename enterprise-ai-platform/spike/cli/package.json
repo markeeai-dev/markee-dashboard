@@ -1,0 +1,11 @@
+{
+  "name": "company-ai",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "company-ai": "./bin/company-ai.js"
+  },
+  "dependencies": {
+    "cross-spawn": "^7.0.3"
+  }
+}

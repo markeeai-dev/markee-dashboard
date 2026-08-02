@@ -1,0 +1,200 @@
+'use strict';
+const os = require('os');
+// cross-spawn thay vì child_process.spawn thẳng — spawn thẳng .cmd shim của npm trên Windows
+// bị EINVAL (không shell) hoặc bị vỡ quoting (shell:true + args mảng, phát hiện thật khi
+// test: '-A' của 1 lệnh git bị hiểu sai). cross-spawn xử lý đúng việc này trên cả 2 nền tảng,
+// đây là lý do hợp lý để thêm 1 dependency nhỏ, không phải phá nguyên tắc "không framework".
+const spawn = require('cross-spawn');
+const {
+  readGlobalConfig,
+  findGitRoot,
+  readProjectYaml,
+  readSessionJson,
+  writeSessionJson,
+} = require('../config');
+const { ControlPlaneClient } = require('../api');
+const git = require('../git');
+const render = require('../render');
+const { ask, askYesNo } = require('../prompt');
+
+// Phát hiện thật ở Bước 0 (MVP0-SPIKE.md): Claude Code CLI mặc định gửi alias model rút
+// gọn mà 9Router không hiểu (404) — company-ai BẮT BUỘC tự truyền đúng id 9Router.
+const DEFAULT_MODEL = 'cc/claude-sonnet-5';
+
+async function pickTask(client, projectId, taskArg) {
+  const { tasks } = await client.listTasks(projectId);
+  if (!tasks.length) throw new Error(`Project ${projectId} chưa có task nào trên Control Plane.`);
+
+  if (taskArg) {
+    const found = tasks.find((t) => t.id === taskArg);
+    if (!found) throw new Error(`Không tìm thấy task_id=${taskArg} trong project ${projectId}.`);
+    return found;
+  }
+
+  if (tasks.length === 1) return tasks[0];
+
+  console.log('Chọn task:');
+  tasks.forEach((t, i) => console.log(`  ${i + 1}. [${t.id}] ${t.title} (${t.status})`));
+  const answer = await ask('Số thứ tự task');
+  const idx = parseInt(answer, 10) - 1;
+  if (Number.isNaN(idx) || !tasks[idx]) throw new Error('Lựa chọn không hợp lệ.');
+  return tasks[idx];
+}
+
+async function run(args, tool) {
+  const globalConfig = readGlobalConfig();
+  if (!globalConfig) throw new Error('Chưa đăng nhập — chạy `company-ai login` trước.');
+
+  const gitRoot = findGitRoot(process.cwd());
+  if (!gitRoot) throw new Error('Không tìm thấy git repo.');
+
+  const projectYaml = readProjectYaml(gitRoot);
+  if (!projectYaml || !projectYaml.project_id) {
+    throw new Error('Chưa có .center-ai/project.yaml — chạy `company-ai init` trước.');
+  }
+
+  const client = new ControlPlaneClient(globalConfig.control_plane_url, globalConfig.employee_token);
+
+  const task = await pickTask(client, projectYaml.project_id, args.task);
+  console.log(`\nProject: ${projectYaml.project_id}\nTask: [${task.id}] ${task.title}\n`);
+
+  // Task claim/lease (Q20, MVP2 hạng mục 4) — KHÔNG khoá cứng, chỉ cảnh báo rõ ràng ai đang
+  // giữ, quyết định cuối vẫn ở người dùng. --yes bỏ qua hỏi (automation), người dùng thật ở
+  // TTY vẫn được hỏi đầy đủ.
+  try {
+    await client.claimTask(task.id);
+  } catch (err) {
+    if (err.status === 409) {
+      const until = err.body.lease_until ? new Date(err.body.lease_until).toLocaleString('vi-VN') : '?';
+      console.log(`⚠ Task ${task.id} đang được ${err.body.claimed_by_name} giữ (lease đến ${until}).`);
+      const proceed = args.yes === true || (await askYesNo('Vẫn muốn tiếp tục làm task này? (có thể trùng việc với người đó)', false));
+      if (!proceed) {
+        console.log('Đã dừng — không mở Claude Code.');
+        return;
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  const wsResult = await client.createWorkSession(task.id);
+  console.log(
+    wsResult.resumed
+      ? `Tiếp tục Work Session ${wsResult.work_session_id} (chưa quá 6h không hoạt động).`
+      : `Tạo Work Session mới: ${wsResult.work_session_id}`
+  );
+
+  // Context bundle -> .center-ai/generated/ (Q24.6) — không đụng gì ngoài thư mục này.
+  // Control Plane render sẵn cả 5 file (context-render.js); CLI chỉ ghi xuống đĩa. Dashboard
+  // gọi đúng endpoint này để hiện "AI đang biết gì" -> không thể lệch với thứ AI thật sự đọc.
+  const bundle = await client.contextBundle(task.id);
+  render.writeBundle(gitRoot, bundle.files);
+  const st = bundle.stats;
+  console.log(`Đã ghi context vào .center-ai/generated/ (${st.notes_after_dedup}/${st.notes_total} ghi chú sau khi lọc trùng).`);
+
+  // Git snapshot — nguồn liên kết chính (Q24.8), không dựa trailer.
+  const existingSession = readSessionJson(gitRoot);
+  const startedHeadCommit =
+    existingSession && existingSession.work_session_id === wsResult.work_session_id
+      ? existingSession.started_head_commit
+      : git.getHeadCommit(gitRoot);
+  const branch = git.getBranch(gitRoot);
+
+  const tsResult = await client.createToolSession(wsResult.work_session_id, { tool, machineId: os.hostname() });
+  console.log(`Tool Session mới: ${tsResult.tool_session_id}\n`);
+
+  writeSessionJson(gitRoot, {
+    work_session_id: wsResult.work_session_id,
+    tool_session_id: tsResult.tool_session_id,
+    task_id: task.id,
+    project_id: projectYaml.project_id,
+    seat_id: wsResult.seat_id,
+    started_head_commit: startedHeadCommit,
+    branch,
+  });
+
+  // Phát hiện va chạm file (Q20) — chỉ cảnh báo, không chặn (đúng dữ liệu từ checkpoint gần
+  // nhất của các Work Session active khác trên cùng task, không phải lock cứng theo file).
+  try {
+    const { overlaps } = await client.overlapCheck(task.id);
+    if (overlaps.length) {
+      console.log('⚠ Có thể trùng vùng sửa (file đang được nhiều người sửa trong session active khác):');
+      for (const o of overlaps) console.log(`  - ${o.file}: ${o.employees.map((e) => e.full_name).join(', ')}`);
+    }
+  } catch {
+    // overlap-check chỉ là cảnh báo phụ — lỗi ở đây không được chặn company-ai claude
+  }
+
+  const model = args.model ? (args.model.startsWith('cc/') ? args.model : `cc/${args.model}`) : DEFAULT_MODEL;
+  const binName = tool === 'codex' ? 'codex' : 'claude';
+
+  const child = spawn(binName, ['--model', model, ...(args._extra || [])], {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      ANTHROPIC_BASE_URL: tsResult.gateway_base_url,
+      ANTHROPIC_AUTH_TOKEN: tsResult.gateway_token,
+      // CENTER_AI_* chỉ để log/debug cục bộ — Adapter KHÔNG đọc các biến này để xác định
+      // identity, chỉ tin claim đã ký trong ANTHROPIC_AUTH_TOKEN (security contract Q24.2).
+      CENTER_AI_EMPLOYEE_ID: globalConfig.employee_id,
+      CENTER_AI_PROJECT_ID: projectYaml.project_id,
+      CENTER_AI_TASK_ID: task.id,
+      CENTER_AI_WORK_SESSION_ID: wsResult.work_session_id,
+    },
+  });
+
+  // Phát hiện thật (kiểm tra thủ công) — SIGINT gửi vào tiến trình wrapper KHÔNG luôn truyền
+  // đúng xuống tiến trình con qua cross-spawn trên Windows/Git Bash, khiến `claude`/`codex` tiếp
+  // tục chạy trong khi wrapper coi như đã bị ngắt. Ngay cả khi truyền được, hoặc khi wrapper bị
+  // crash/kill đột ngột, KHÔNG có bước dọn nào chạy — Tool Session bị bỏ lại `ended_at` NULL,
+  // không có checkpoint. Không phải lỗ hổng bảo mật (token tự hết hạn đúng TTL, seat vẫn cô lập
+  // đúng) nhưng mất thông tin quan trọng cho handoff. Bắt SIGINT/SIGTERM ngay trên tiến trình
+  // wrapper (Node tự xử lý được tín hiệu này một cách đáng tin cậy trên mọi nền tảng, không phụ
+  // thuộc việc forward xuống tiến trình con) để luôn chạy đúng bước dọn trước khi thoát.
+  let cleanedUp = false;
+  async function cleanup(trigger) {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    try {
+      const headAfter = git.getHeadCommit(gitRoot);
+      const filesChanged = git.getChangedFiles(startedHeadCommit, headAfter, gitRoot);
+      await client.createCheckpoint(tsResult.tool_session_id, {
+        trigger: 'tool_close',
+        completed: [],
+        remaining: trigger === 'tool_close' ? [] : [`Phiên bị ngắt đột ngột (${trigger}) — có thể còn việc dở dang chưa ghi lại.`],
+        files_changed: filesChanged,
+        git_commit: headAfter,
+        git_branch: git.getBranch(gitRoot),
+      });
+      await client.endToolSession(tsResult.tool_session_id);
+    } catch (err) {
+      console.error('Lỗi khi dọn dẹp Tool Session:', err.message);
+    }
+  }
+
+  let interrupted = null;
+  const onSignal = (signal) => {
+    interrupted = signal;
+    child.kill('SIGKILL'); // cross-spawn không đảm bảo forward tín hiệu xuống con trên Windows
+  };
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+
+  await new Promise((resolve, reject) => {
+    child.on('exit', resolve);
+    child.on('error', reject);
+  });
+
+  // Tool thoát: đóng Tool Session, checkpoint tự động — Work Session VẪN active,
+  // KHÔNG tạo handoff (chỉ `company-ai end` mới làm việc đó — Q24.2/24.5).
+  await cleanup(interrupted || 'tool_close');
+
+  if (interrupted) {
+    console.log(`\nTool Session đã bị ngắt (${interrupted}) — đã ghi checkpoint đánh dấu rõ, Work Session vẫn active.`);
+  } else {
+    console.log('\nTool Session đã đóng (checkpoint tự động đã ghi). Work Session vẫn active.');
+  }
+  console.log('Chạy `company-ai end` khi đã xong hẳn việc để tạo handoff cho người tiếp theo.');
+}
+
+module.exports = { run };

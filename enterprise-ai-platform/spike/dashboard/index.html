@@ -1,0 +1,1225 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Center AI — Ops Dashboard</title>
+<style>
+  /* Giữ NGUYÊN tên biến CSS cũ (--bg/--panel/--border/--text/--muted/--accent/--ok/--warn/
+     --danger) — các hàm render dùng inline style trỏ thẳng vào chúng, đổi tên là vỡ hết.
+     Chỉ đổi GIÁ TRỊ + thêm biến mới, nên toàn bộ 11 tab tự đẹp lên mà không phải sửa JS. */
+  :root {
+    --bg:#0b0e14; --surface:#111621; --panel:#141a26; --panel-hi:#19202e;
+    --border:#222b3d; --border-hi:#2e3a52;
+    --text:#e9edf5; --muted:#8792a8; --faint:#5d6880;
+    --accent:#4c8dff; --accent-hi:#6ba1ff; --accent-dim:rgba(76,141,255,.12);
+    --ok:#3ecf8e; --warn:#e6a338; --danger:#f0616d;
+    --radius:10px; --radius-sm:6px;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sidebar-w: 224px;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body { margin:0; font-family:var(--font); background:var(--bg); color:var(--text);
+         font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased; }
+  ::selection { background:var(--accent-dim); }
+
+  /* ---- Vỏ ứng dụng: sidebar cố định + vùng nội dung cuộn riêng ----
+     Trước đây 11 tab xếp ngang bị TRÀN/cắt mất ở cửa sổ hẹp (lỗi thật, thấy trên ảnh chụp
+     màn hình của người dùng). Sidebar dọc chứa thoải mái, không bao giờ tràn dù thêm tab. */
+  #app { display:grid; grid-template-columns:var(--sidebar-w) 1fr; height:100vh; }
+
+  #sidebar { background:var(--surface); border-right:1px solid var(--border);
+             display:flex; flex-direction:column; overflow-y:auto; }
+  .brand { padding:18px 18px 14px; border-bottom:1px solid var(--border); }
+  .brand-name { font-size:15px; font-weight:650; letter-spacing:-.01em; display:flex; align-items:center; gap:8px; }
+  .brand-dot { width:8px; height:8px; border-radius:50%; background:var(--accent);
+               box-shadow:0 0 0 3px var(--accent-dim); flex:none; }
+  .brand-sub { font-size:11px; color:var(--faint); margin-top:4px; letter-spacing:.02em; }
+  .nav-group { padding:14px 10px 0; }
+  .nav-group-label { font-size:10px; color:var(--faint); text-transform:uppercase;
+                     letter-spacing:.09em; font-weight:600; padding:0 8px 6px; }
+  nav button { display:flex; align-items:center; gap:9px; width:100%; text-align:left;
+               background:none; border:none; color:var(--muted); padding:7px 8px;
+               border-radius:var(--radius-sm); cursor:pointer; font-size:13px;
+               font-family:inherit; margin-bottom:1px; transition:background .12s, color .12s; }
+  nav button:hover { background:var(--panel); color:var(--text); }
+  nav button.active { background:var(--accent-dim); color:var(--accent-hi); font-weight:550; }
+  nav button .ico { width:15px; text-align:center; flex:none; opacity:.85; font-size:12px; }
+  .sidebar-foot { margin-top:auto; padding:12px 14px; border-top:1px solid var(--border);
+                  font-size:12px; color:var(--faint); }
+  .sidebar-foot .who-name { color:var(--text); font-weight:550; font-size:13px; }
+  .sidebar-foot .who-role { display:inline-block; font-size:10px; padding:1px 6px; border-radius:4px;
+                            background:var(--panel-hi); color:var(--muted); margin-left:6px;
+                            text-transform:uppercase; letter-spacing:.05em; }
+
+  #mainpane { overflow-y:auto; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px;
+            padding:0 26px; height:56px; border-bottom:1px solid var(--border);
+            position:sticky; top:0; background:rgba(11,14,20,.85);
+            backdrop-filter:blur(8px); z-index:5; }
+  .topbar h1 { font-size:15px; margin:0; font-weight:600; letter-spacing:-.01em; }
+  main { padding:22px 26px 60px; max-width:1240px; }
+
+  /* ---- Panel / bảng / pill: dùng chung bởi cả 11 tab ---- */
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius);
+           padding:16px 18px; margin-bottom:14px; }
+  .panel h2 { font-size:12px; margin:0 0 12px; color:var(--muted); text-transform:uppercase;
+              letter-spacing:.07em; font-weight:600; }
+
+  /* Bảng rộng tự cuộn NGANG trong khung của nó — không bao giờ để cả trang trượt ngang.
+     KHÔNG dùng white-space:nowrap: các bảng như Project Memory/Pattern Library có ô nội dung
+     dài, ép 1 dòng sẽ tạo bảng rộng vô lý phải kéo ngang mới đọc được. Cho chữ xuống dòng tự
+     nhiên, chỉ cuộn khi thật sự không đủ chỗ. */
+  .panel table { display:block; overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px;
+          font-variant-numeric:tabular-nums; }
+  th, td { text-align:left; padding:9px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--faint); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  tbody tr:last-child td { border-bottom:none; }
+  tbody tr:hover td { background:var(--panel-hi); }
+
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px;
+          font-weight:550; white-space:nowrap; }
+  .pill.ok { background:rgba(62,207,142,.13); color:var(--ok); box-shadow:inset 0 0 0 1px rgba(62,207,142,.2); }
+  .pill.warn { background:rgba(230,163,56,.13); color:var(--warn); box-shadow:inset 0 0 0 1px rgba(230,163,56,.2); }
+  .pill.danger { background:rgba(240,97,109,.13); color:var(--danger); box-shadow:inset 0 0 0 1px rgba(240,97,109,.2); }
+
+  .home-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; align-items:start; }
+  @media (max-width:1000px) { .home-grid { grid-template-columns:1fr; } }
+  .empty { color:var(--faint); font-size:13px; padding:6px 0; }
+
+  /* ---- Dải số tổng quan trên Trang chủ: tóm tắt trước, chi tiết sau ---- */
+  .stats { display:grid; grid-template-columns:repeat(4, 1fr); gap:14px; margin-bottom:14px; }
+  @media (max-width:1000px) { .stats { grid-template-columns:repeat(2, 1fr); } }
+  @media (max-width:520px) { .stats { grid-template-columns:1fr; } }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:15px 16px; }
+  .stat-label { font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.08em; font-weight:600; }
+  .stat-value { font-size:26px; font-weight:640; margin:6px 0 2px; letter-spacing:-.02em;
+                font-variant-numeric:tabular-nums; line-height:1.1; }
+  .stat-sub { font-size:11px; color:var(--faint); }
+  .stat.accent .stat-value { color:var(--accent-hi); }
+
+  /* ---- Tab "AI đang biết gì": hiện đúng nội dung 5 file .md Claude Code đọc ---- */
+  .mdfile { border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:12px; }
+  .mdfile-head { display:flex; align-items:center; justify-content:space-between; gap:10px;
+                 padding:9px 13px; background:var(--panel-hi); border-bottom:1px solid var(--border); }
+  .mdfile-name { font-family:var(--mono); font-size:12px; font-weight:600; color:var(--accent-hi); }
+  .mdfile-desc { font-size:11px; color:var(--faint); }
+  .mdfile pre { margin:0; padding:13px; font-family:var(--mono); font-size:12px; line-height:1.65;
+                color:var(--text); background:var(--bg); overflow-x:auto;
+                white-space:pre-wrap; word-break:break-word; }
+  .mdfile pre.placeholder { color:var(--faint); font-style:italic; }
+  .notice { background:var(--accent-dim); border:1px solid rgba(76,141,255,.25); border-radius:var(--radius);
+            padding:11px 14px; font-size:12px; color:var(--text); margin-bottom:14px; line-height:1.6; }
+
+  /* Dòng sự kiện/ghi chú trên Trang chủ */
+  .feed-item { padding:9px 0; border-bottom:1px solid var(--border); }
+  .feed-item:last-child { border-bottom:none; }
+  .feed-item:first-child { padding-top:0; }
+  .feed-main { font-size:13px; }
+  .feed-meta { font-size:11px; color:var(--faint); margin-top:3px; }
+
+  /* ---- Form controls (các render function dùng inline style trỏ vào biến trên, phần này
+         lo cho control không có inline style) ---- */
+  input, select, textarea { font-family:inherit; font-size:13px; color:var(--text);
+    background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm);
+    padding:7px 10px; outline:none; transition:border-color .12s, box-shadow .12s; }
+  input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-dim); }
+  input::placeholder { color:var(--faint); }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+    outline:2px solid var(--accent); outline-offset:2px; }
+
+  .btn { background:var(--accent); color:#fff; border:none; padding:8px 15px;
+         border-radius:var(--radius-sm); cursor:pointer; font-size:13px; font-weight:550;
+         font-family:inherit; transition:background .12s; }
+  .btn:hover { background:var(--accent-hi); }
+  code { background:var(--bg); border:1px solid var(--border); padding:1px 5px;
+         border-radius:4px; font-size:12px; font-family:var(--mono); color:var(--muted); }
+  a.linkbtn { color:var(--accent); text-decoration:none; font-size:12px; cursor:pointer; font-weight:550; }
+  a.linkbtn:hover { color:var(--accent-hi); text-decoration:underline; }
+
+  /* ---- Màn đăng nhập ---- */
+  #loginScreen { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+  .login-card { width:100%; max-width:380px; background:var(--panel); border:1px solid var(--border);
+                border-radius:14px; padding:28px; }
+  .login-brand { display:flex; align-items:center; gap:9px; font-size:17px; font-weight:650;
+                 margin-bottom:4px; letter-spacing:-.01em; }
+  .login-sub { color:var(--faint); font-size:12px; margin-bottom:22px; }
+  #loginScreen input { width:100%; margin:6px 0 14px; padding:9px 11px; }
+  #loginScreen label { font-size:12px; color:var(--muted); font-weight:550; }
+  #loginScreen .btn { width:100%; padding:10px; margin-top:4px; }
+  #loginError { color:var(--danger); font-size:12px; min-height:17px; }
+
+  @media (max-width:760px) {
+    #app { grid-template-columns:1fr; height:auto; }
+    #sidebar { border-right:none; border-bottom:1px solid var(--border); }
+    .nav-group { display:flex; flex-wrap:wrap; gap:4px; padding:8px; }
+    .nav-group-label { width:100%; }
+    nav button { width:auto; }
+    .sidebar-foot { margin-top:0; }
+    main { padding:16px; }
+    .topbar { padding:0 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-brand"><span class="brand-dot"></span> Center AI</div>
+    <div class="login-sub">Enterprise AI Operations · Pilot</div>
+    <!-- Mặc định "/api" = đường same-origin (nginx proxy sang Control Plane). Trước đây trỏ
+         thẳng https://cp.valeron.tech — request cross-origin, hay bị ad-blocker/extension/
+         firewall công ty chặn thẳng ở tầng mạng, báo "Failed to fetch" dù server hoàn toàn
+         bình thường (gặp thật). Vẫn sửa được thành URL tuyệt đối nếu cần trỏ Control Plane khác. -->
+    <label>Control Plane URL</label>
+    <input id="cpUrl" value="/api" />
+    <label>Email công ty</label>
+    <input id="cpEmail" placeholder="thanh@company.local" />
+    <label>Mã pilot access code</label>
+    <input id="cpAccessCode" type="password" placeholder="do admin cấp riêng" />
+    <div id="loginError"></div>
+    <button class="btn" onclick="doLogin()">Đăng nhập</button>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-name"><span class="brand-dot"></span> Center AI</div>
+      <div class="brand-sub">Enterprise AI Operations</div>
+    </div>
+    <nav id="tabs"></nav>
+    <div class="sidebar-foot">
+      <div><span class="who-name" id="whoami"></span><span class="who-role" id="whorole"></span></div>
+      <a class="linkbtn" onclick="logout()">Đăng xuất</a>
+    </div>
+  </aside>
+  <div id="mainpane">
+    <div class="topbar">
+      <h1 id="pagetitle"></h1>
+      <div style="font-size:12px;color:var(--faint);" id="pagehint"></div>
+    </div>
+    <main id="content"></main>
+  </div>
+</div>
+
+<script>
+// `group` + `hint` thêm cho điều hướng dễ quét (11 mục phẳng xếp ngang trước đây vừa khó
+// tìm vừa TRÀN mất chữ ở cửa sổ hẹp — lỗi thật). `id`/`label`/`render`/`adminOnly` giữ
+// nguyên, switchTab/boot vẫn dùng đúng như cũ.
+const TABS = [
+  { id: 'home', label: 'Trang chủ', ico: '◈', group: 'Tổng quan', hint: 'Ai đang làm gì, cần tiếp quản gì', render: renderHome },
+  { id: 'inbox', label: 'Inbox', ico: '▤', group: 'Tổng quan', hint: 'Việc liên quan tới bạn hôm nay', render: renderInbox },
+  { id: 'timeline', label: 'Timeline', ico: '◷', group: 'Tổng quan', hint: 'Dòng sự kiện của dự án theo thời gian', render: renderTimeline },
+  { id: 'projects', label: 'Projects & Tasks', ico: '▦', group: 'Công việc', hint: 'Tạo task, giao người, đổi trạng thái', render: renderProjects },
+  { id: 'sessions', label: 'Active Sessions', ico: '●', group: 'Công việc', hint: 'Phiên làm việc AI đang mở', render: renderSessions },
+  { id: 'handoffs', label: 'Handoffs', ico: '⇄', group: 'Công việc', hint: 'Bàn giao — thứ giúp người sau hiểu việc trong vài phút', render: renderHandoffs },
+  { id: 'bundle', label: 'AI đang biết gì', ico: '◎', group: 'Tri thức', hint: 'Chính xác nội dung Claude Code đọc mỗi phiên — không phải bản mô phỏng', render: renderBundle },
+  { id: 'memory', label: 'Project Memory', ico: '◫', group: 'Tri thức', hint: 'Requirement, quyết định kỹ thuật, ghi chú BA', render: renderMemory },
+  { id: 'patterns', label: 'Pattern Library', ico: '✦', group: 'Tri thức', hint: 'Giải pháp tổng quát đã ẩn danh hoá, dùng lại cho dự án khác', render: renderPatternLibrary },
+  { id: 'seats', label: 'Seats & Employees', ico: '◉', group: 'Quản trị', hint: 'Cấp/thu hồi seat AI cho nhân viên', render: renderSeats },
+  { id: 'aihistory', label: 'Lịch sử AI', ico: '❝', group: 'Quản trị', hint: 'Dev đã nhắn gì với AI, AI trả lời gì — mỗi lần xem đều được ghi log', render: renderAiHistory, adminOnly: true },
+  { id: 'governance', label: 'Governance', ico: '◆', group: 'Quản trị', hint: 'Bảo mật, phân loại dữ liệu, duyệt truy cập', render: renderGovernance, adminOnly: true },
+  { id: 'kpi', label: 'KPI', ico: '▲', group: 'Quản trị', hint: 'Adoption / Efficiency / Collaboration', render: renderKpi, adminOnly: true },
+];
+let state = { cpUrl: '', token: '', who: null, active: 'home' };
+
+function loadSession() {
+  try { return JSON.parse(localStorage.getItem('centerai_dashboard_session') || 'null'); } catch { return null; }
+}
+function saveSession() {
+  localStorage.setItem('centerai_dashboard_session', JSON.stringify({ cpUrl: state.cpUrl, token: state.token, who: state.who }));
+}
+function logout() {
+  localStorage.removeItem('centerai_dashboard_session');
+  location.reload();
+}
+
+// 9Router đôi khi nối "data: [DONE]" ngay sau JSON (phát hiện thật ở Bước 1) — Control
+// Plane tự nó không có vấn đề này, nhưng parse phòng thủ cho đồng nhất với các nơi khác.
+async function safeJson(res) {
+  const text = await res.text();
+  try { return JSON.parse(text.split('data: [DONE]')[0].trim()); } catch { return {}; }
+}
+
+async function api(path) {
+  const res = await fetch(state.cpUrl.replace(/\/$/, '') + path, {
+    headers: { Authorization: `Bearer ${state.token}` },
+  });
+  const json = await safeJson(res);
+  if (res.status >= 400) throw new Error(json.error || `http_${res.status}`);
+  return json;
+}
+async function apiPost(path, body) {
+  const res = await fetch(state.cpUrl.replace(/\/$/, '') + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${state.token}` },
+    body: JSON.stringify(body || {}),
+  });
+  const json = await safeJson(res);
+  if (res.status >= 400) throw new Error(json.error || `http_${res.status}`);
+  return json;
+}
+
+async function doLogin() {
+  const cpUrl = document.getElementById('cpUrl').value.trim();
+  const email = document.getElementById('cpEmail').value.trim();
+  const accessCode = document.getElementById('cpAccessCode').value;
+  const errEl = document.getElementById('loginError');
+  errEl.textContent = '';
+  try {
+    const res = await fetch(cpUrl.replace(/\/$/, '') + '/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, access_code: accessCode }),
+    });
+    const json = await safeJson(res);
+    if (res.status >= 400) throw new Error(json.error || `http_${res.status}`);
+    state = { cpUrl, token: json.employee_token, who: { full_name: json.full_name, employee_id: json.employee_id, role: json.role }, active: 'home' };
+    saveSession();
+    boot();
+  } catch (e) {
+    errEl.textContent = 'Đăng nhập thất bại: ' + e.message;
+  }
+}
+
+function fmtElapsed(iso) {
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  return `${Math.floor(mins / 60)}h${mins % 60}m`;
+}
+function fmtDate(iso) { return new Date(iso).toLocaleString('vi-VN'); }
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+async function renderHome(root) {
+  const [sessions, inbox] = await Promise.all([api('/v1/work-sessions'), api(`/v1/inbox?employee_id=${encodeURIComponent(state.who.employee_id)}`)]);
+  let contextNotes = [];
+  try {
+    const projects = await api('/v1/projects');
+    const notesByProject = await Promise.all(projects.projects.map((p) => api(`/v1/projects/${p.id}/context-notes`).catch(() => ({ context_notes: [] }))));
+    contextNotes = notesByProject.flatMap((n) => n.context_notes).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 5);
+  } catch {}
+
+  // cost-summary hiện mở cho mọi nhân viên (chỉ requireEmployee, không requireAdmin) — giữ
+  // đúng hành vi sẵn có, không âm thầm đổi quyền trong lúc chỉ làm lại giao diện. Vẫn bắt lỗi
+  // để nếu endpoint hỏng/đổi quyền sau này thì chỉ mất dải số, không sập cả Trang chủ.
+  let cost = null;
+  try { cost = await api('/v1/cost-summary'); } catch {}
+
+  let statsHtml = '';
+  if (cost && cost.cost_by_employee) {
+    const totalCost = cost.cost_by_employee.reduce((s, e) => s + Number(e.total_estimated_cost_usd || 0), 0);
+    const totalReq = cost.cost_by_employee.reduce((s, e) => s + Number(e.request_count || 0), 0);
+    const weighted = cost.cost_by_employee.reduce((s, e) => s + Number(e.avg_latency_ms || 0) * Number(e.request_count || 0), 0);
+    const avgLatency = totalReq ? Math.round(weighted / totalReq) : 0;
+    statsHtml = `
+      <div class="stats">
+        <div class="stat accent">
+          <div class="stat-label">Đang làm</div>
+          <div class="stat-value">${sessions.work_sessions.length}</div>
+          <div class="stat-sub">phiên AI đang mở</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Chi phí AI</div>
+          <div class="stat-value">$${totalCost.toFixed(2)}</div>
+          <div class="stat-sub">${cost.cost_by_employee.length} nhân viên, cộng dồn</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Request</div>
+          <div class="stat-value">${totalReq.toLocaleString('vi-VN')}</div>
+          <div class="stat-sub">đã đi qua gateway công ty</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Độ trễ TB</div>
+          <div class="stat-value">${(avgLatency / 1000).toFixed(2)}s</div>
+          <div class="stat-sub">trung bình theo số request</div>
+        </div>
+      </div>`;
+  }
+
+  root.innerHTML = statsHtml + `
+    <div class="home-grid">
+      <div class="panel">
+        <h2>Đang làm</h2>
+        ${sessions.work_sessions.length ? sessions.work_sessions.map((s) => `
+          <div class="feed-item">
+            <div class="feed-main"><b>${esc(s.employee_name)}</b> — ${esc(s.task_title)}</div>
+            <div class="feed-meta"><code>${esc(s.task_id)}</code> · ${esc(s.project_name)} · hoạt động ${fmtElapsed(s.last_activity_at)} trước</div>
+          </div>`).join('') : '<div class="empty">Không có ai đang làm.</div>'}
+      </div>
+      <div class="panel">
+        <h2>Cần tiếp quản (của tôi)</h2>
+        ${inbox.handoffs_to_pick_up.length ? inbox.handoffs_to_pick_up.map((h) => `
+          <div class="feed-item">
+            <div class="feed-main"><b>${esc(h.task_id)}</b> — bàn giao mới từ ${esc(h.from_employee_name)}<span class="pill warn" style="margin-left:6px;">chưa ai nhận</span></div>
+            <div class="feed-meta">${esc(h.project_name)} · ${fmtDate(h.handoff_created_at)}</div>
+          </div>`).join('') : '<div class="empty">Không có gì cần tiếp quản.</div>'}
+      </div>
+      <div class="panel">
+        <h2>Context mới</h2>
+        ${contextNotes.length ? contextNotes.map((c) => `
+          <div class="feed-item">
+            <div class="feed-main"><span class="pill warn">${esc(c.type)}</span> ${esc(c.content)}</div>
+            <div class="feed-meta">${esc(c.created_by_name)} — ${fmtDate(c.created_at)}</div>
+          </div>`).join('') : '<div class="empty">Chưa có ghi chú context nào (requirement/decision/BA feedback).</div>'}
+      </div>
+    </div>`;
+}
+
+const TASK_STATUSES = ['open', 'in_progress', 'done', 'closed'];
+
+// Hoàn thiện Task Management nội bộ — gap thật: từ đầu dự án chưa có cách tạo/đổi trạng thái
+// task qua sản phẩm (chỉ task_tng142 seed tay). Không tích hợp Jira/Linear (quyết định người
+// dùng chốt) — hoàn thiện luồng nội bộ đã có (project/task/claim) cho công ty dùng ngay.
+async function renderProjects(root) {
+  const [{ projects }, { employees }] = await Promise.all([api('/v1/projects'), api('/v1/employees')]);
+  const taskLists = await Promise.all(projects.map((p) => api(`/v1/projects/${p.id}/tasks`)));
+  const employeeOptions = (selected) => employees.map((e) => `<option value="${esc(e.id)}" ${e.id === selected ? 'selected' : ''}>${esc(e.full_name)}</option>`).join('');
+  const isAdmin = state.who?.role === 'admin';
+  // Definition of Done: 'closed' = leader đã duyệt chốt -> chỉ admin đổi được (gate thật ở API,
+  // đây chỉ là UX để member không bấm vào rồi nhận lỗi vô nghĩa). 'done' = dev tự báo xong.
+  const statusOptions = (selected) => TASK_STATUSES
+    .filter((s) => s !== 'closed' || isAdmin || selected === 'closed')
+    .map((s) => `<option value="${esc(s)}" ${s === selected ? 'selected' : ''}>${esc(s)}${s === 'closed' ? ' (leader duyệt)' : s === 'done' ? ' (dev báo xong)' : ''}</option>`).join('');
+
+  root.innerHTML = projects.map((p, i) => `
+    <div class="panel">
+      <h2>${esc(p.name)} <span class="pill ok">${esc(p.status)}</span></h2>
+      <table><thead><tr><th>Task ID</th><th>Tiêu đề</th><th>Trạng thái</th><th>Người phụ trách</th><th>Claim (Q20)</th></tr></thead>
+      <tbody>${taskLists[i].tasks.map((t) => `
+        <tr><td><code>${esc(t.id)}</code></td><td>${esc(t.title)}</td>
+        <td><select onchange="updateTaskField('${esc(t.id)}','status',this.value)" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;">${statusOptions(t.status)}</select></td>
+        <td><select onchange="updateTaskField('${esc(t.id)}','assignee_employee_id',this.value)" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;">
+              <option value="">— chưa gán —</option>${employeeOptions(t.assignee_employee_id)}</select></td>
+        <td>${t.claimed_by_employee_id
+            ? `<span class="pill warn">${esc(t.claimed_by_name)} đến ${new Date(t.lease_until).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>`
+            : `<span class="empty">${t.claim_mode === 'shared' ? 'shared' : 'chưa ai giữ'}</span>`}</td></tr>`).join('') || `<tr><td colspan="5" class="empty">Chưa có task</td></tr>`}
+      </tbody></table>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;">
+        <div style="flex:1;min-width:200px;"><label style="font-size:12px;color:var(--muted);">Tiêu đề task mới</label><br/>
+          <input id="taskTitle-${esc(p.id)}" placeholder="Tiêu đề task" style="width:100%;" /></div>
+        <div style="flex:1;min-width:220px;"><label style="font-size:12px;color:var(--muted);">Tiêu chí hoàn thành (vào thẳng context của AI)</label><br/>
+          <input id="taskAC-${esc(p.id)}" placeholder="VD: Pagination chạy đúng; có test; không hardcode secret" style="width:100%;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Người phụ trách</label><br/>
+          <select id="taskAssignee-${esc(p.id)}">
+            <option value="">— chưa gán —</option>${employeeOptions()}</select></div>
+        <button class="btn" onclick="createTaskFromForm('${esc(p.id)}')">+ Task mới</button>
+      </div>
+      <div id="taskResult-${esc(p.id)}" class="empty" style="margin-top:8px;"></div>
+    </div>`).join('') || '<div class="panel empty">Chưa có project nào.</div>';
+}
+
+async function createTaskFromForm(projectId) {
+  const resultEl = document.getElementById(`taskResult-${projectId}`);
+  const title = document.getElementById(`taskTitle-${projectId}`).value.trim();
+  const acceptance_criteria = document.getElementById(`taskAC-${projectId}`).value.trim() || undefined;
+  const assignee_employee_id = document.getElementById(`taskAssignee-${projectId}`).value || undefined;
+  if (!title) { resultEl.textContent = 'Cần nhập tiêu đề.'; return; }
+  try {
+    const res = await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/tasks`, { title, acceptance_criteria, assignee_employee_id });
+    resultEl.textContent = `Đã tạo: ${res.task_id}`;
+    switchTab('projects');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function updateTaskField(taskId, field, value) {
+  // assignee_employee_id chỉ gán được, chưa có đường "bỏ gán" ở Control Plane (ngoài phạm vi
+  // đợt này) — chọn "— chưa gán —" không gọi API, tránh lỗi 400 vô nghĩa (no_fields_to_update).
+  if (!value) { switchTab('projects'); return; }
+  try {
+    await apiPost(`/v1/tasks/${encodeURIComponent(taskId)}/update`, { [field]: value });
+    switchTab('projects');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+async function renderSessions(root) {
+  const { work_sessions } = await api('/v1/work-sessions');
+  root.innerHTML = `<div class="panel"><h2>Active Sessions</h2>
+    <table><thead><tr><th>Nhân viên</th><th>Project</th><th>Task</th><th>Bắt đầu</th><th>Hoạt động gần nhất</th></tr></thead>
+    <tbody>${work_sessions.map((s) => `
+      <tr><td>${esc(s.employee_name)}</td><td>${esc(s.project_name)}</td>
+      <td><code>${esc(s.task_id)}</code> — ${esc(s.task_title)}</td>
+      <td>${fmtDate(s.started_at)}</td><td>${fmtElapsed(s.last_activity_at)} trước</td></tr>`).join('') ||
+      `<tr><td colspan="5" class="empty">Không có Work Session nào đang active.</td></tr>`}
+    </tbody></table></div>`;
+}
+
+async function renderHandoffs(root) {
+  const { handoffs } = await api('/v1/handoffs');
+  root.innerHTML = `<div class="panel"><h2>Handoffs gần đây</h2>
+    ${handoffs.length ? handoffs.map((h) => `
+      <div class="panel" style="background:#12151c;">
+        <div><b>${esc(h.task_id)}</b> — ${esc(h.task_title)} <span class="empty">(${esc(h.project_name)})</span></div>
+        <div class="empty">Từ ${esc(h.from_employee_name)} — ${fmtDate(h.created_at)}</div>
+        <div style="white-space:pre-wrap; margin:8px 0; font-size:13px;">${esc(h.summary)}</div>
+        <div class="empty">Bước tiếp theo: ${(h.next_steps || []).map(esc).join(', ') || '(không có)'}</div>
+        <div class="empty">Vấn đề mở: ${(h.open_issues || []).map(esc).join(', ') || '(không có)'}</div>
+      </div>`).join('') : '<div class="empty">Chưa có handoff nào.</div>'}
+    </div>`;
+}
+
+async function renderInbox(root) {
+  const inbox = await api(`/v1/inbox?employee_id=${encodeURIComponent(state.who.employee_id)}`);
+  root.innerHTML = `
+    <div class="panel">
+      <h2>Task đang giao cho tôi</h2>
+      ${inbox.assigned_open_tasks.length ? `<table><thead><tr><th>Task</th><th>Project</th><th>Trạng thái</th></tr></thead>
+      <tbody>${inbox.assigned_open_tasks.map((t) => `
+        <tr><td><code>${esc(t.id)}</code> — ${esc(t.title)}</td><td>${esc(t.project_name)}</td>
+        <td><span class="pill warn">${esc(t.status)}</span></td></tr>`).join('')}</tbody></table>` :
+      '<div class="empty">Không có task nào đang giao trực tiếp cho bạn.</div>'}
+    </div>
+    <div class="panel">
+      <h2>Cần tiếp quản — có bàn giao mới chưa ai làm tiếp</h2>
+      ${inbox.handoffs_to_pick_up.length ? inbox.handoffs_to_pick_up.map((h) => `
+        <div class="panel" style="background:#12151c;">
+          <div><b>${esc(h.task_id)}</b> — ${esc(h.task_title)} <span class="empty">(${esc(h.project_name)})</span></div>
+          <div class="empty">Bàn giao từ ${esc(h.from_employee_name)} — ${fmtDate(h.handoff_created_at)}</div>
+          <div style="white-space:pre-wrap; margin:8px 0; font-size:13px;">${esc(h.summary)}</div>
+        </div>`).join('') : '<div class="empty">Không có gì cần tiếp quản.</div>'}
+    </div>`;
+}
+
+async function renderTimeline(root) {
+  const { projects } = await api('/v1/projects');
+  if (!projects.length) { root.innerHTML = '<div class="panel empty">Chưa có project nào.</div>'; return; }
+  if (!state.timelineProjectId || !projects.some((p) => p.id === state.timelineProjectId)) {
+    state.timelineProjectId = projects[0].id;
+  }
+  const selectHtml = `<select id="timelineProject" onchange="state.timelineProjectId=this.value; switchTab('timeline')" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-bottom:12px;">
+    ${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === state.timelineProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+  </select>`;
+  const { events } = await api(`/v1/timeline?project_id=${encodeURIComponent(state.timelineProjectId)}`);
+  const icons = { work_session_started: '▶', work_session_ended: '⏹', checkpoint: '●', handoff: '↦' };
+  root.innerHTML = `<div class="panel">${selectHtml}<h2>Timeline</h2>
+    ${events.length ? events.map((e) => `
+      <div style="display:flex; gap:10px; padding:6px 0; border-bottom:1px solid var(--border);">
+        <div style="width:18px; color:var(--accent);">${icons[e.event_type] || '•'}</div>
+        <div>
+          <div><b>${esc(e.employee_name)}</b> — ${esc(e.event_type)} — <code>${esc(e.task_id)}</code> ${esc(e.task_title)}</div>
+          ${e.detail ? `<div class="empty">${esc(e.detail)}</div>` : ''}
+          <div class="empty">${fmtDate(e.occurred_at)}</div>
+        </div>
+      </div>`).join('') : '<div class="empty">Chưa có sự kiện nào.</div>'}
+    </div>`;
+}
+
+const CONTEXT_TYPES = ['requirement', 'decision', 'ba_feedback', 'status', 'known_issue', 'next_step', 'handoff', 'code_context'];
+
+// Trả lời câu hỏi trung tâm của sản phẩm: "AI đang biết những gì?".
+// Nội dung lấy từ ĐÚNG endpoint mà CLI dùng để ghi 5 file xuống máy nhân viên (đã kiểm chứng
+// khớp byte-for-byte) — không phải bản mô phỏng/dựng lại, nên không thể lệch với thứ AI đọc.
+const BUNDLE_FILE_DESC = {
+  company_md: ['company.md', 'Quy tắc toàn công ty — vào AI của MỌI dự án'],
+  team_md: ['team.md', 'Quy tắc của team'],
+  project_md: ['project.md', 'Tri thức chung của dự án'],
+  task_md: ['task.md', 'Task đang làm'],
+  checkpoint_md: ['checkpoint.md', 'Bàn giao gần nhất + ghi chú của task'],
+};
+
+async function renderBundle(root) {
+  const { projects } = await api('/v1/projects');
+  if (!projects.length) { root.innerHTML = '<div class="panel empty">Chưa có project nào.</div>'; return; }
+  if (!state.bundleProjectId || !projects.some((p) => p.id === state.bundleProjectId)) {
+    state.bundleProjectId = projects[0].id;
+  }
+  const { tasks } = await api(`/v1/projects/${encodeURIComponent(state.bundleProjectId)}/tasks`);
+  if (!state.bundleTaskId || !tasks.some((t) => t.id === state.bundleTaskId)) {
+    state.bundleTaskId = tasks.length ? tasks[0].id : null;
+  }
+
+  const picker = `
+    <div class="panel">
+      <h2>Chọn task để xem AI được bơm gì</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select onchange="state.bundleProjectId=this.value; state.bundleTaskId=null; switchTab('bundle')">
+            ${projects.map((p) => `<option value="${esc(p.id)}" ${p.id === state.bundleProjectId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div style="flex:1;min-width:240px;"><label style="font-size:12px;color:var(--muted);">Task</label><br/>
+          <select style="width:100%;" onchange="state.bundleTaskId=this.value; switchTab('bundle')">
+            ${tasks.map((t) => `<option value="${esc(t.id)}" ${t.id === state.bundleTaskId ? 'selected' : ''}>${esc(t.title)}</option>`).join('') || '<option>— chưa có task —</option>'}
+          </select></div>
+      </div>
+    </div>`;
+
+  if (!state.bundleTaskId) { root.innerHTML = picker + '<div class="panel empty">Project này chưa có task nào.</div>'; return; }
+
+  const bundle = await api(`/v1/context/bundle?task_id=${encodeURIComponent(state.bundleTaskId)}`);
+  const st = bundle.stats;
+  const filesHtml = Object.entries(BUNDLE_FILE_DESC).map(([key, [name, desc]]) => {
+    const content = bundle.files[key] || '';
+    const isPlaceholder = content.trim().startsWith('<!--');
+    return `
+      <div class="mdfile">
+        <div class="mdfile-head">
+          <span class="mdfile-name">${esc(name)}</span>
+          <span class="mdfile-desc">${esc(desc)}</span>
+        </div>
+        <pre class="${isPlaceholder ? 'placeholder' : ''}">${esc(content.trim())}</pre>
+      </div>`;
+  }).join('');
+
+  root.innerHTML = picker + `
+    <div class="notice">
+      <b>Đây là nội dung thật, không phải bản mô phỏng.</b> Mỗi lần nhân viên chạy
+      <code>company-ai claude</code>, đúng 5 file này được ghi vào <code>.center-ai/generated/</code>
+      và Claude Code tự đọc qua marker trong <code>CLAUDE.md</code>. Dashboard và CLI gọi chung
+      một endpoint nên không thể lệch nhau.
+      ${st ? `<br/>Đã lọc trùng: <b>${st.notes_total}</b> ghi chú → <b>${st.notes_after_dedup}</b> còn lại (tối đa ${st.max_notes_per_file}/file, ưu tiên decision/requirement đã duyệt).` : ''}
+    </div>
+    ${filesHtml}
+    ${state.who.role === 'admin' ? `
+    <div class="panel">
+      <h2>+ Thêm tri thức công ty / team</h2>
+      <div class="empty" style="margin-bottom:10px;">Nội dung này vào AI của <b>mọi dự án, mọi nhân viên</b> — nên chỉ admin thêm được.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Phạm vi</label><br/>
+          <select id="kbScope">
+            <option value="company">Toàn công ty (company.md)</option>
+            <option value="department">Team (team.md)</option>
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Loại</label><br/>
+          <select id="kbType">
+            <option value="decision">decision</option><option value="requirement">requirement</option>
+            <option value="known_issue">known_issue</option><option value="code_context">code_context</option>
+          </select></div>
+        <div style="flex:1;min-width:280px;"><label style="font-size:12px;color:var(--muted);">Nội dung</label><br/>
+          <input id="kbContent" style="width:100%;" placeholder="VD: Mọi API ra ngoài phải có timeout + retry backoff" /></div>
+        <button class="btn" onclick="addCompanyKnowledge()">Thêm</button>
+      </div>
+      <div id="kbResult" class="empty" style="margin-top:8px;"></div>
+    </div>` : ''}`;
+}
+
+async function addCompanyKnowledge() {
+  const resultEl = document.getElementById('kbResult');
+  const scope_level = document.getElementById('kbScope').value;
+  const type = document.getElementById('kbType').value;
+  const content = document.getElementById('kbContent').value.trim();
+  if (!content) { resultEl.textContent = 'Cần nhập nội dung.'; return; }
+  try {
+    // project_id cố tình KHÔNG truyền: tri thức company/team không thuộc dự án nào
+    // (migration 010 bỏ ràng buộc NOT NULL để loại tri thức này có chỗ tồn tại).
+    await apiPost('/v1/context/ingest', { type, content, scope_level, approved_by: true });
+    switchTab('bundle');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function renderMemory(root) {
+  const { projects } = await api('/v1/projects');
+  const notesByProject = await Promise.all(projects.map((p) => api(`/v1/projects/${p.id}/context-notes`)));
+
+  const formHtml = `
+    <div class="panel">
+      <h2>+ Thêm ghi chú context</h2>
+      <div class="empty" style="margin-bottom:10px;">Vá gap thật: trước đây project_context không có cách nào tạo mới ngoài seed test.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select id="ctxProject" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Task ID (tuỳ chọn)</label><br/>
+          <input id="ctxTaskId" placeholder="task_tng142" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Loại</label><br/>
+          <select id="ctxType" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${CONTEXT_TYPES.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+          </select></div>
+        <div style="flex:1;min-width:240px;"><label style="font-size:12px;color:var(--muted);">Nội dung</label><br/>
+          <input id="ctxContent" placeholder="Nội dung ghi chú" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Company Brain scope (Q16)</label><br/>
+          <select id="ctxScopeLevel" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            <option value="project" selected>project</option><option value="personal">personal</option><option value="session">session</option>
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);"><input id="ctxApproved" type="checkbox" /> Đã duyệt (tự khai)</label></div>
+        <button class="btn" onclick="ingestContextFromForm()">Thêm</button>
+      </div>
+      <div class="empty" style="margin-top:6px;">department/company chưa có tác dụng inject xuyên project — pilot chỉ có 1 project, chưa test được thật (xem MVP3-PROGRESS.md).</div>
+      <div id="ctxResult" class="empty" style="margin-top:8px;"></div>
+    </div>`;
+
+  const tablesHtml = projects.map((p, i) => `
+    <div class="panel">
+      <h2>Project Memory — ${esc(p.name)}</h2>
+      ${notesByProject[i].context_notes.length ? `<table><thead><tr><th>Loại</th><th>Scope</th><th>Nội dung</th><th>Người tạo</th><th>Lúc</th><th>Confidence (Q15)</th></tr></thead>
+      <tbody>${notesByProject[i].context_notes.map((c) => `
+        <tr><td><span class="pill warn">${esc(c.type)}</span></td><td><span class="pill ok">${esc(c.scope_level)}</span></td><td>${esc(c.content)}</td>
+        <td>${esc(c.created_by_name)}</td><td>${fmtDate(c.created_at)}</td>
+        <td><span class="pill ${c.confidence >= 70 ? 'ok' : c.confidence >= 30 ? 'warn' : 'danger'}">${esc(c.confidence)}%</span></td></tr>`).join('')}</tbody></table>` :
+      '<div class="empty">Chưa có ghi chú context nào cho project này.</div>'}
+    </div>`).join('') || '<div class="panel empty">Chưa có project nào.</div>';
+
+  root.innerHTML = formHtml + tablesHtml;
+}
+
+async function ingestContextFromForm() {
+  const resultEl = document.getElementById('ctxResult');
+  const project_id = document.getElementById('ctxProject').value;
+  const task_id = document.getElementById('ctxTaskId').value.trim() || undefined;
+  const type = document.getElementById('ctxType').value;
+  const content = document.getElementById('ctxContent').value.trim();
+  const scope_level = document.getElementById('ctxScopeLevel').value;
+  const approved_by = document.getElementById('ctxApproved').checked;
+  if (!content) { resultEl.textContent = 'Cần nhập nội dung.'; return; }
+  try {
+    const res = await apiPost('/v1/context/ingest', { project_id, task_id, type, content, scope_level, approved_by });
+    resultEl.textContent = `Đã tạo: ${res.context_id}`;
+    switchTab('memory');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+// Xem dev đã nhắn gì với AI. Quyết định của chủ hệ thống: đây là hệ thống công ty, dự án công
+// ty, tiền token công ty — sếp phải kiểm được (vd KPI thấp thì có phải dev nhắn linh tinh đốt
+// token không). Vẫn giữ 2 nguyên tắc: (1) secret/CCCD được che trước khi lưu — bảo vệ công ty
+// nếu DB rò rỉ, không cản sếp đọc nội dung; (2) MỖI LẦN XEM đều ghi audit_logs — minh bạch 2
+// chiều, sếp xem được dev nhưng việc sếp xem cũng để lại vết.
+function extractReadable(raw, max) {
+  if (!raw) return '(không có)';
+  // Body thật là JSON/SSE của Anthropic API — moi các đoạn text người/AI thực sự viết ra để
+  // đọc cho dễ, nhưng KHÔNG giấu: có nút xem nguyên văn bên dưới.
+  const parts = [...String(raw).matchAll(/"(?:text|content)"\s*:\s*"((?:[^"\\]|\\.){4,})"/g)]
+    .map((m) => m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\'))
+    .filter((t) => !t.startsWith('<system-reminder>'));
+  const joined = parts.join('\n---\n').trim();
+  const out = joined || String(raw);
+  return out.length > max ? out.slice(0, max) + '…' : out;
+}
+
+async function renderAiHistory(root) {
+  const [{ employees }, settings] = await Promise.all([api('/v1/employees'), api('/v1/settings')]);
+  const qs = state.aiHistEmployee ? `?employee_id=${encodeURIComponent(state.aiHistEmployee)}&limit=30` : '?limit=30';
+  const { prompts } = await api(`/v1/prompts${qs}`);
+
+  const modeNote = settings.audit_mode === 'full'
+    ? '<b>Chế độ hiện tại: ghi toàn thời gian (full).</b> Mọi request AI đều được lưu nội dung (đã che secret/CCCD). Nhân viên được thông báo điều này trong tài liệu onboarding.'
+    : '<b>Chế độ hiện tại: chỉ metadata.</b> Nội dung KHÔNG được lưu, trừ khi admin bật Full Audit Mode có thời hạn cho một người/dự án cụ thể.';
+
+  root.innerHTML = `
+    <div class="notice">
+      ${modeNote}<br/>
+      Secret/CCCD/số thẻ được che trước khi lưu — bảo vệ công ty nếu CSDL rò rỉ, không ảnh hưởng việc bạn đọc nội dung.
+      <b>Mỗi lần bạn mở trang này đều được ghi vào Audit Logs.</b>
+    </div>
+
+    <div class="panel">
+      <h2>Lọc</h2>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Nhân viên</label><br/>
+          <select onchange="state.aiHistEmployee=this.value; switchTab('aihistory')">
+            <option value="">— tất cả —</option>
+            ${employees.map((e) => `<option value="${esc(e.id)}" ${e.id === state.aiHistEmployee ? 'selected' : ''}>${esc(e.full_name)}</option>`).join('')}
+          </select></div>
+      </div>
+    </div>
+
+    ${prompts.length ? prompts.map((p) => `
+      <div class="mdfile">
+        <div class="mdfile-head">
+          <span class="mdfile-name">${esc(p.employee_name || p.employee_id || '—')}${p.task_title ? ' · ' + esc(p.task_title) : ''}</span>
+          <span class="mdfile-desc">${fmtDate(p.created_at)} · <span class="pill ${p.capture_reason === 'company_policy' ? 'ok' : 'warn'}">${esc(p.capture_reason || '—')}</span></span>
+        </div>
+        <pre><b style="color:var(--accent-hi)">DEV NHẮN:</b>
+${esc(extractReadable(p.content_redacted, 1500))}
+
+<b style="color:var(--ok)">AI TRẢ LỜI:</b>
+${esc(extractReadable(p.response_redacted, 1500))}</pre>
+      </div>`).join('') : '<div class="panel empty">Chưa có nội dung nào được lưu.</div>'}`;
+}
+
+async function renderSeats(root) {
+  const { employees } = await api('/v1/employees');
+  const isAdmin = state.who?.role === 'admin';
+  const formHtml = isAdmin ? `
+    <div class="panel">
+      <h2>+ Nhân viên mới</h2>
+      <div class="empty" style="margin-bottom:10px;">Trước đây phải sửa tay CSDL mỗi lần tuyển người — nay tạo qua đây, vai trò mặc định là member.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Họ tên</label><br/>
+          <input id="empName" placeholder="Nguyễn Văn A" /></div>
+        <div style="flex:1;min-width:220px;"><label style="font-size:12px;color:var(--muted);">Email công ty</label><br/>
+          <input id="empEmail" placeholder="a@company.local" style="width:100%;" /></div>
+        <button class="btn" onclick="createEmployee()">Thêm</button>
+      </div>
+      <div id="empResult" class="empty" style="margin-top:8px;"></div>
+    </div>` : '';
+
+  root.innerHTML = formHtml + `<div class="panel"><h2>Seats & Employees</h2>
+    <table><thead><tr><th>Nhân viên</th><th>Email</th><th>Trạng thái</th><th>Seat</th><th>Trạng thái seat</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
+    <tbody>${employees.map((e) => `
+      <tr><td>${esc(e.full_name)}</td><td>${esc(e.email)}</td>
+      <td><span class="pill ${e.status === 'active' ? 'ok' : 'danger'}">${esc(e.status)}</span></td>
+      <td>${e.seat_id ? `<code>${esc(e.seat_id)}</code>` : '<span class="empty">chưa gán seat</span>'}</td>
+      <td>${e.seat_status ? `<span class="pill ${e.seat_status === 'healthy' ? 'ok' : 'danger'}">${esc(e.seat_status)}</span>` : '—'}</td>
+      ${isAdmin ? `<td>${e.seat_id && e.seat_status !== 'destroyed' ? `<a class="linkbtn" onclick="assignSeat('${esc(e.seat_id)}')">Gán/Đổi người</a> · <a class="linkbtn" onclick="offboardSeat('${esc(e.seat_id)}')">Offboard</a>` : ''}</td>` : ''}</tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+async function createEmployee() {
+  const el = document.getElementById('empResult');
+  const full_name = document.getElementById('empName').value.trim();
+  const email = document.getElementById('empEmail').value.trim();
+  if (!full_name || !email) { el.textContent = 'Cần nhập đủ họ tên và email.'; return; }
+  try {
+    const res = await apiPost('/v1/employees', { full_name, email });
+    el.textContent = `Đã tạo: ${res.employee_id}. Nhắc nhân viên chạy company-ai login với email này + access code công ty.`;
+    switchTab('seats');
+  } catch (e) {
+    el.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function offboardSeat(seatId) {
+  const reason = prompt(`Lý do offboard seat ${seatId}? (sẽ cắt quyền truy cập AI thật ngay lập tức)`);
+  if (!reason) return;
+  if (!confirm(`Xác nhận offboard ${seatId}? Không thể hoàn tác qua dashboard.`)) return;
+  try {
+    await apiPost(`/v1/seats/${encodeURIComponent(seatId)}/offboard`, { reason });
+    switchTab('seats');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+// Nửa "gán" đối xứng với offboardSeat — mục cuối "Workflow duyệt gán/thu hồi seat" (mục 14).
+async function assignSeat(seatId) {
+  const { employees } = await api('/v1/employees');
+  const list = employees.map((e) => `${e.id} — ${e.full_name}`).join('\n');
+  const employeeId = prompt(`Gán seat ${seatId} cho nhân viên nào? Gõ đúng employee_id:\n${list}`);
+  if (!employeeId) return;
+  if (!employees.some((e) => e.id === employeeId)) { alert('employee_id không hợp lệ.'); return; }
+  const reason = prompt(`Lý do gán seat ${seatId} cho ${employeeId}?`);
+  if (!reason) return;
+  try {
+    await apiPost(`/v1/seats/${encodeURIComponent(seatId)}/assign`, { employee_id: employeeId, reason });
+    switchTab('seats');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+// Pattern Library (Q16) — CHỈ phần "generalize có gate", KHÔNG tự động bơm pattern vào project
+// khác (phần "reuse" cố tình khoá tới MVP4, xem MVP3-PROGRESS.md). Mở cho mọi nhân viên xem/đề
+// xuất, chỉ admin duyệt — và người duyệt phải khác người đề xuất (chặn ở tầng API, dashboard chỉ
+// không hiện nút Duyệt trên pattern của chính mình để tránh bấm vào rồi nhận lỗi vô nghĩa).
+async function renderPatternLibrary(root) {
+  const isAdmin = state.who?.role === 'admin';
+  const [approved, pending] = await Promise.all([
+    api('/v1/pattern-library'),
+    isAdmin ? api('/v1/pattern-library?status=pending') : Promise.resolve({ patterns: [] }),
+  ]);
+
+  const pendingHtml = isAdmin ? `
+    <div class="panel">
+      <h2>Chờ duyệt</h2>
+      <div class="empty" style="margin-bottom:10px;">Người duyệt phải khác người đề xuất — đúng yêu cầu Q16.</div>
+      <table><thead><tr><th>Tiêu đề</th><th>Danh mục</th><th>Đề xuất bởi</th><th>Lúc</th><th></th></tr></thead>
+      <tbody>${pending.patterns.length ? pending.patterns.map((p) => `
+        <tr><td>${esc(p.title)}</td><td>${esc(p.category)}</td><td>${esc(p.generalized_by_name)}</td><td>${fmtDate(p.created_at)}</td>
+        <td>${p.generalized_by_name === state.who.full_name ? '<span class="empty">pattern của bạn — cần người khác duyệt</span>' : `<a class="linkbtn" onclick="approvePattern('${esc(p.id)}')">Duyệt</a>`}</td></tr>`).join('') :
+        '<tr><td colspan="5" class="empty">Không có pattern nào chờ duyệt.</td></tr>'}
+      </tbody></table>
+    </div>` : '';
+
+  root.innerHTML = `
+    <div class="panel">
+      <h2>+ Đề xuất pattern mới (generalize)</h2>
+      <div class="empty" style="margin-bottom:10px;">Tự tay viết lại nội dung đã xoá định danh khách hàng — không có anonymize tự động, cùng lý do không làm regex Data Classification real-time.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div style="min-width:200px;"><label style="font-size:12px;color:var(--muted);">Tiêu đề</label><br/>
+          <input id="patTitle" placeholder="Retry pattern cho API rate limit" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Danh mục</label><br/>
+          <input id="patCategory" placeholder="reliability" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div style="flex:1;min-width:280px;"><label style="font-size:12px;color:var(--muted);">Nội dung đã ẩn danh hoá</label><br/>
+          <input id="patContent" placeholder="Dùng exponential backoff + jitter, tối đa 5 lần thử..." style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <button class="btn" onclick="generalizePattern()">Đề xuất</button>
+      </div>
+      <div id="patResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    ${pendingHtml}
+
+    <div class="panel">
+      <h2>Pattern đã duyệt</h2>
+      <table><thead><tr><th>Tiêu đề</th><th>Danh mục</th><th>Nội dung</th><th>Duyệt bởi</th></tr></thead>
+      <tbody>${approved.patterns.length ? approved.patterns.map((p) => `
+        <tr><td>${esc(p.title)}</td><td><span class="pill ok">${esc(p.category)}</span></td><td>${esc(p.content_anonymized)}</td><td>${esc(p.approved_by_name)}</td></tr>`).join('') :
+        '<tr><td colspan="4" class="empty">Chưa có pattern nào được duyệt.</td></tr>'}
+      </tbody></table>
+    </div>`;
+}
+
+async function generalizePattern() {
+  const resultEl = document.getElementById('patResult');
+  const title = document.getElementById('patTitle').value.trim();
+  const category = document.getElementById('patCategory').value.trim();
+  const content = document.getElementById('patContent').value.trim();
+  if (!title || !category || !content) { resultEl.textContent = 'Cần nhập đủ tiêu đề, danh mục, nội dung.'; return; }
+  try {
+    const res = await apiPost('/v1/pattern-library/generalize', { title, category, content });
+    resultEl.textContent = `Đã đề xuất: ${res.pattern_id} — chờ admin (khác bạn) duyệt.`;
+    switchTab('patterns');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function approvePattern(id) {
+  try {
+    await apiPost(`/v1/pattern-library/${encodeURIComponent(id)}/approve`, {});
+    switchTab('patterns');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+// Governance (Q13/Q22) — chỉ admin thấy tab này (đã lọc ở renderTabs). Risk Score KHÔNG tự
+// động xử lý ai — chỉ hiển thị để quản lý tự xem xét, đúng nguyên tắc "không tự động kết luận".
+const CLASSIFICATIONS = ['unclassified', 'public', 'internal', 'customer_data'];
+
+async function renderGovernance(root) {
+  const [riskScore, flagsRes, auditRes, grantsRes, projectsRes, policiesRes, approvalRes, settings] = await Promise.all([
+    api('/v1/governance/risk-score'),
+    api('/v1/flags'),
+    api('/v1/audit-logs'),
+    api('/v1/governance/full-audit-grants'),
+    api('/v1/projects'),
+    api('/v1/policies'),
+    api('/v1/governance/approval-requests'),
+    api('/v1/settings'),
+  ]);
+
+  root.innerHTML = `
+    <div class="panel">
+      <h2>Chế độ ghi nội dung AI</h2>
+      <div class="empty" style="margin-bottom:10px;">Quyết định ở cấp công ty. Dù ở chế độ nào, secret/CCCD luôn được che trước khi lưu, và mỗi lần admin xem nội dung đều ghi Audit Logs.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Chế độ</label><br/>
+          <select id="auditMode">
+            <option value="full" ${settings.audit_mode === 'full' ? 'selected' : ''}>full — ghi nội dung toàn thời gian</option>
+            <option value="metadata" ${settings.audit_mode === 'metadata' ? 'selected' : ''}>metadata — chỉ ghi model/token/chi phí, KHÔNG ghi nội dung</option>
+          </select></div>
+        <button class="btn" onclick="saveAuditMode()">Lưu</button>
+        <div style="flex:1;min-width:200px;font-size:12px;color:var(--faint);">
+          Đang là <b style="color:${settings.audit_mode === 'full' ? 'var(--warn)' : 'var(--ok)'}">${esc(settings.audit_mode)}</b>${settings.updated_by_name ? ` — đổi lần cuối bởi ${esc(settings.updated_by_name)}` : ''}.
+          Đổi chế độ là hành động được ghi vĩnh viễn vào Audit Logs.
+        </div>
+      </div>
+      <div id="auditModeResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Risk Score theo nhân viên</h2>
+      <div class="empty" style="margin-bottom:10px;">Chỉ để tham khảo — không tự động xử lý ai, quản lý tự xem xét.</div>
+      <table><thead><tr><th>Nhân viên</th><th>Điểm</th><th>Số lần bị flag</th><th>Secret</th><th>PII</th></tr></thead>
+      <tbody>${riskScore.risk_scores.length ? riskScore.risk_scores.map((r) => `
+        <tr><td>${esc(r.full_name || r.employee_id)}</td>
+        <td><span class="pill ${Number(r.risk_score) >= 8 ? 'danger' : Number(r.risk_score) >= 3 ? 'warn' : 'ok'}">${esc(r.risk_score)}</span></td>
+        <td>${esc(r.flag_count)}</td><td>${esc(r.secret_count)}</td><td>${esc(r.pii_count)}</td></tr>`).join('') :
+        '<tr><td colspan="5" class="empty">Chưa có flag nào.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Bật Full Audit Mode (Q22)</h2>
+      <div class="empty" style="margin-bottom:10px;">Bắt buộc có lý do + thời hạn, ghi vào audit_logs — không xem tự do như đọc tin nhắn nhân viên.</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end;">
+        <div><label style="font-size:12px;color:var(--muted);">Scope</label><br/>
+          <select id="faScope" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            <option value="employee">employee</option><option value="project">project</option>
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Scope ID</label><br/>
+          <input id="faScopeId" placeholder="emp_thanh" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div><label style="font-size:12px;color:var(--muted);">Số giờ</label><br/>
+          <input id="faHours" type="number" value="4" style="width:70px;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <div style="flex:1;min-width:200px;"><label style="font-size:12px;color:var(--muted);">Lý do (bắt buộc)</label><br/>
+          <input id="faReason" placeholder="Điều tra rò rỉ secret nghi vấn" style="width:100%;background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;" /></div>
+        <button class="btn" onclick="grantFullAuditMode()">Bật</button>
+      </div>
+      <div id="faResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Full Audit Grants</h2>
+      <div class="empty" style="margin-bottom:10px;">Vá gap thật: trước đây grant chỉ tự hết hạn, không tắt sớm được.</div>
+      <table><thead><tr><th>Scope</th><th>Lý do</th><th>Cấp bởi</th><th>Hết hạn</th><th>Trạng thái</th><th></th></tr></thead>
+      <tbody>${grantsRes.grants.length ? grantsRes.grants.map((g) => `
+        <tr><td><code>${esc(g.scope)}:${esc(g.scope_id)}</code></td><td>${esc(g.reason)}</td>
+        <td>${esc(g.granted_by_name)}</td><td>${fmtDate(g.expires_at)}</td>
+        <td><span class="pill ${g.is_active ? 'warn' : 'ok'}">${g.is_active ? 'active' : 'hết hạn/đã revoke'}</span></td>
+        <td>${g.is_active ? `<a class="linkbtn" onclick="revokeGrant('${esc(g.id)}')">Revoke</a>` : ''}</td></tr>`).join('') :
+        '<tr><td colspan="6" class="empty">Chưa có grant nào.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Phân loại dữ liệu Project (Q13)</h2>
+      <div class="empty" style="margin-bottom:10px;">Gắn nhãn ở tầng Project, không phải quét tự động từng prompt — "dữ liệu khách hàng"/"mã nguồn nội bộ" không có pattern rõ như secret/PII nên không đáng tin nếu làm real-time.</div>
+      <table><thead><tr><th>Project</th><th>Phân loại hiện tại</th></tr></thead>
+      <tbody>${projectsRes.projects.map((p) => `
+        <tr><td>${esc(p.name)}</td><td><span class="pill ${p.classification === 'customer_data' ? 'danger' : p.classification === 'unclassified' ? 'warn' : 'ok'}">${esc(p.classification)}</span></td></tr>`).join('')}
+      </tbody></table>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;">
+        <div><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select id="clsProject" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${projectsRes.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Phân loại</label><br/>
+          <select id="clsValue" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${CLASSIFICATIONS.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+          </select></div>
+        <button class="btn" onclick="setProjectClassification()">Đặt phân loại</button>
+      </div>
+      <div id="clsResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Policy (Q13)</h2>
+      <div class="empty" style="margin-bottom:10px;">Policy company-wide áp dụng mọi project trừ khi có policy riêng cho project đó (project ghi đè company).</div>
+      <table><thead><tr><th>Scope</th><th>Phân loại</th><th>Cần duyệt?</th><th>Tạo bởi</th></tr></thead>
+      <tbody>${policiesRes.policies.length ? policiesRes.policies.map((p) => `
+        <tr><td>${p.scope === 'company' ? 'company (toàn công ty)' : `project: ${esc(p.project_name || p.scope_id)}`}</td>
+        <td>${esc(p.classification)}</td><td>${p.requires_approval ? 'Có' : 'Không'}</td><td>${esc(p.created_by_name)}</td></tr>`).join('') :
+        '<tr><td colspan="4" class="empty">Chưa có policy nào — mọi request AI hiện không bị chặn bởi Policy Engine.</td></tr>'}
+      </tbody></table>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:end; margin-top:10px;">
+        <div><label style="font-size:12px;color:var(--muted);">Scope</label><br/>
+          <select id="polScope" onchange="document.getElementById('polProjectWrap').style.display = this.value === 'project' ? '' : 'none'" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            <option value="company">company (toàn công ty)</option><option value="project">project (ghi đè riêng)</option>
+          </select></div>
+        <div id="polProjectWrap" style="display:none;"><label style="font-size:12px;color:var(--muted);">Project</label><br/>
+          <select id="polProject" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${projectsRes.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);">Phân loại</label><br/>
+          <select id="polClass" style="background:#0c0e12;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">
+            ${CLASSIFICATIONS.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+          </select></div>
+        <div><label style="font-size:12px;color:var(--muted);"><input id="polRequiresApproval" type="checkbox" checked /> Cần duyệt trước khi dùng AI</label></div>
+        <button class="btn" onclick="createPolicy()">Tạo policy</button>
+      </div>
+      <div id="polResult" class="empty" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Yêu cầu duyệt truy cập (Approval — Q13)</h2>
+      <div class="empty" style="margin-bottom:10px;">Tự động tạo khi nhân viên bị chặn bởi policy — không phải tự nhân viên xin, để không ai phải nhớ gọi API.</div>
+      <table><thead><tr><th>Nhân viên</th><th>Project</th><th>Phân loại</th><th>Trạng thái</th><th>Lúc yêu cầu</th><th></th></tr></thead>
+      <tbody>${approvalRes.approval_requests.length ? approvalRes.approval_requests.map((a) => `
+        <tr><td>${esc(a.employee_name)}</td><td>${esc(a.project_name)}</td><td>${esc(a.classification)}</td>
+        <td><span class="pill ${a.status === 'pending' ? 'warn' : a.status === 'approved' ? 'ok' : 'danger'}">${esc(a.status)}</span></td>
+        <td>${fmtDate(a.requested_at)}</td>
+        <td>${a.status === 'pending' ? `<a class="linkbtn" onclick="decideApproval('${esc(a.id)}',true)">Duyệt</a> · <a class="linkbtn" onclick="decideApproval('${esc(a.id)}',false)">Từ chối</a>` : ''}</td></tr>`).join('') :
+        '<tr><td colspan="6" class="empty">Chưa có yêu cầu nào.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Flags gần đây</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Loại</th><th>Mức</th><th>Chi tiết</th><th>Lúc</th></tr></thead>
+      <tbody>${flagsRes.flags.length ? flagsRes.flags.map((f) => `
+        <tr><td>${esc(f.full_name || f.employee_id || '—')}</td>
+        <td><span class="pill ${f.type === 'secret_detected' ? 'danger' : 'warn'}">${esc(f.type)}</span></td>
+        <td>${esc(f.severity)}</td><td class="empty">${esc(JSON.stringify(f.detail))}</td>
+        <td>${fmtDate(f.detected_at)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">Chưa có flag nào.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Audit Logs (append-only)</h2>
+      <table><thead><tr><th>Actor</th><th>Action</th><th>Target</th><th>Lúc</th></tr></thead>
+      <tbody>${auditRes.audit_logs.length ? auditRes.audit_logs.map((a) => `
+        <tr><td>${esc(a.actor_name || 'hệ thống')}</td><td>${esc(a.action)}</td>
+        <td>${a.target_type ? `${esc(a.target_type)}:${esc(a.target_id)}` : '—'}</td>
+        <td>${fmtDate(a.created_at)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">Chưa có log nào.</td></tr>'}
+      </tbody></table>
+    </div>`;
+}
+
+async function saveAuditMode() {
+  const el = document.getElementById('auditModeResult');
+  const audit_mode = document.getElementById('auditMode').value;
+  if (audit_mode === 'full' && !confirm('Bật ghi nội dung TOÀN THỜI GIAN cho mọi nhân viên?\n\nNhân viên cần được thông báo về việc này (xem ONBOARDING.md) — triển khai âm thầm rồi giải thích sau là cách làm sai.')) return;
+  try {
+    await apiPost('/v1/settings', { audit_mode });
+    switchTab('governance');
+  } catch (e) {
+    el.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function grantFullAuditMode() {
+  const resultEl = document.getElementById('faResult');
+  const scope = document.getElementById('faScope').value;
+  const scope_id = document.getElementById('faScopeId').value.trim();
+  const duration_hours = Number(document.getElementById('faHours').value) || 4;
+  const reason = document.getElementById('faReason').value.trim();
+  if (!scope_id || !reason) { resultEl.textContent = 'Cần nhập Scope ID và Lý do.'; return; }
+  try {
+    const res = await apiPost('/v1/governance/full-audit-mode', { scope, scope_id, reason, duration_hours });
+    resultEl.textContent = `Đã bật — hết hạn lúc ${fmtDate(res.expires_at)}.`;
+    switchTab('governance');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function revokeGrant(grantId) {
+  if (!confirm('Revoke grant này ngay? (grant vẫn còn hiệu lực cho tới khi hết hạn nếu không revoke)')) return;
+  try {
+    await apiPost(`/v1/governance/full-audit-mode/${encodeURIComponent(grantId)}/revoke`, {});
+    switchTab('governance');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+async function setProjectClassification() {
+  const resultEl = document.getElementById('clsResult');
+  const projectId = document.getElementById('clsProject').value;
+  const classification = document.getElementById('clsValue').value;
+  try {
+    await apiPost(`/v1/projects/${encodeURIComponent(projectId)}/classification`, { classification });
+    resultEl.textContent = `Đã đặt phân loại: ${classification}`;
+    switchTab('governance');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function createPolicy() {
+  const resultEl = document.getElementById('polResult');
+  const scope = document.getElementById('polScope').value;
+  const classification = document.getElementById('polClass').value;
+  const requires_approval = document.getElementById('polRequiresApproval').checked;
+  const body = { scope, classification, requires_approval };
+  if (scope === 'project') body.scope_id = document.getElementById('polProject').value;
+  try {
+    await apiPost('/v1/policies', body);
+    resultEl.textContent = 'Đã tạo policy.';
+    switchTab('governance');
+  } catch (e) {
+    resultEl.textContent = 'Lỗi: ' + e.message;
+  }
+}
+
+async function decideApproval(id, approve) {
+  try {
+    if (approve) {
+      const hours = prompt('Duyệt trong bao nhiêu giờ?', '4');
+      if (hours === null) return;
+      await apiPost(`/v1/governance/approval-requests/${encodeURIComponent(id)}/approve`, { duration_hours: Number(hours) || 4 });
+    } else {
+      if (!confirm('Từ chối yêu cầu này?')) return;
+      await apiPost(`/v1/governance/approval-requests/${encodeURIComponent(id)}/reject`, {});
+    }
+    switchTab('governance');
+  } catch (e) {
+    alert('Lỗi: ' + e.message);
+  }
+}
+
+// KPI 4 lớp (Q22) — chỉ 3/4 lớp có dữ liệu thật, Outcome ghi rõ lý do chưa đo được thay vì bịa.
+async function renderKpi(root) {
+  const kpi = await api('/v1/kpi');
+  root.innerHTML = `
+    <div class="panel">
+      <h2>Adoption</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Ngày hoạt động AI</th><th>Tool đã dùng</th></tr></thead>
+      <tbody>${kpi.adoption.map((a) => `
+        <tr><td>${esc(a.full_name || a.employee_id)}</td><td>${esc(a.ai_active_days)}</td>
+        <td>${Object.entries(a.tool_adoption).map(([t, n]) => `${esc(t)}: ${esc(n)}`).join(', ') || '—'}</td></tr>`).join('') ||
+        '<tr><td colspan="3" class="empty">Chưa có dữ liệu.</td></tr>'}
+      </tbody></table>
+      <div class="empty" style="margin-top:8px;">Không có "tỷ lệ session classified" — schema hiện tại chưa track classified/unclassified.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Efficiency</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Cost TB / task đã đóng</th><th>Token TB / task đã đóng</th><th>Số task đã đóng</th></tr></thead>
+      <tbody>${kpi.efficiency.map((e) => `
+        <tr><td>${esc(e.full_name || e.employee_id)}</td>
+        <td>${e.avg_cost_per_closed_task !== null ? '$' + esc(e.avg_cost_per_closed_task) : '—'}</td>
+        <td>${e.avg_tokens_per_closed_task !== null ? esc(e.avg_tokens_per_closed_task) : '—'}</td>
+        <td>${esc(e.closed_task_count)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Chưa có dữ liệu.</td></tr>'}
+      </tbody></table>
+      <div class="empty" style="margin-top:8px;">"Task đã đóng" (status=closed) — proxy cho "accepted", schema chưa có trạng thái accepted riêng. Không có "time to first PR"/"retry rate" — hệ thống chưa track PR/số lần thử lại.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Collaboration</h2>
+      <table><thead><tr><th>Nhân viên</th><th>Handoff đã tạo</th><th>% Handoff đầy đủ</th><th>TG tiếp quản TB (giờ)</th><th>Đóng góp context</th><th>ADR đã viết</th></tr></thead>
+      <tbody>${kpi.collaboration.map((c) => `
+        <tr><td>${esc(c.full_name || c.employee_id)}</td><td>${esc(c.handoffs_created)}</td>
+        <td>${c.handoff_completeness_rate !== null ? esc(c.handoff_completeness_rate) + '%' : '—'}</td>
+        <td>${c.avg_pickup_time_hours !== null ? esc(c.avg_pickup_time_hours) : '—'}</td>
+        <td>${esc(c.context_contributions)}</td><td>${esc(c.decisions_documented)}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Chưa có dữ liệu.</td></tr>'}
+      </tbody></table>
+    </div>
+
+    <div class="panel">
+      <h2>Outcome</h2>
+      <div class="empty">${esc(kpi.outcome_note)}</div>
+    </div>`;
+}
+
+function renderTabs() {
+  const visible = TABS.filter((t) => !t.adminOnly || state.who.role === 'admin');
+  const groups = [];
+  for (const t of visible) {
+    let g = groups.find((x) => x.name === t.group);
+    if (!g) { g = { name: t.group, items: [] }; groups.push(g); }
+    g.items.push(t);
+  }
+  document.getElementById('tabs').innerHTML = groups.map((g) => `
+    <div class="nav-group">
+      <div class="nav-group-label">${esc(g.name)}</div>
+      ${g.items.map((t) => `<button class="${state.active === t.id ? 'active' : ''}" onclick="switchTab('${t.id}')">
+        <span class="ico">${t.ico}</span>${esc(t.label)}</button>`).join('')}
+    </div>`).join('');
+}
+async function switchTab(id) {
+  state.active = id;
+  renderTabs();
+  const tab = TABS.find((t) => t.id === id);
+  document.getElementById('pagetitle').textContent = tab.label;
+  document.getElementById('pagehint').textContent = tab.hint || '';
+  const root = document.getElementById('content');
+  root.innerHTML = '<div class="empty">Đang tải…</div>';
+  try {
+    await tab.render(root);
+  } catch (e) {
+    root.innerHTML = `<div class="panel"><div class="empty">Lỗi tải dữ liệu: ${esc(e.message)}</div></div>`;
+  }
+}
+
+function boot() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'grid'; // #app là CSS grid (sidebar + nội dung)
+  document.getElementById('whoami').textContent = state.who.full_name;
+  document.getElementById('whorole').textContent = state.who.role === 'admin' ? 'admin' : 'member';
+  renderTabs();
+  switchTab(state.active);
+}
+
+(function init() {
+  const saved = loadSession();
+  if (saved && saved.token) {
+    state = { ...saved, active: 'home' };
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

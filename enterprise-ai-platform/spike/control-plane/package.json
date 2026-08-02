@@ -1,0 +1,9 @@
+{
+  "name": "center-ai-control-plane",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}
